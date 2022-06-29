@@ -1,3 +1,21 @@
 {
-    "configurations": []
+    "configurations": [
+        {
+            "name": "Python: Module",
+            "type": "python",
+            "request": "launch",
+            "module": "ansibug",
+            "args": [
+                "1234",
+                "--log-file",
+                "debug.log",
+                "--log-level",
+                "debug",
+                "--",
+                "main.yml",
+            ],
+            "justMyCode": false,
+            "subProcess": true,
+        }
+    ]
 }
