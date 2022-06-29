@@ -1,0 +1,5 @@
+- name: run play
+  hosts: localhost
+  tasks:
+  - name: run module
+    ping:

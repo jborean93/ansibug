@@ -8,10 +8,11 @@
 from __future__ import annotations
 
 import argparse
+import os
+import pathlib
+import subprocess
 import sys
 import typing as t
-
-from ._listener import listen
 
 try:
     import argcomplete
@@ -28,16 +29,16 @@ def parse_args(
         "playbooks that run with the DAP plugins for interactive debugging. The DAP messages are exchanged with the "
         "socket that is created by this process. Any remaining arguments to provide with ansible-playbook should be "
         "provided after --, e.g. "
-        "python -m ansibug 1234 --playbook main.yml -- my-hosts -i inventory.ini -e 'key=value'",
+        "python -m ansibug 1234 -- main.yml my-hosts -i inventory.ini -e 'key=value'",
     )
 
     parser.add_argument(
         "listener",
         nargs=1,
         type=str,
-        help="The hostname:port to connect to listener on for the DAP exchanges. The value is in the format "
-        "[host]:port with the default host being localhost. Specify just a port number to listen on localhost, "
-        "or specify a hostname:port to bind the listener on a specific address for external connections",
+        help="The hostname:port to listen on for the DAP exchanges. The value is in the format [host]:port with the "
+        "default host being localhost. Specify just a port number to listen on localhost, or specify a hostname:port "
+        "to bind the listener on a specific address for external connections",
     )
 
     parser.add_argument(
@@ -46,28 +47,14 @@ def parse_args(
         help="Wait for the client to connect before continuing.",
     )
 
-    mode = parser.add_mutually_exclusive_group(required=True)
-
-    mode.add_argument(
-        "--pid",
-        nargs=1,
-        type=int,
-        help="The running ansible-playbook process to attach to.",
-    )
-
-    mode.add_argument(
-        "--playbook",
-        nargs=1,
-        type=str,
-        help="The Ansible playbook to debug that is passed to ansible-playbook",
-    )
-
     if argcomplete:
         argcomplete.autocomplete(parser)
 
     parsed_args, playbook_args = parser.parse_known_args(args)
     if playbook_args and playbook_args[0] == "--":
         del playbook_args[0]
+
+    playbook_args.insert(0, "ansible-playbook")
 
     return parsed_args, playbook_args
 
@@ -83,10 +70,30 @@ def main() -> None:
         hostname = "127.0.0.1"
         port = addr
 
-    listen(hostname, port, args.wait_for_client)
+    new_environ = os.environ.copy()
+    new_environ["ANSIBUG_HOSTNAME"] = hostname
+    new_environ["ANSIBUG_PORT"] = port
 
-    print(args)
-    print(f"Playbook args: {playbook_args}")
+    # Env vars override settings in the ansible.cfg, figure out a better way
+    # to inject our collection, callback, and strategy plugin
+    collections_path = new_environ.get("ANSIBLE_COLLECTIONS_PATHS", "").split(os.pathsep)
+    collections_path.insert(0, str(pathlib.Path(__file__).parent))
+    new_environ["ANSIBLE_COLLECTIONS_PATHS"] = os.pathsep.join(collections_path)
+
+    enabled_callbacks = new_environ.get("ANSIBLE_CALLBACKS_ENABLED", "").split(",")
+    enabled_callbacks.insert(0, "ansibug.dap.debug")
+    new_environ["ANSIBLE_CALLBACKS_ENABLED"] = ",".join(enabled_callbacks)
+
+    new_environ["ANSIBLE_STRATEGY"] = "ansibug.dap.debug"
+
+    proc = subprocess.run(
+        playbook_args,
+        stdin=sys.stdin,
+        stdout=sys.stdout,
+        stderr=sys.stderr,
+        env=new_environ,
+    )
+    sys.exit(proc.returncode)
 
 
 if __name__ == "__main__":
