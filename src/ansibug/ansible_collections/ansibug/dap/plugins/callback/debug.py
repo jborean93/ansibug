@@ -10,6 +10,8 @@ type: aggregate
 short_description: Ansible Debug Adapter Protocol Callback Plugin
 description:
 - The callback plugin used to handle the DAP socket connections.
+- Callers should use the C(ansibug) module to invoke ansible-playbook with the
+  required debug plugins enabled rather than do it directly.
 author: Jordan Borean (@jborean93)
 options:
   write_fd:
@@ -19,6 +21,14 @@ options:
     type: int
     env:
     - name: ANSIBUG_WRITE_FD
+  wait_for_client:
+    description:
+    - Waits for the client to request a DAP server socket and then connect to
+      it.
+    - The playbook will wait until the connection is made before starting.
+    type: bool
+    env:
+    - name: ANSIBUG_WAIT_FOR_CLIENT
   log_file:
     description:
     - The path used to store background logging events of the DAP thread.
@@ -41,15 +51,12 @@ options:
     description:
     - The log format to apply to C(log_file) if set
     type: str
-    default: '%(asctime)s | %(filename)s:%(lineno)s %(funcName)s() %(message)s'
+    default: '%(asctime)s | %(name)s | %(filename)s:%(lineno)s %(funcName)s() %(message)s'
     env:
     - name: ANSIBUG_LOG_FORMAT
 """
 
 import logging
-import os
-import socket
-import struct
 import threading
 import typing as t
 
@@ -59,62 +66,28 @@ from ansible.plugins.callback import CallbackBase
 
 import ansibug
 
+log = logging.getLogger("ansibug.callback")
 
-def dap_server(
-    log: logging.Logger,
-    ready: threading.Event,
+
+def configure_logging(
+    file: str,
+    level: str,
+    format: str,
 ) -> None:
-    try:
-        pipe_path = ansibug.get_pipe_path(os.getpid())
-        log.info("Starting bind processes for '%s'", pipe_path)
+    log_level = {
+        "info": logging.INFO,
+        "debug": logging.DEBUG,
+        "warning": logging.WARNING,
+        "error": logging.ERROR,
+    }[level]
 
-        try:
-            os.unlink(pipe_path)
-        except OSError:
-            if os.path.exists(pipe_path):
-                raise
+    fh = logging.FileHandler(file, mode="w", encoding="utf-8")
+    fh.setLevel(log_level)
+    fh.setFormatter(logging.Formatter(format))
 
-        try:
-            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
-                log.debug("UDS bind for '%s'", pipe_path)
-                sock.bind(pipe_path)
-                sock.listen(1)
-
-                log.debug("Signaling parent that UDS socket is ready")
-                ready.set()
-
-                conn, addr = sock.accept()
-                with conn:
-                    log.info("Client connected to UDS - attempting to get addr length")
-                    addr_length = struct.unpack("<I", conn.recv(4))[0]
-
-                    log.debug("Addr length from client is %d", addr_length)
-                    buffer = b""
-                    while len(buffer) < addr_length:
-                        buffer += conn.recv(addr_length - len(buffer))
-
-                    addr_raw = buffer.decode()
-                    log.debug("Addr info from client is '%s'", addr_raw)
-                    hostname, port = addr_raw.split(":", 1)
-
-        finally:
-            log.debug("Unlinking UDS socket '%s'", pipe_path)
-            os.unlink(pipe_path)
-
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            log.debug("Socket binding for %s:%s", hostname, port)
-            sock.bind((hostname, int(port)))
-            sock.listen(1)
-
-            log.debug(f"DAP thread: waiting for {hostname}:{port} connection")
-            conn, addr = sock.accept()
-            with conn:
-                log.info("Client connected to DAP socket from '%s'", addr)
-                a = ""
-
-    except Exception as e:
-        log.exception(f"Unknown error in DAP thread: %s", e)
-        raise
+    ansibug_logger = logging.getLogger("ansibug")
+    ansibug_logger.setLevel(log_level)
+    ansibug_logger.addHandler(fh)
 
 
 class CallbackModule(CallbackBase):
@@ -130,51 +103,44 @@ class CallbackModule(CallbackBase):
         **kwargs: t.Any,
     ) -> None:
         super().__init__(*args, **kwargs)
+        self._dap_server: t.Optional[ansibug.DebugServer] = None
 
     def v2_playbook_on_start(
         self,
         playbook: Playbook,
     ) -> None:
-        log = logging.getLogger(__name__)
-
         log_file = self.get_option("log_file")
         if log_file:
-            log_level = {
-                "info": logging.INFO,
-                "debug": logging.DEBUG,
-                "warning": logging.WARNING,
-                "error": logging.ERROR,
-            }[self.get_option("log_level")]
-            log_format = self.get_option("log_format")
+            configure_logging(
+                log_file,
+                self.get_option("log_level"),
+                self.get_option("log_format"),
+            )
 
-            log.setLevel(log_level)
-            fh = logging.FileHandler(log_file, mode="w", encoding="utf-8")
-            fh.setLevel(log_level)
-            fh.setFormatter(logging.Formatter(log_format))
-            log.addHandler(fh)
+        self._dap_server = ansibug.DebugServer()
+        ready = threading.Event()
+        self._dap_server.start(ready=ready)
 
-        log.info("Starting DAP thread")
-        debug_read = threading.Event()
-        threading.Thread(
-            target=dap_server,
-            args=(log, debug_read),
-            name=f"ansibug-{os.getpid()}",
-            daemon=True,
-        ).start()
         log.debug("Waiting for DAP UDS to be ready")
-        debug_read.wait()
+        ready.wait()
 
         # If write_fd is set then ansibug is waiting to be signaled that the
         # UDS is online and ready to receive input. Otherwise this process
         # wasn't launched by ansibug so continue on as normal.
         write_pipe_fd = int(self.get_option("write_fd") or 0)
         if write_pipe_fd:
-            log.debug("Connecting to pipe %d to signal UDS socket is ready", write_pipe_fd)
+            log.debug("Connecting to pipe %d to signal DAP request socket is ready", write_pipe_fd)
             with open(write_pipe_fd, mode="w") as fd:
                 fd.writelines(["dummy"])
+
+        wait_for_client = self.get_option("wait_for_client")
+        if wait_for_client:
+            log.info("Waiting for client to connect to DAP server")
+            self._dap_server.wait_for_client()
 
     def v2_playbook_on_stats(
         self,
         stats: AggregateStats,
     ) -> None:
-        print(f"Ending ansbug.dap.debug callback")
+        if self._dap_server:
+            self._dap_server.shutdown()
