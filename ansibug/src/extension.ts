@@ -30,7 +30,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 	context.subscriptions.push(vscode.debug.registerDebugAdapterDescriptorFactory('ansibug', {
 		createDebugAdapterDescriptor: (session: vscode.DebugSession) => {
-			return new vscode.DebugAdapterExecutable("python", ["/home/jborean/dev/ansibug/debug-stdio.py"])
+			return new vscode.DebugAdapterExecutable("python", ["/home/jborean/dev/ansibug/debug-stdio.py"]);
 		}
 	}));
 
