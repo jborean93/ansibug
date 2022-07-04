@@ -1,6 +1,32 @@
 {
     "configurations": [
         {
+            "name": "Python: Attach using Process Id",
+            "type": "python",
+            "request": "attach",
+            "debugServer": 5678,
+            "justMyCode": false
+        },
+        {
+            "name": "Ansible Debug",
+            "type": "python",
+            "request": "launch",
+            "program": "/home/jborean/dev/ansible/bin/ansible-playbook",
+            "args": [
+                "main.yml",
+                "-vvv"
+            ],
+            "env": {
+                "ANSIBUG_LOG_FILE": "debug.log",
+                "ANSIBUG_LOG_LEVEL": "debug",
+                "ANSIBLE_COLLECTIONS_PATHS": "${workspaceFolder}/src/ansibug:${ANSIBLE_COLLECTIONS_PATHS}",
+                "ANSIBLE_CALLBACKS_ENABLED": "ansibug.dap.debug",
+                "ANSIBLE_STRATEGY": "ansibug.dap.debug"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": false,
+        },
+        {
             "name": "Python: Module",
             "type": "python",
             "request": "launch",
@@ -17,6 +43,6 @@
             ],
             "justMyCode": false,
             "subProcess": true,
-        }
+        },
     ]
 }

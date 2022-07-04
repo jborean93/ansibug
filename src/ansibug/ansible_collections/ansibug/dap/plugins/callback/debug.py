@@ -57,6 +57,7 @@ options:
 """
 
 import logging
+import os
 import threading
 import typing as t
 
@@ -109,6 +110,7 @@ class CallbackModule(CallbackBase):
         self,
         playbook: Playbook,
     ) -> None:
+        pid = os.getpid()
         log_file = self.get_option("log_file")
         if log_file:
             configure_logging(
