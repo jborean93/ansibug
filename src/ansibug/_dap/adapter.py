@@ -10,6 +10,8 @@ import typing as t
 
 from .messages import (
     Capabilities,
+    DisconnectRequest,
+    DisconnectResponse,
     InitializeRequest,
     InitializeResponse,
     LaunchRequest,
@@ -25,12 +27,15 @@ class DebugAdapterServer:
     def __init__(
         self,
         capabilities: Capabilities = Capabilities(),
+        *,
+        seq_no_in: int = 1,
+        seq_no_out: int = 1,
     ) -> None:
         self.capabilities = capabilities
         self._out_buffer = bytearray()
         self._in_buffer = bytearray()
-        self.__seq_no_in = 1
-        self.__seq_no_out = 1
+        self.__seq_no_in = seq_no_in
+        self.__seq_no_out = seq_no_out
 
     @property
     def _seq_no_in(self) -> int:
@@ -101,6 +106,18 @@ class DebugAdapterServer:
 
         return msg
 
+    def disconnect_response(
+        self,
+        request_seq: int,
+    ) -> None:
+        msg = DisconnectResponse(
+            seq=self._seq_no_out,
+            request_seq=request_seq,
+            success=True,
+            message=None,
+        )
+        self.queue_msg(msg)
+
     def initialize_response(
         self,
         request_seq: int,
@@ -146,7 +163,14 @@ class DebugAdapterServer:
         )
         self.queue_msg(msg)
 
-    def queue_msg(self, msg: ProtocolMessage) -> None:
+    def queue_msg(
+        self,
+        msg: ProtocolMessage,
+        new_seq_no: bool = False,
+    ) -> None:
+        if new_seq_no:
+            msg.__setattr__("seq", self._seq_no_out)
+
         data: t.Dict[str, t.Any] = {}
         msg.pack(data)
 
@@ -157,6 +181,10 @@ class DebugAdapterServer:
     @functools.singledispatchmethod
     def _process_msg(self, msg: ProtocolMessage) -> None:
         pass
+
+    @_process_msg.register
+    def _(self, msg: DisconnectRequest) -> None:
+        self.disconnect_response(msg.seq)
 
     @_process_msg.register
     def _(self, msg: InitializeRequest) -> None:

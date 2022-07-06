@@ -14,19 +14,33 @@ description:
   required debug plugins enabled rather than do it directly.
 author: Jordan Borean (@jborean93)
 options:
-  write_fd:
+  mode:
     description:
-    - A write pipe FD to write to that signals the callback is ready to receive
-      the server bind address information.
-    type: int
+    - The socket mode to use.
+    - C(connect) will connect to the addr requested as a client.
+    - C(listen) will bind a new socket to the addr requested and wait for a
+      client to connect.
+    type: str
+    choices:
+    - connect
+    - listen
     env:
-    - name: ANSIBUG_WRITE_FD
+    - name: ANSIBUG_MODE
+  socket_addr:
+    description:
+    - A write pipe FD to write to that is used to signal the UDS pipe is ready
+      for a connection.
+    type: str
+    env:
+    - name: ANSIBUG_SOCKET_ADDR
   wait_for_client:
     description:
-    - Waits for the client to request a DAP server socket and then connect to
-      it.
-    - The playbook will wait until the connection is made before starting.
+    - If true, will wait until the DAP server indicates the initial
+      configuration is complete and the playbook can start.
+    - If false, will start the playbook immediately without waiting for the
+      initial configuration details.
     type: bool
+    default: false
     env:
     - name: ANSIBUG_WAIT_FOR_CLIENT
   log_file:
@@ -110,7 +124,6 @@ class CallbackModule(CallbackBase):
         self,
         playbook: Playbook,
     ) -> None:
-        pid = os.getpid()
         log_file = self.get_option("log_file")
         if log_file:
             configure_logging(
@@ -119,21 +132,10 @@ class CallbackModule(CallbackBase):
                 self.get_option("log_format"),
             )
 
+        addr = self.get_option("socket_addr")
+        mode = self.get_option("mode")
         self._dap_server = ansibug.DebugServer()
-        ready = threading.Event()
-        self._dap_server.start(ready=ready)
-
-        log.debug("Waiting for DAP UDS to be ready")
-        ready.wait()
-
-        # If write_fd is set then ansibug is waiting to be signaled that the
-        # UDS is online and ready to receive input. Otherwise this process
-        # wasn't launched by ansibug so continue on as normal.
-        write_pipe_fd = int(self.get_option("write_fd") or 0)
-        if write_pipe_fd:
-            log.debug("Connecting to pipe %d to signal DAP request socket is ready", write_pipe_fd)
-            with open(write_pipe_fd, mode="w") as fd:
-                fd.writelines(["dummy"])
+        self._dap_server.start(addr, mode)
 
         wait_for_client = self.get_option("wait_for_client")
         if wait_for_client:

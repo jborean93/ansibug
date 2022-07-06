@@ -35,7 +35,10 @@ def _unpack_request(
     request = {
         "seq": data["seq"],
     }
-    if cmd == Command.INITIALIZE.value:
+    if cmd == Command.DISCONNECT.value:
+        return DisconnectRequest.unpack(arguments=data["arguments"], **request)
+
+    elif cmd == Command.INITIALIZE.value:
         return InitializeRequest.unpack(arguments=data["arguments"], **request)
 
     elif cmd == Command.LAUNCH.value:
@@ -77,6 +80,7 @@ class MessageType(enum.Enum):
 
 class Command(enum.Enum):
     CANCEL = "cancel"
+    DISCONNECT = "disconnect"
     INITIALIZE = "initialize"
     LAUNCH = "launch"
     RUN_IN_TERMINAL = "runInTerminal"
@@ -201,6 +205,48 @@ class CancelRequest(Request):
                 }
             }
         )
+
+
+@dataclasses.dataclass(frozen=True)
+class DisconnectRequest(Request):
+    command = Command.DISCONNECT
+
+    restart: bool = dataclasses.field(default=False)
+    terminate_debuggee: bool = dataclasses.field(default=False)
+    suspend_debuggee: bool = dataclasses.field(default=False)
+
+    def pack(
+        self,
+        obj: t.Dict[str, t.Any],
+    ) -> None:
+        super().pack(obj)
+        obj.update(
+            {
+                "arguments": {
+                    "restart": self.restart,
+                    "terminateDebuggee": self.terminate_debuggee,
+                    "suspendDebuggee": self.suspend_debuggee,
+                }
+            }
+        )
+
+    @classmethod
+    def unpack(
+        cls,
+        seq: int,
+        arguments: t.Dict[str, t.Any],
+    ) -> DisconnectRequest:
+        return DisconnectRequest(
+            seq=seq,
+            restart=arguments.get("restart", False),
+            terminate_debuggee=arguments.get("terminateDebuggee", False),
+            suspend_debuggee=arguments.get("suspendDebuggee", False),
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class DisconnectResponse(Response):
+    command = Command.LAUNCH
 
 
 @dataclasses.dataclass(frozen=True)

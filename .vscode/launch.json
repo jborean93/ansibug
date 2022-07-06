@@ -1,10 +1,26 @@
 {
     "configurations": [
         {
+            "name": "Python: Server",
+            "type": "python",
+            "request": "launch",
+            "program": "proc1.py",
+            "console": "integratedTerminal",
+            "justMyCode": false
+        },
+        {
+            "name": "Python: Client",
+            "type": "python",
+            "request": "launch",
+            "program": "proc2.py",
+            "console": "integratedTerminal",
+            "justMyCode": false
+        },
+        {
             "name": "Python: Attach using Process Id",
             "type": "python",
             "request": "attach",
-            "debugServer": 5678,
+            "debugServer": 12535,
             "justMyCode": false
         },
         {
@@ -33,11 +49,7 @@
             "module": "ansibug",
             "args": [
                 "launch",
-                "--log-file",
-                "debug.log",
-                "--log-level",
-                "debug",
-                "--wait-for-client",
+                "--connect",
                 "1234",
                 "main.yml",
             ],

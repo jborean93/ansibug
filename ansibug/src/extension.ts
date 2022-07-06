@@ -30,70 +30,9 @@ export function activate(context: vscode.ExtensionContext) {
 
 	context.subscriptions.push(vscode.debug.registerDebugAdapterDescriptorFactory('ansibug', {
 		createDebugAdapterDescriptor: (session: vscode.DebugSession) => {
-			return new vscode.DebugAdapterExecutable("python", ["/home/jborean/dev/ansibug/debug-stdio.py"]);
+			return new vscode.DebugAdapterExecutable("python", ["-m", "ansibug", "dap"]);
 		}
 	}));
-
-	//context.subscriptions.push(vscode.commands.registerCommand('ansibug.RunPlaybook',))
-
-	// context.subscriptions.push(
-	// 	vscode.commands.registerCommand('extension.ansibug.runEditorContents', (resource: vscode.Uri) => {
-	// 		let targetResource = resource;
-	// 		if (!targetResource && vscode.window.activeTextEditor) {
-	// 			targetResource = vscode.window.activeTextEditor.document.uri;
-	// 		}
-	// 		if (targetResource) {
-	// 			vscode.debug.startDebugging(undefined, {
-	// 				type: 'ansibug',
-	// 				name: 'Run File',
-	// 				request: 'launch',
-	// 				playbook: targetResource.fsPath
-	// 			},
-	// 				{ noDebug: true }
-	// 			);
-	// 		}
-	// 	}),
-	// 	vscode.commands.registerCommand('extension.ansibug.debugEditorContents', (resource: vscode.Uri) => {
-	// 		let targetResource = resource;
-	// 		if (!targetResource && vscode.window.activeTextEditor) {
-	// 			targetResource = vscode.window.activeTextEditor.document.uri;
-	// 		}
-	// 		if (targetResource) {
-	// 			vscode.debug.startDebugging(undefined, {
-	// 				type: 'ansibug',
-	// 				name: 'Debug File',
-	// 				request: 'launch',
-	// 				playbook: targetResource.fsPath
-	// 			});
-	// 		}
-	// 	}),
-	// );
-
-	// // register a dynamic configuration provider for 'mock' debug type
-	// context.subscriptions.push(vscode.debug.registerDebugConfigurationProvider('ansibug', {
-	// 	provideDebugConfigurations(folder: vscode.WorkspaceFolder | undefined): vscode.ProviderResult<vscode.DebugConfiguration[]> {
-	// 		return [
-	// 			{
-	// 				name: "Dynamic Launch",
-	// 				request: "launch",
-	// 				type: "ansibug",
-	// 				playbook: "${file}"
-	// 			},
-	// 			{
-	// 				name: "Another Dynamic Launch",
-	// 				request: "launch",
-	// 				type: "ansibug",
-	// 				playbook: "${file}"
-	// 			},
-	// 			{
-	// 				name: "Mock Launch",
-	// 				request: "launch",
-	// 				type: "ansibug",
-	// 				playbook: "${file}"
-	// 			}
-	// 		];
-	// 	},
-	// }, vscode.DebugConfigurationProviderTriggerKind.Dynamic));
 }
 
 // this method is called when your extension is deactivated
