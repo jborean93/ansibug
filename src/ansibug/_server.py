@@ -7,13 +7,12 @@ from __future__ import annotations
 import logging
 import os
 import pathlib
-import socket
 import threading
 import typing as t
 
-from ._mp import DAPManager, client_manager, server_manager
+from ._mp_queue import ClientMPQueue, MPQueue, ServerMPQueue
 from ._singleton import Singleton
-from ._socket import CancelledError, SocketCancellationToken, SocketHelper
+from ._socket_helper import CancelledError, SocketCancellationToken
 
 log = logging.getLogger(__name__)
 
@@ -71,26 +70,69 @@ def get_pid_info_path(pid: int) -> str:
 def wait_for_dap_server(
     addr: str,
     mode: t.Literal["connect", "listen"],
-) -> DAPManager:
+    cancel_token: SocketCancellationToken,
+) -> MPQueue:
+    """Wait for DAP Server.
+
+    Starts a socket for the current process that the ansibug DAP server can
+    communicate with and exchange DAP requests and events.
+
+    Args:
+        addr: The addr of the socket.
+        mode: The socket mode to use, connect will connect to the addr while
+            listen will bind to the addr and wait for a connection.
+        cancel_token: The cancellation token to cancel the socket operations.
+
+    Returns:
+        MPQueue: The multiprocessing queue handler that can exchange DAP
+        messages with the peer.
+    """
     log.info("Setting up ansible-playbook debug %s socket at '%s'", mode, addr)
-    if mode == "listen":
-        raise NotImplementedError()
 
     addr_split = addr.split(":", 1)
-    print(addr)
-    hostname = addr_split[0]
-    port = int(addr_split[1])
+    target_addr = (addr_split[0], int(addr_split[1]))
+    print(target_addr)
 
-    return client_manager((hostname, port), authkey=b"")
+    mp_queue = (ClientMPQueue if mode == "connect" else ServerMPQueue)(target_addr, cancel_token=cancel_token)
+    try:
+        if isinstance(mp_queue, ServerMPQueue):
+            bound_addr = mp_queue.address
+
+            with open(get_pid_info_path(os.getpid()), mode="w") as fd:
+                fd.write(f"{bound_addr[0]}:{bound_addr[1]}")
+
+        mp_queue.start()
+        return mp_queue
+
+    except Exception:
+        mp_queue.stop()
+        raise
+
+
+# def wait_for_dap_server(
+#     addr: str,
+#     mode: t.Literal["connect", "listen"],
+# ) -> DAPManager:
+#     log.info("Setting up ansible-playbook debug %s socket at '%s'", mode, addr)
+#     if mode == "listen":
+#         raise NotImplementedError()
+
+#     addr_split = addr.split(":", 1)
+#     print(addr)
+#     hostname = addr_split[0]
+#     port = int(addr_split[1])
+
+#     return client_manager((hostname, port), authkey=b"")
 
 
 class DebugServer(metaclass=Singleton):
     def __init__(self) -> None:
         self._cancel_token = SocketCancellationToken()
         self._recv_thread: t.Optional[threading.Thread] = None
+        self._test = threading.Event()
 
-        self._manager: t.Optional[DAPManager] = None
-        self._manager_lock = threading.Condition()
+        self._mp_queue: t.Optional[MPQueue] = None
+        self._mp_queue_lock = threading.Condition()
 
     def wait_for_client(self) -> None:
         """Waits until a client is connected.
@@ -98,8 +140,11 @@ class DebugServer(metaclass=Singleton):
         Waits until a client has connected to the DAP server socket and a
         server is processing the incoming requests.
         """
-        with self._manager_lock:
-            self._manager_lock.wait_for(lambda: self._manager is not None)
+        with self._mp_queue_lock:
+            self._mp_queue_lock.wait_for(lambda: self._mp_queue is not None)
+
+        print("Waiting for msg")
+        self._test.wait()
 
         # FIXME: Wait until configurationDone is received
 
@@ -164,19 +209,18 @@ class DebugServer(metaclass=Singleton):
 
         try:
             while True:
-                m = wait_for_dap_server(addr, mode)
-                m.connect()
-                with self._manager_lock:
-                    self._manager = m
-                    self._manager_lock.notify_all()
+                with wait_for_dap_server(addr, mode, self._cancel_token) as mp_queue:
+                    with self._mp_queue_lock:
+                        self._mp_queue = mp_queue
+                        self._mp_queue_lock.notify_all()
 
-                try:
-                    self._process_requests(m)
+                    try:
+                        self._process_requests(mp_queue)
 
-                finally:
-                    with self._manager_lock:
-                        self._manager = m
-                        self._manager_lock.notify_all()
+                    finally:
+                        with self._mp_queue_lock:
+                            self._mp_queue = None
+                            self._mp_queue_lock.notify_all()
 
                 if mode == "connect":
                     break
@@ -191,7 +235,7 @@ class DebugServer(metaclass=Singleton):
 
     def _process_requests(
         self,
-        manager: DAPManager,
+        manager: MPQueue,
     ) -> None:
         """Continue to process client requests.
 
@@ -202,4 +246,5 @@ class DebugServer(metaclass=Singleton):
         while True:
             msg = manager.recv()
             print(msg)
+            self._test.set()
             manager.send(msg)

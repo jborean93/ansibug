@@ -46,10 +46,11 @@ class SocketHelper:
     def bind(
         self,
         address: t.Any,
+        listen: int = 1,
     ) -> None:
         log.debug("Socket %s binding to %s", self.use, address)
         self._sock.bind(address)
-        self._sock.listen(1)
+        self._sock.listen(listen)
 
     def connect(
         self,
@@ -74,6 +75,9 @@ class SocketHelper:
         self._sock = conn
 
         return addr
+
+    def getsockname(self) -> t.Any:
+        return self._sock.getsockname()
 
     def recv(
         self,

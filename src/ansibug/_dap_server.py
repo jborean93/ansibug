@@ -6,13 +6,12 @@ import functools
 import logging
 import pathlib
 import sys
-import threading
 import typing as t
 
 import debugpy
 
 from . import _dap as dap
-from ._mp import server_manager
+from ._mp_queue import ServerMPQueue
 
 log = logging.getLogger(__name__)
 
@@ -22,64 +21,61 @@ def start_dap() -> None:
 
     debugpy.listen(("localhost", 12535))
     debugpy.wait_for_client()
+    a = ""
 
-    dap = DAP()
-    dap.start()
+    with ServerMPQueue(("127.0.0.1", 0)) as server:
+        server.start()
+        dap = DAP(server)
+        dap.start()
 
     log.info("ending")
 
 
 class DAP:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        server: ServerMPQueue,
+    ) -> None:
         self._adapter = dap.DebugAdapterServer()
-        self._manager, self._server = server_manager(("127.0.0.1", 0), authkey=b"")
-        self._server_thread = threading.Thread(
-            target=self._server.serve_forever,
-            name="da-server-manager",
-        )
+        self._server = server
 
     def start(self) -> None:
         stdin = sys.stdin.buffer.raw  # type: ignore[attr-defined]  # This is defined
         stdout = sys.stdout.buffer.raw  # type: ignore[attr-defined]  # This is defined
         adapter = self._adapter
 
-        try:
-            run = True
-            while run:
-                data = stdin.read(4096)
-                log.debug("STDIN: %s", data.decode())
-                adapter.receive_data(data)
+        run = True
+        while run:
+            data = stdin.read(4096)
+            log.debug("STDIN: %s", data.decode())
+            adapter.receive_data(data)
 
-                while msg := adapter.next_message():
-                    self._process_msg(msg)
+            while msg := adapter.next_message():
+                self._process_msg(msg)
 
-                if data := adapter.data_to_send():
-                    stdout.write(data)
-
-        finally:
-            self._manager.stop()
-            self._server_thread.join()
+            if data := adapter.data_to_send():
+                stdout.write(data)
 
     @functools.singledispatchmethod
     def _process_msg(self, msg: dap.ProtocolMessage) -> None:
-        self._manager.send(msg)
-        resp = self._manager.recv()
+        self._server.send(msg)
+        resp = self._server.recv()
         self._adapter.queue_msg(resp, new_seq_no=True)
 
     @_process_msg.register
     def _(self, msg: dap.LaunchRequest) -> None:
-        self._server_thread.start()
         addr = self._server.address
         addr_str = f"{addr[0]}:{addr[1]}"
 
         self._adapter.run_in_terminal_request(
             kind="integrated",
-            cwd=str(pathlib.Path(__file__).parent),
+            cwd=str(pathlib.Path(__file__).parent.parent.parent),
             args=[
-                "python",
+                sys.executable,
                 "-m",
                 "ansibug",
                 "launch",
+                "--wait-for-client",
                 "--connect",
                 addr_str,
                 "main.yml",
@@ -98,4 +94,4 @@ class DAP:
 
     @_process_msg.register
     def _(self, msg: dap.RunInTerminalResponse) -> None:
-        pass
+        pass  # TODO: Validate success

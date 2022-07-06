@@ -8,11 +8,9 @@
 from __future__ import annotations
 
 import argparse
-import asyncio
 import re
 import sys
 import typing as t
-from asyncio import wait_for
 
 from ._dap_server import start_dap
 from ._launch import launch
@@ -120,6 +118,9 @@ def main() -> None:
         start_dap()
 
     else:
+        import os
+
+        print(os.getcwd())
         mode: t.Literal["connect", "listen"]
         addr: t.Any
         if args.listen:
