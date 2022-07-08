@@ -17,9 +17,10 @@ options:
   mode:
     description:
     - The socket mode to use.
-    - C(connect) will connect to the addr requested as a client.
+    - C(connect) will connect to the addr requested and bound on the debug
+      adapter server.
     - C(listen) will bind a new socket to the addr requested and wait for a
-      client to connect.
+      debug adapter server to connect.
     type: str
     choices:
     - connect
@@ -28,21 +29,31 @@ options:
     - name: ANSIBUG_MODE
   socket_addr:
     description:
-    - A write pipe FD to write to that is used to signal the UDS pipe is ready
-      for a connection.
+    - The socket addr to connect or bind to, depending on C(mode).
     type: str
     env:
     - name: ANSIBUG_SOCKET_ADDR
-  wait_for_client:
+  wait_for_config_done:
     description:
-    - If true, will wait until the DAP server indicates the initial
-      configuration is complete and the playbook can start.
+    - If true, will wait until the DA server has passed through the
+      configurationDone request from the client that indicates all the initial
+      breakpoint configuration has been sent through and the client is ready to
+      run the code.
     - If false, will start the playbook immediately without waiting for the
       initial configuration details.
     type: bool
     default: false
     env:
     - name: ANSIBUG_WAIT_FOR_CLIENT
+  wait_for_config_done_timeout:
+    description:
+    - The time to wait, in seconds, to wait until the configurationDone request
+      has been sent by the client.
+    - Set to C(-1) to wait indefinitely.
+    type: float
+    default: 10
+    env:
+    - name: ANSIBUG_WAIT_FOR_CLIENT_TIMEOUT
   log_file:
     description:
     - The path used to store background logging events of the DAP thread.
@@ -71,10 +82,10 @@ options:
 """
 
 import logging
-import os
-import threading
+import re
 import typing as t
 
+from ansible.errors import AnsibleError
 from ansible.executor.stats import AggregateStats
 from ansible.playbook import Playbook
 from ansible.plugins.callback import CallbackBase
@@ -82,6 +93,8 @@ from ansible.plugins.callback import CallbackBase
 import ansibug
 
 log = logging.getLogger("ansibug.callback")
+
+ADDR_PATTERN = re.compile(r"(?:(?P<hostname>.+):)?(?P<port>\d+)")
 
 
 def configure_logging(
@@ -118,7 +131,7 @@ class CallbackModule(CallbackBase):
         **kwargs: t.Any,
     ) -> None:
         super().__init__(*args, **kwargs)
-        self._dap_server: t.Optional[ansibug.DebugServer] = None
+        self._debugger = ansibug.AnsibleDebugger()
 
     def v2_playbook_on_start(
         self,
@@ -132,19 +145,29 @@ class CallbackModule(CallbackBase):
                 self.get_option("log_format"),
             )
 
-        addr = self.get_option("socket_addr")
         mode = self.get_option("mode")
-        self._dap_server = ansibug.DebugServer()
-        self._dap_server.start(addr, mode)
+        addr = self.get_option("socket_addr")
+        if m := ADDR_PATTERN.match(addr):
+            hostname = m.group("hostname") or "127.0.0.1"
+            port = int(m.group("port"))
 
-        wait_for_client = self.get_option("wait_for_client")
-        if wait_for_client:
-            log.info("Waiting for client to connect to DAP server")
-            self._dap_server.wait_for_client()
+        else:
+            raise AnsibleError("socket_addr must be in the format [host:]port")
+
+        log.info("Staring Ansible Debugger with %s on %s:%d", mode, addr[0], addr[1])
+        self._debugger.start((hostname, port), mode)
+
+        wait_for_config_done = self.get_option("wait_for_config_done")
+        wait_for_config_done_timeout = self.get_option("wait_for_config_done_timeout")
+        if wait_for_config_done:
+            log.info("Waiting for configuration done request to be received in Ansible")
+            if wait_for_config_done_timeout == -1:
+                wait_for_config_done_timeout = None
+            self._debugger.wait_for_config_done(timeout=wait_for_config_done_timeout)
 
     def v2_playbook_on_stats(
         self,
         stats: AggregateStats,
     ) -> None:
-        if self._dap_server:
-            self._dap_server.shutdown()
+        log.info("Shutting down Ansible Debugger")
+        self._debugger.shutdown()

@@ -90,9 +90,14 @@ class SocketHelper:
         read = 0
 
         while read < n:
-            read += cancel_token.recv_info(self._sock, view[read:], n - read)
+            data_read = cancel_token.recv_into(self._sock, view[read:], n - read)
+            read += data_read
 
-        data = bytes(buffer)
+            # On a socket shutdown 0 bytes will be read.
+            if data_read == 0:
+                break
+
+        data = bytes(buffer[:read])
         if log.isEnabledFor(logging.DEBUG):
             log.debug("Socket %s recv(%d): %s", self.use, n, base64.b64encode(data).decode())
         return data
@@ -114,6 +119,12 @@ class SocketHelper:
         value: t.Union[int, bytes],
     ) -> None:
         self._sock.setsockopt(level, name, value)
+
+    def shutdown(
+        self,
+        how: int,
+    ) -> None:
+        self._sock.shutdown(how)
 
 
 class SocketCancellationToken:
@@ -150,7 +161,7 @@ class SocketCancellationToken:
                 else:
                     raise
 
-    def recv_info(
+    def recv_into(
         self,
         sock: socket.socket,
         buffer: t.Union[bytearray, memoryview],

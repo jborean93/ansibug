@@ -12,7 +12,7 @@ import re
 import sys
 import typing as t
 
-from ._dap_server import start_dap
+from ._da_server import start_dap
 from ._launch import launch
 
 try:

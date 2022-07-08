@@ -5,7 +5,7 @@ import typing as t
 
 import debugpy
 
-import ansibug._dap as dap
+import ansibug.dap as dap
 
 logging.basicConfig(
     filename=str(pathlib.Path(__file__).parent / "debug-stdio.log"),
@@ -62,7 +62,7 @@ def main() -> None:
     debugpy.wait_for_client()
     stdin = sys.stdin.buffer.raw
     stdout = sys.stdout.buffer.raw
-    adapter = dap.DebugAdapterServer()
+    adapter = dap.DebugAdapterConnection()
     run = True
 
     while run:
