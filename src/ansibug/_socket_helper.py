@@ -7,6 +7,7 @@ from __future__ import annotations
 import base64
 import contextlib
 import logging
+import select
 import socket
 import threading
 import types
@@ -56,17 +57,19 @@ class SocketHelper:
         self,
         address: t.Any,
         cancel_token: SocketCancellationToken,
+        timeout: float = 0,
     ) -> None:
         log.debug("Socket %s connecting to %s", self.use, address)
-        cancel_token.connect(self._sock, address)
+        cancel_token.connect(self._sock, address, timeout=timeout)
         log.debug("Socket %s connection successful", self.use)
 
     def accept(
         self,
         cancel_token: SocketCancellationToken,
+        timeout: float = 0,
     ) -> t.Any:
         log.debug("Socket %s starting accept", self.use)
-        conn, addr = cancel_token.accept(self._sock)
+        conn, addr = cancel_token.accept(self._sock, timeout=timeout)
         log.debug("Socket %s accepted conn from %s", self.use, addr)
 
         # The underlying socket is no longer needed, only 1 connection is
@@ -124,7 +127,10 @@ class SocketHelper:
         self,
         how: int,
     ) -> None:
-        self._sock.shutdown(how)
+        try:
+            self._sock.shutdown(how)
+        except OSError:
+            pass
 
 
 class SocketCancellationToken:
@@ -137,9 +143,19 @@ class SocketCancellationToken:
     def accept(
         self,
         sock: socket.socket,
+        timeout: float = 0,
     ) -> t.Tuple[socket.socket, t.Any]:
         with self.with_cancel(lambda: sock.shutdown(socket.SHUT_RDWR)):
             try:
+                # When cancelled select will detect that sock is ready for a
+                # read and accept() will raise OSError. In the rare event the
+                # sockec was connected to and closed/shutdown between select
+                # and the subsequent recv/send on the socket will act like it's
+                # disconnected
+                rd, _, _ = select.select([sock], [], [], timeout)
+                if not rd:
+                    raise TimeoutError("Timed out waiting for socket.accept()")
+
                 return sock.accept()
             except OSError:
                 if self._cancelled:
@@ -151,8 +167,12 @@ class SocketCancellationToken:
         self,
         sock: socket.socket,
         addr: t.Any,
+        timeout: float = 0,
     ) -> None:
         with self.with_cancel(lambda: sock.shutdown(socket.SHUT_RDWR)):
+            if timeout:
+                sock.settimeout(timeout)
+
             try:
                 sock.connect(addr)
             except OSError:
@@ -160,6 +180,10 @@ class SocketCancellationToken:
                     raise CancelledError()
                 else:
                     raise
+
+            else:
+                # Set back into blocking mode.
+                sock.settimeout(None)
 
     def recv_into(
         self,

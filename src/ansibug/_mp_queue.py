@@ -62,7 +62,10 @@ class MPQueue:
         self._socket.send(b_len, self._cancel_token)
         self._socket.send(b_data, self._cancel_token)
 
-    def start(self) -> None:
+    def start(
+        self,
+        timeout: float = 0,
+    ) -> None:
         self._recv_thread = threading.Thread(
             target=self._recv_handler,
             name=f"{self._role} MPQueue Recv",
@@ -120,8 +123,11 @@ class ClientMPQueue(MPQueue):
         super().__enter__()
         return self
 
-    def start(self) -> None:
-        self._socket.connect(self._address, self._cancel_token)
+    def start(
+        self,
+        timeout: float = 0,
+    ) -> None:
+        self._socket.connect(self._address, self._cancel_token, timeout=timeout)
         if self._ssl_context:
             raise NotImplementedError()
 
@@ -150,8 +156,11 @@ class ServerMPQueue(MPQueue):
         super().__enter__()
         return self
 
-    def start(self) -> None:
-        self._socket.accept(self._cancel_token)
+    def start(
+        self,
+        timeout: float = 0,
+    ) -> None:
+        self._socket.accept(self._cancel_token, timeout=timeout)
         if self._ssl_context:
             raise NotImplementedError()
 

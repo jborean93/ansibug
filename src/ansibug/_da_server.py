@@ -9,6 +9,7 @@ import logging
 import pathlib
 import sys
 import threading
+import time
 import types
 import typing as t
 
@@ -26,8 +27,11 @@ def start_dap() -> None:
     debugpy.listen(("localhost", 12535))
     debugpy.wait_for_client()
 
-    with DAServer() as dap:
-        dap.start()
+    try:
+        with DAServer() as da:
+            da.start()
+    except:
+        log.exception("Exception when running DA Server")
 
     log.info("ending")
 
@@ -83,6 +87,7 @@ class DAServer:
         **kwargs: t.Any,
     ) -> None:
         self.stop()
+        self.send_to_client(dap.ExitedEvent(exit_code=1 if exception_value else 0))
 
     def start(self) -> None:
         """Start DA Server.
@@ -182,13 +187,6 @@ class DAServer:
             )
 
     @_process_msg.register
-    def _(self, msg: dap.ErrorResponse) -> None:
-        # This should only happen for a failure in RunInTerminalRequest as
-        # that's the only request the DA server sends.
-        # FIXME: Handle this better
-        raise Exception(f"Error received {msg.message}")
-
-    @_process_msg.register
     def _(self, msg: dap.DisconnectRequest) -> None:
         self._client_connected = False
         self.send_to_client(
@@ -233,7 +231,13 @@ class DAServer:
 
     @_process_msg.register
     def _(self, msg: dap.RunInTerminalResponse) -> None:
-        self._debuggee.start()
-        self._proto.connected.wait()  # FIXME: Add timeout
+        timeout = 5.0  # FIXME: Make configurable
+
+        start = time.time()
+        self._debuggee.start(timeout=timeout)
+        timeout = max(1.0, time.time() - start)
+
+        if not self._proto.connected.wait(timeout=timeout):
+            raise TimeoutError("Timed out waiting for Ansible to connect to DA.")
 
         self.send_to_client(dap.InitializedEvent())
