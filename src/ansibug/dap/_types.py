@@ -105,6 +105,38 @@ class Capabilities:
 
 
 @dataclasses.dataclass()
+class Checksum:
+    """The checksum of an item.
+
+    Describes the checksum of an item. The known algorithms are "MD5", "SHA1",
+    "SHA256", and "timestamp".
+
+    Args:
+        algorithm: The algorithm used to calculate this checksum.
+        checksum: The value of the checksum, encoded as a hexadecimal value.
+    """
+
+    algorithm: t.Literal["MD5", "SHA1", "SHA256", "timestamp"]
+    checksum: str
+
+    def pack(self) -> t.Dict[str, t.Any]:
+        return {
+            "algorithm": self.algorithm,
+            "checksum": self.checksum,
+        }
+
+    @classmethod
+    def unpack(
+        cls,
+        body: t.Dict[str, t.Any],
+    ) -> Checksum:
+        return Checksum(
+            algorithm=body["algorithm"],
+            checksum=body["checksum"],
+        )
+
+
+@dataclasses.dataclass()
 class ExceptionFilterOptions:
     """Exception filter options.
 
@@ -248,6 +280,74 @@ class Message:
 
 
 @dataclasses.dataclass()
+class Scope:
+    """Named container for variables.
+
+    A scope is a ned container for variables.
+
+    Args:
+        name: The name of the scope to be shown in the UI.
+        variables_reference: The id used to retrieve the variables of this
+            scope.
+        presentation_hint: How to present this scope in the UI.
+        named_variables: Number of named variables in the scope.
+        expensive: If True, the number of variables in this scope is large or
+            expensive to retrieve.
+        source: Optional source for this scope.
+        line: Optional start line of the range covered by this scope.
+        column: Optional start column of the range covered by this scope.
+        end_line: Optional end line of the range covered by this scope.
+        end_column: Optional end column of the range covered by this scope.
+    """
+
+    name: str
+    variables_reference: int
+    presentation_hint: t.Optional[t.Literal["arguments", "locals", "registers"]] = None
+    named_variables: t.Optional[int] = None
+    indexed_variables: t.Optional[int] = None
+    expensive: bool = False
+    source: t.Optional[Source] = None
+    line: t.Optional[int] = None
+    column: t.Optional[int] = None
+    end_line: t.Optional[int] = None
+    end_column: t.Optional[int] = None
+
+    def pack(self) -> t.Dict[str, t.Any]:
+        return {
+            "name": self.name,
+            "presentationHint": self.presentation_hint,
+            "variablesReference": self.variables_reference,
+            "namedVariables": self.named_variables,
+            "indexedVariables": self.indexed_variables,
+            "expensive": self.expensive,
+            "source": self.source.pack() if self.source else None,
+            "line": self.line,
+            "column": self.column,
+            "endLine": self.end_line,
+            "endColumn": self.end_column,
+        }
+
+    @classmethod
+    def unpack(
+        cls,
+        body: t.Dict[str, t.Any],
+    ) -> Scope:
+        return Scope(
+            name=body["name"],
+            variables_reference=body["variablesReference"],
+            presentation_hint=body.get("presentationHint", None),
+            named_variables=body.get("namedVariables", None),
+            indexed_variables=body.get("indexedVariables", None),
+            expensive=body.get("expensive", False),
+            source=Source.unpack(body["source"]) if "source" in body else None,
+            line=body.get("line", None),
+            column=body.get("column", None),
+            end_line=body.get("endLine", None),
+            end_column=body.get("endColumn", None),
+        )
+
+
+@dataclasses.dataclass()
 class Source:
     """Descriptor for source code.
 
@@ -352,38 +452,6 @@ class SourceBreakpoint:
             condition=body.get("condition", None),
             hit_condition=body.get("hitCondition", None),
             log_message=body.get("logMessage", None),
-        )
-
-
-@dataclasses.dataclass()
-class Checksum:
-    """The checksum of an item.
-
-    Describes the checksum of an item. The known algorithms are "MD5", "SHA1",
-    "SHA256", and "timestamp".
-
-    Args:
-        algorithm: The algorithm used to calculate this checksum.
-        checksum: The value of the checksum, encoded as a hexadecimal value.
-    """
-
-    algorithm: t.Literal["MD5", "SHA1", "SHA256", "timestamp"]
-    checksum: str
-
-    def pack(self) -> t.Dict[str, t.Any]:
-        return {
-            "algorithm": self.algorithm,
-            "checksum": self.checksum,
-        }
-
-    @classmethod
-    def unpack(
-        cls,
-        body: t.Dict[str, t.Any],
-    ) -> Checksum:
-        return Checksum(
-            algorithm=body["algorithm"],
-            checksum=body["checksum"],
         )
 
 

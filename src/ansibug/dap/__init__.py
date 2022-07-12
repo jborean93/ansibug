@@ -3,7 +3,7 @@
 # GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
 
 from ._adapter import DebugAdapterConnection
-from ._events import ExitedEvent, InitializedEvent, TerminatedEvent
+from ._events import ExitedEvent, InitializedEvent, StoppedEvent, TerminatedEvent
 from ._messages import ErrorResponse, Event, ProtocolMessage, Request, Response
 from ._requests import (
     CancelRequest,
@@ -34,6 +34,7 @@ from ._types import (
     ExceptionFilterOptions,
     ExceptionOptions,
     ExceptionPathSegment,
+    Scope,
     Source,
     SourceBreakpoint,
     Thread,
@@ -66,12 +67,14 @@ __all__ = [
     "Response",
     "RunInTerminalRequest",
     "RunInTerminalResponse",
+    "Scope",
     "SetBreakpointsRequest",
     "SetBreakpointsResponse",
     "SetExceptionBreakpointsRequest",
     "SetExceptionBreakpointsResponse",
     "Source",
     "SourceBreakpoint",
+    "StoppedEvent",
     "TerminatedEvent",
     "Thread",
     "ThreadsRequest",

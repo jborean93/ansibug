@@ -81,6 +81,29 @@ class DAProtocol(MPProtocol):
         self._debugger.send(exp)
 
 
+class DebugState(t.Protocol):
+    def get_scopes(
+        self,
+        request: dap.Request,
+    ) -> t.Iterable[dap.Scope]:
+        raise NotImplementedError()
+
+    def get_threads(
+        self,
+        request: dap.ThreadsRequest,
+    ) -> t.Iterable[dap.Thread]:
+        raise NotImplementedError()
+
+    def get_variables(
+        self,
+        request: dap.Request,
+    ) -> t.Iterable[t.Any]:
+        raise NotImplementedError()
+
+    def wait(self) -> None:
+        ...
+
+
 class AnsibleDebugger(metaclass=Singleton):
     def __init__(self) -> None:
         self._cancel_token = SocketCancellationToken()
@@ -154,6 +177,14 @@ class AnsibleDebugger(metaclass=Singleton):
                 raise Exception("FIXME Send back to DA") from msg
 
             self._send_queue.put(None)
+
+    def stop_event(
+        self,
+        stopped_event: dap.StoppedEvent,
+        state: DebugState,
+    ) -> None:
+        self.send(stopped_event)
+        raise NotImplementedError()
 
     def _recv_task(
         self,

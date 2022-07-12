@@ -14,10 +14,19 @@ description:
 author: Jordan Borean (@jborean93)
 """
 
+import enum
+import typing as t
+
 from ansible import constants as C
 from ansible.errors import AnsibleAssertionError, AnsibleError, AnsibleParserError
-from ansible.executor.play_iterator import FailedStates, IteratingStates, PlayIterator
+from ansible.executor.play_iterator import (
+    FailedStates,
+    HostState,
+    IteratingStates,
+    PlayIterator,
+)
 from ansible.executor.task_queue_manager import TaskQueueManager
+from ansible.inventory.host import Host
 from ansible.module_utils._text import to_text
 from ansible.playbook.block import Block
 from ansible.playbook.included_file import IncludedFile
@@ -28,7 +37,33 @@ from ansible.plugins.strategy import StrategyBase
 from ansible.template import Templar
 from ansible.utils.display import Display
 
+import ansibug
+
 display = Display()
+
+
+class DebugState(ansibug.DebugState):
+    def __init__(self) -> None:
+        self._counters = {
+            "thread": 1,
+        }
+        self._threads: t.Dict[int, ansibug.dap.Thread] = {}
+
+    def add_thread(
+        self,
+        name: str,
+    ) -> int:
+        tid = self._counters["thread"]
+        self._counters["thread"] += 1
+        self._threads[tid] = ansibug.dap.Thread(id=tid, name=name)
+
+        return tid
+
+    def get_threads(
+        self,
+        request: ansibug.dap.ThreadsRequest,
+    ) -> t.Iterable[ansibug.dap.Thread]:
+        return self._threads.values()
 
 
 class StrategyModule(StrategyBase):
@@ -36,6 +71,7 @@ class StrategyModule(StrategyBase):
         self,
         tqm: TaskQueueManager,
     ) -> None:
+        self.tqm = tqm
         super().__init__(tqm)
 
     noop_task = None
@@ -69,71 +105,58 @@ class StrategyModule(StrategyBase):
 
         return self._create_noop_block_from(original_block, parent)
 
-    def _get_next_task_lockstep(self, hosts, iterator):
-        """
-        Returns a list of (host, task) tuples, where the task may
-        be a noop task to keep the iterator in lock step across
-        all hosts.
-        """
-
+    def _get_next_task_lockstep(
+        self,
+        hosts: t.List[Host],
+        iterator: PlayIterator,
+    ) -> t.List[t.Tuple[Host, t.Optional[Task]]]:
         noop_task = Task()
         noop_task.action = "meta"
         noop_task.args["_raw_params"] = "noop"
         noop_task.implicit = True
         noop_task.set_loader(iterator._play._loader)
 
-        host_tasks = {}
-        display.debug("building list of next tasks for hosts")
-        for host in hosts:
-            host_tasks[host.name] = iterator.get_next_task_for_host(host, peek=True)
-        display.debug("done building task lists")
+        display.debug("building list of next tasks for hosts and counting tasks in each state of execution")
+        host_tasks: t.Dict[str, t.Tuple[HostState, t.Optional[Task]]] = {}
+        # host_tasks_to_run: t.List[t.Tuple[Host, HostState, Task]] = []
+        lowest_cur_block = -1
+        for h in hosts:
+            host_state, host_task = iterator.get_next_task_for_host(h, peek=True)
+            host_tasks[h.name] = (host_state, host_task)
 
-        num_setups = 0
-        num_tasks = 0
-        num_rescue = 0
-        num_always = 0
+            if host_task:
+                # host_tasks_to_run.append((h, host_state, host_task))
 
-        display.debug("counting tasks in each state of execution")
-        host_tasks_to_run = [
-            (host, state_task) for host, state_task in host_tasks.items() if state_task and state_task[1]
-        ]
+                if host_state.run_state != IteratingStates.COMPLETE:
 
-        if host_tasks_to_run:
-            try:
-                lowest_cur_block = min(
-                    (
-                        iterator.get_active_state(s).cur_block
-                        for h, (s, t) in host_tasks_to_run
-                        if s.run_state != IteratingStates.COMPLETE
-                    )
-                )
-            except ValueError:
-                lowest_cur_block = None
-        else:
-            # empty host_tasks_to_run will just run till the end of the function
-            # without ever touching lowest_cur_block
-            lowest_cur_block = None
+                    # Check if the block of this host task is lower than the lowest block
+                    cur_block = iterator.get_active_state(host_state).cur_block
+                    if lowest_cur_block == -1 or cur_block < lowest_cur_block:
+                        lowest_cur_block = cur_block
 
-        for (k, v) in host_tasks_to_run:
-            (s, t) = v
+        display.debug("done building task lists and counting tasks in each state of execution")
 
-            s = iterator.get_active_state(s)
-            if s.cur_block > lowest_cur_block:
+        task_counter: t.Dict[enum.IntEnum, int] = {
+            IteratingStates.SETUP: 0,
+            IteratingStates.TASKS: 0,
+            IteratingStates.RESCUE: 0,
+            IteratingStates.ALWAYS: 0,
+        }
+
+        for s, t in host_tasks.values():
+            if not t:
+                continue
+
+            state: HostState = iterator.get_active_state(s)
+            if state.cur_block > lowest_cur_block:
                 # Not the current block, ignore it
                 continue
 
-            if s.run_state == IteratingStates.SETUP:
-                num_setups += 1
-            elif s.run_state == IteratingStates.TASKS:
-                num_tasks += 1
-            elif s.run_state == IteratingStates.RESCUE:
-                num_rescue += 1
-            elif s.run_state == IteratingStates.ALWAYS:
-                num_always += 1
-        display.debug(
-            "done counting tasks in each state of execution:\n\tnum_setups: %s\n\tnum_tasks: %s\n\tnum_rescue: %s\n\tnum_always: %s"
-            % (num_setups, num_tasks, num_rescue, num_always)
-        )
+            for task_type in task_counter.keys():
+                if state.run_state == task_type:
+                    task_counter[task_type] += 1
+
+        display.debug(f"done counting tasks in each state of execution:\n{task_counter!r}")
 
         def _advance_selected_hosts(hosts, cur_block, cur_state):
             """
@@ -162,29 +185,25 @@ class StrategyModule(StrategyBase):
             display.debug("done advancing hosts to next task")
             return rvals
 
-        # if any hosts are in SETUP, return the setup task
-        # while all other hosts get a noop
-        if num_setups:
-            display.debug("advancing hosts in SETUP")
-            return _advance_selected_hosts(hosts, lowest_cur_block, IteratingStates.SETUP)
+        for task_type, count in task_counter.items():
+            if not count:
+                continue
 
-        # if any hosts are in TASKS, return the next normal
-        # task for these hosts, while all other hosts get a noop
-        if num_tasks:
-            display.debug("advancing hosts in TASKS")
-            return _advance_selected_hosts(hosts, lowest_cur_block, IteratingStates.TASKS)
+            display.debug(f"advancing hosts in {task_type}")
+            # host_tasks: t.List[t.Tuple[Host, Task]] = []
 
-        # if any hosts are in RESCUE, return the next rescue
-        # task for these hosts, while all other hosts get a noop
-        if num_rescue:
-            display.debug("advancing hosts in RESCUE")
-            return _advance_selected_hosts(hosts, lowest_cur_block, IteratingStates.RESCUE)
+            for host, host_state_task in host_tasks.items():
+                if not host_state_task:
+                    continue
 
-        # if any hosts are in ALWAYS, return the next always
-        # task for these hosts, while all other hosts get a noop
-        if num_always:
-            display.debug("advancing hosts in ALWAYS")
-            return _advance_selected_hosts(hosts, lowest_cur_block, IteratingStates.ALWAYS)
+                state, task = host_state_task
+                state = iterator.get_active_state(state)
+                if task is None:
+                    continue
+
+                a = ""
+
+            a = ""
 
         # at this point, everything must be COMPLETE, so we
         # return None for all hosts in the list
@@ -192,6 +211,40 @@ class StrategyModule(StrategyBase):
         return [(host, None) for host in hosts]
 
     def run(
+        self,
+        iterator: PlayIterator,
+        play_context: PlayContext,
+    ) -> int:
+        result = self.tqm.RUN_OK
+        self._set_hosts_cache(iterator._play)
+
+        debug_state = DebugState()
+
+        first_run = True
+
+        try:
+            while not self.tqm._terminated:
+                display.debug("getting the remaining hosts for this loop")
+                hosts_left = self.get_hosts_left(iterator)
+                display.debug("done getting the remaining hosts for this loop")
+
+                if first_run:
+                    for host in self.get_hosts_left(iterator):
+                        debug_state.add_thread(host.name)
+                    first_run = False
+
+                host_tasks = self._get_next_task_lockstep(hosts_left, iterator)
+                for host, task in host_tasks:
+                    a = ""
+
+        except (IOError, EOFError) as e:
+            display.debug("got IOError/EOFError in task loop: %s" % e)
+            # most likely an abort, return failed
+            return self.tqm.RUN_UNKNOWN_ERROR
+
+        return super().run(iterator, play_context, result=result)
+
+    def run2(
         self,
         iterator: PlayIterator,
         play_context: PlayContext,
