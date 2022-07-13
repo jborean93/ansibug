@@ -1,5 +1,7 @@
 - name: run play
   hosts: localhost
   tasks:
+  - meta: noop
+  - meta: reset_connection
   - name: run module
     ping:

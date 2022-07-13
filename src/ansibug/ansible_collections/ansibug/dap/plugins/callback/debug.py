@@ -147,6 +147,9 @@ class CallbackModule(CallbackBase):
 
         mode = self.get_option("mode")
         addr = self.get_option("socket_addr")
+        if not addr:
+            return
+
         if m := ADDR_PATTERN.match(addr):
             hostname = m.group("hostname") or "127.0.0.1"
             port = int(m.group("port"))
