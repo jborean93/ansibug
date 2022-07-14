@@ -3,7 +3,13 @@
 # GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
 
 from ._adapter import DebugAdapterConnection
-from ._events import ExitedEvent, InitializedEvent, StoppedEvent, TerminatedEvent
+from ._events import (
+    ExitedEvent,
+    InitializedEvent,
+    StoppedEvent,
+    TerminatedEvent,
+    ThreadEvent,
+)
 from ._messages import ErrorResponse, Event, ProtocolMessage, Request, Response
 from ._requests import (
     CancelRequest,
@@ -77,6 +83,7 @@ __all__ = [
     "StoppedEvent",
     "TerminatedEvent",
     "Thread",
+    "ThreadEvent",
     "ThreadsRequest",
     "ThreadsResponse",
 ]

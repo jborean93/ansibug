@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import functools
 import logging
 import os
@@ -85,13 +86,19 @@ class DebugState(t.Protocol):
     def get_scopes(
         self,
         request: dap.Request,
-    ) -> t.Iterable[dap.Scope]:
+    ) -> dap.Response:
+        raise NotImplementedError()
+
+    def get_stacktrace(
+        self,
+        request: dap.Request,
+    ) -> dap.Response:
         raise NotImplementedError()
 
     def get_threads(
         self,
         request: dap.ThreadsRequest,
-    ) -> t.Iterable[dap.Thread]:
+    ) -> dap.ThreadsResponse:
         raise NotImplementedError()
 
     def get_variables(
@@ -100,8 +107,23 @@ class DebugState(t.Protocol):
     ) -> t.Iterable[t.Any]:
         raise NotImplementedError()
 
-    def wait(self) -> None:
-        ...
+    def set_breakpoint(
+        self,
+        request: dap.SetBreakpointsRequest,
+    ) -> dap.SetBreakpointsResponse:
+        raise NotImplementedError()
+
+    def set_exception_breakpoint(
+        self,
+        request: dap.SetExceptionBreakpointsRequest,
+    ) -> dap.SetExceptionBreakpointsResponse:
+        raise NotImplementedError()
+
+    def set_variable(
+        self,
+        request: dap.Request,
+    ) -> dap.Response:
+        raise NotImplementedError()
 
 
 class AnsibleDebugger(metaclass=Singleton):
@@ -109,8 +131,34 @@ class AnsibleDebugger(metaclass=Singleton):
         self._cancel_token = SocketCancellationToken()
         self._recv_thread: t.Optional[threading.Thread] = None
         self._send_queue: queue.Queue[t.Optional[dap.ProtocolMessage]] = queue.Queue()
+        self._da_connected = threading.Event()
         self._configuration_done = threading.Event()
         self._proto = DAProtocol(self)
+        self._strategy_connected = threading.Condition()
+        self._strategy: t.Optional[DebugState] = None
+
+    @contextlib.contextmanager
+    def with_strategy(
+        self,
+        strategy: DebugState,
+    ) -> t.Generator[None, None, None]:
+        with self._strategy_connected:
+            if self._strategy:
+                raise Exception("Strategy has already been registered")
+
+            self._strategy = strategy
+            self._strategy_connected.notify_all()
+
+        try:
+            if self._da_connected.is_set():
+                self._configuration_done.wait()
+
+            yield
+
+        finally:
+            with self._strategy_connected:
+                self._strategy = None
+                self._strategy_connected.notify_all()
 
     def wait_for_config_done(
         self,
@@ -125,7 +173,8 @@ class AnsibleDebugger(metaclass=Singleton):
             timeout: The maximum time, in seconds, to wait until the debug
                 adapter is connected and ready.
         """
-        self._configuration_done.wait(timeout=timeout)
+        self._da_connected.wait(timeout=timeout)
+        # self._configuration_done.wait(timeout=timeout)
         # FIXME: Add check that this wasn't set on recv shutdown
 
     def start(
@@ -186,6 +235,11 @@ class AnsibleDebugger(metaclass=Singleton):
         self.send(stopped_event)
         raise NotImplementedError()
 
+    def _get_strategy(self) -> DebugState:
+        with self._strategy_connected:
+            self._strategy_connected.wait_for(lambda: self._strategy is not None)
+            return t.cast(DebugState, self._strategy)
+
     def _recv_task(
         self,
         addr: t.Tuple[str, int],
@@ -213,13 +267,17 @@ class AnsibleDebugger(metaclass=Singleton):
             while True:
                 with wait_for_dap_server(addr, lambda: self._proto, mode, self._cancel_token) as mp_queue:
                     mp_queue.start()
+                    self._da_connected.set()
+                    try:
+                        while True:
+                            resp = self._send_queue.get()
+                            if not resp:
+                                break
 
-                    while True:
-                        resp = self._send_queue.get()
-                        if not resp:
-                            break
+                            mp_queue.send(resp)
 
-                        mp_queue.send(resp)
+                    finally:
+                        self._da_connected.clear()
 
                 if mode == "connect":
                     break
@@ -231,7 +289,7 @@ class AnsibleDebugger(metaclass=Singleton):
             log.exception(f"Unknown error in DAP thread: %s", e)
 
         # Ensures client isn't stuck waiting for something to never come.
-        self._configuration_done.set()
+        self._da_connected.set()
         log.debug("DAP server thread task ended")
 
     @functools.singledispatchmethod
@@ -248,18 +306,17 @@ class AnsibleDebugger(metaclass=Singleton):
     ) -> None:
         resp = dap.ConfigurationDoneResponse(request_seq=msg.seq)
         self._send_queue.put(resp)
-        self._configuration_done.set()
+
+        self._get_strategy().configuration_done()
+        self._configuration_done = True
 
     @process_message.register
     def _(
         self,
         msg: dap.SetBreakpointsRequest,
     ) -> None:
-        b = [dap.Breakpoint(id=i, verified=False, message="my message") for i in range(len(msg.breakpoints))]
-        resp = dap.SetBreakpointsResponse(
-            request_seq=msg.seq,
-            breakpoints=b,
-        )
+        strategy = self._get_strategy()
+        resp = strategy.set_breakpoint(msg)
         self._send_queue.put(resp)
 
     @process_message.register
@@ -267,10 +324,8 @@ class AnsibleDebugger(metaclass=Singleton):
         self,
         msg: dap.SetExceptionBreakpointsRequest,
     ) -> None:
-        resp = dap.SetExceptionBreakpointsResponse(
-            request_seq=msg.seq,
-            breakpoints=[],
-        )
+        strategy = self._get_strategy()
+        resp = strategy.set_exception_breakpoint(msg)
         self._send_queue.put(resp)
 
     @process_message.register
@@ -278,8 +333,6 @@ class AnsibleDebugger(metaclass=Singleton):
         self,
         msg: dap.ThreadsRequest,
     ) -> None:
-        resp = dap.ThreadsResponse(
-            request_seq=msg.seq,
-            threads=[dap.Thread(id=0, name="MainThread")],
-        )
+        strategy = self._get_strategy()
+        resp = strategy.get_threads(msg)
         self._send_queue.put(resp)

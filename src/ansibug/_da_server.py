@@ -240,4 +240,5 @@ class DAServer:
         if not self._proto.connected.wait(timeout=timeout):
             raise TimeoutError("Timed out waiting for Ansible to connect to DA.")
 
+        # FIXME: Move this into the strategy run() method
         self.send_to_client(dap.InitializedEvent())

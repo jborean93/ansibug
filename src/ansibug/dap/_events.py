@@ -102,8 +102,12 @@ class StoppedEvent(Event):
 class TerminatedEvent(Event):
     """Indicate the debuggee has terminated.
 
-    Event sent by the DA that debugging of the gebuggee has terminated. This
+    Event sent by the DA that debugging of the debuggee has terminated. This
     does not mean the debuggee itself has exited.
+
+    Args:
+        restart: Opaque values not used by the client associated with this
+            terminated event.
     """
 
     event = EventType.TERMINATED
@@ -124,6 +128,40 @@ class TerminatedEvent(Event):
         body: t.Dict[str, t.Any],
     ) -> TerminatedEvent:
         return TerminatedEvent(restart=body.get("restart", None))
+
+
+@register_event
+@dataclasses.dataclass()
+class ThreadEvent(Event):
+    """Indicate a thread has started or exited.
+
+    Event sent by the debuggee that indicates the status of a thread.
+
+    Args:
+        reason: The reason for the event, either started or exited.
+        thread_id: The thread id the event is associated with.
+    """
+
+    event = EventType.THREAD
+
+    reason: t.Literal["started", "exited"]
+    thread_id: int
+
+    def pack(self) -> t.Dict[str, t.Any]:
+        obj = super().pack()
+        obj["body"] = {
+            "reason": self.reason,
+            "threadId": self.thread_id,
+        }
+
+        return obj
+
+    @classmethod
+    def unpack(
+        cls,
+        body: t.Dict[str, t.Any],
+    ) -> ThreadEvent:
+        return ThreadEvent(reason=body["reason"], thread_id=body["threadId"])
 
 
 @register_event

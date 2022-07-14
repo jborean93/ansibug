@@ -85,13 +85,80 @@ class Capabilities:
     Args:
         supports_configuration_done_request: The debug adapter supports the
             ConfigurationDoneRequest.
+        supports_function_breakpoints: The debug adapter supports function
+            breakpoints.
+        supports_conditional_breakpoints: The debug adapter supports conditional
+            breakpoints.
+        supports_hit_conditional_breakpoints: The debug adapter supports
+            breakpoints that break execution after a specified number of hits.
+        supports_evaluate_for_hovers: THe debug adapter supports evaluate
+            request for data hovers.
+        supports_step_back: The debug adapter supports stepping back via the
+            StepBackRequest and ReverseContinueRequest.
+        supports_set_variable: The debug adapter supports setting a variable to
+            a value.
+        supports_restart_frame: The debug adapter supports restarting a frame.
+        supports_goto_targets_request: The debug adapter supports the
+            GotoTargetsRequest.
+        supports_step_in_targets_request: The debug adapter supports the
+            StepInTargetsRequest.
+        supports_completions_request: The debug adapter supports the
+            CompletionsRequest.
     """
 
     supports_configuration_done_request: bool = False
+    supports_function_breakpoints: bool = False
+    supports_conditional_breakpoints: bool = False
+    supports_hit_conditional_breakpoints: bool = False
+    supports_evaluate_for_hovers: bool = False
+    # exception_breakpoint_filters
+    supports_step_back: bool = False
+    supports_set_variable: bool = False
+    supports_restart_frame: bool = False
+    supports_goto_targets_request: bool = False
+    supports_step_in_targets_request: bool = False
+    supports_completions_request: bool = False
+    # completion_trigger_characters
+    # supports_modules_request
+    # additional_module_columns
+    # supported_checksum_algorithms
+    # supports_restart_request
+    # supports_exception_options
+    # supports_value_formatting_options
+    # supports_exception_info_request
+    # support_terminate_debuggee
+    # support_suspend_debuggee
+    # supports_delayed_stack_trace_loading
+    # supports_loaded_sources_request
+    # supports_log_points
+    # supports_terminate_threads_request
+    # supports_set_expression
+    # supports_terminate_request
+    # supports_data_breakpoints
+    # supports_read_memory_request
+    # supports_write_memory_request
+    # supports_disassemble_request
+    # supports_cancel_request
+    # supports_breakpoint_locations_request
+    # supports_clipboard_context
+    # supports_stepping_granularity
+    # supports_instruction_breakpoints
+    # supports_exception_filter_options
+    # supports_single_thread_execution_requests
 
     def pack(self) -> t.Dict[str, t.Any]:
         return {
             "supportsConfigurationDoneRequest": self.supports_configuration_done_request,
+            "supportsFunctionBreakpoints": self.supports_function_breakpoints,
+            "supportsConditionalBreakpoints": self.supports_conditional_breakpoints,
+            "supportsHitConditionalBreakpoints": self.supports_hit_conditional_breakpoints,
+            "supportsEvaluateForHovers": self.supports_evaluate_for_hovers,
+            "supportsStepBack": self.supports_step_back,
+            "supportsSetVariable": self.supports_set_variable,
+            "supportsRestartFrame": self.supports_restart_frame,
+            "supportsGotoTargetsRequest": self.supports_goto_targets_request,
+            "supportsStepInTargetsRequest": self.supports_step_in_targets_request,
+            "supportsCompletionsRequest": self.supports_completions_request,
         }
 
     @classmethod
@@ -101,6 +168,16 @@ class Capabilities:
     ) -> Capabilities:
         return Capabilities(
             supports_configuration_done_request=obj.get("supportsConfigurationDoneRequest", False),
+            supports_function_breakpoints=obj.get("supportsFunctionBreakpoints", False),
+            supports_conditional_breakpoints=obj.get("supportsConditionalBreakpoints", False),
+            supports_hit_conditional_breakpoints=obj.get("supportsHitConditionalBreakpoints", False),
+            supports_evaluate_for_hovers=obj.get("supportsEvaluateForHovers", False),
+            supports_step_back=obj.get("supportsStepBack", False),
+            supports_set_variable=obj.get("supportsSetVariable", False),
+            supports_restart_frame=obj.get("supportsRestartFrame", False),
+            supports_goto_targets_request=obj.get("supportsGotoTargetsRequest", False),
+            supports_step_in_targets_request=obj.get("supportsStepInTargetsRequest", False),
+            supports_completions_request=obj.get("supportsCompletionsRequest", False),
         )
 
 

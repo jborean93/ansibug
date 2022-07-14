@@ -2,6 +2,6 @@
   hosts: localhost
   tasks:
   - meta: noop
-  - meta: reset_connection
+  - meta: refresh_inventory
   - name: run module
     ping:
