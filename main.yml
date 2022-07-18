@@ -1,6 +1,10 @@
 - name: run play
   hosts: localhost
   tasks:
+  - name: ping module
+    ping:
+      data: test
+
   - meta: noop
   - meta: refresh_inventory
   - name: run module

@@ -14,10 +14,13 @@ description:
 author: Jordan Borean (@jborean93)
 """
 
+import dataclasses
 import enum
 import threading
+import types
 import typing as t
 
+import debugpy
 from ansible import constants as C
 from ansible.errors import AnsibleAssertionError, AnsibleError, AnsibleParserError
 from ansible.executor.play_iterator import (
@@ -52,9 +55,12 @@ display = Display()
 class DebugState(ansibug.DebugState):
     def __init__(
         self,
-        debug_adapter: ansibug.AnsibleDebugger,
+        iterator: PlayIterator,
+        play: Play,
     ) -> None:
-        self._adapter = debug_adapter
+        self._iterator = iterator
+        self._play = play
+
         self._counters = {
             "thread": 1,
         }
@@ -86,9 +92,9 @@ class StrategyModule(LinearStrategy):
 
         # Used for type annotation checks, technically defined in __init__ as well
         self._hosts_cache_all: t.List[str] = []
+        self._tqm = tqm
 
-        self._debug_adapter = ansibug.AnsibleDebugger()
-        self._debug_state = DebugState(self._debug_adapter)
+        self._debug_state: t.Optional[DebugState] = None
 
     def _set_hosts_cache(
         self,
@@ -103,7 +109,7 @@ class StrategyModule(LinearStrategy):
         """
         super()._set_hosts_cache(play, refresh)
 
-        if refresh:
+        if refresh and self._debug_state:
             new_host_list = set(self._hosts_cache_all)
             existing_hosts = set()
 
@@ -135,6 +141,9 @@ class StrategyModule(LinearStrategy):
         play_context: PlayContext,
     ) -> None:
         """Called just as a task is about to be queue"""
+        path, line_no = task.get_path().rsplit(":", 1)
+        # include_* are set as actual tasks, we can use _parent to determine
+        # heirarchy and see if this is part of a parent include.
         return super()._queue_task(host, task, task_vars, play_context)
 
     def _process_pending_results(
@@ -159,10 +168,16 @@ class StrategyModule(LinearStrategy):
         step is to associate the current strategy with the debuggee adapter so
         it can respond to breakpoint and other information.
         """
-        play: Play = iterator._play
+        # if not debugpy.is_client_connected():
+        #     debugpy.listen(("localhost", 12535))
+        #     debugpy.wait_for_client()
 
-        with self._debug_adapter.with_strategy(self._debug_state):
-            return super().run(iterator, play_context)
+        self._debug_state = DebugState(iterator, iterator._play)
+        try:
+            with ansibug.AnsibleDebugger().with_strategy(self._debug_state):
+                return super().run(iterator, play_context)
+        finally:
+            self._debug_state = None
 
 
 # Other things to look at

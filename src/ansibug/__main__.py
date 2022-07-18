@@ -8,6 +8,8 @@
 from __future__ import annotations
 
 import argparse
+import os
+import pathlib
 import re
 import sys
 import typing as t
@@ -100,6 +102,22 @@ def parse_args(
     )
 
     launch.add_argument(
+        "--log-file",
+        action="store",
+        type=lambda p: pathlib.Path(os.path.expanduser(os.path.expandvars(p))),
+        help="Enable file logging to the file at this path for the ansibug debuggee logger.",
+    )
+
+    launch.add_argument(
+        "--log-level",
+        action="store",
+        choices=["info", "debug", "warning", "error"],
+        default="info",
+        type=str,
+        help="Set the logging filter level of the ansibug debuggee logger when --log-file is set. Defaults to info",
+    )
+
+    launch.add_argument(
         "playbook_args",
         nargs=argparse.REMAINDER,
         help="Arguments to use when launching ansible-playbook.",
@@ -135,6 +153,8 @@ def main() -> None:
             mode=mode,
             addr=f"{addr[0]}:{addr[1]}",
             wait_for_client=args.wait_for_client,
+            log_file=args.log_file,
+            log_level=args.log_level,
         )
         sys.exit(rc)
 

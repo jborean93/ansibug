@@ -32,10 +32,11 @@
                 "main.yml",
                 "-vvv"
             ],
+            "cwd": "/home/jborean/dev/ansible_collections/jborean93/vscode/playbooks",
             "env": {
                 "ANSIBUG_LOG_FILE": "debug.log",
                 "ANSIBUG_LOG_LEVEL": "debug",
-                "ANSIBLE_COLLECTIONS_PATHS": "${workspaceFolder}/src/ansibug:${ANSIBLE_COLLECTIONS_PATHS}",
+                "ANSIBLE_COLLECTIONS_PATHS": "${workspaceFolder}/src/ansibug:~/dev",
                 "ANSIBLE_CALLBACKS_ENABLED": "ansibug.dap.debug",
                 "ANSIBLE_STRATEGY": "ansibug.dap.debug"
             },

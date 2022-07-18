@@ -49,10 +49,47 @@
 					},
 					"launch": {
 						"properties": {
+							"args": {
+								"type": "array",
+								"items": {
+									"type": "string"
+								},
+								"description": "Command line arguments to pass to the ansible-playbook call, excluding the playbook itself.",
+								"default": []
+							},
+							"console": {
+								"type": "string",
+								"description": "Where to launch the debug target.",
+								"default": "integratedTerminal",
+								"enum": [
+									"integratedTerminal",
+									"externalTerminal"
+								]
+							},
+							"cwd": {
+								"type": "string",
+								"description": "Absolute path to the working directory of the new ansible-playbook process that is spawned.",
+								"default": "${workspaceFolder}"
+							},
+							"logFile": {
+								"type": "string",
+								"description": "The path to a file to log the ansibug debuggee logging entries to. Use logLevel to control the verbosity of these logs."
+							},
+							"logLevel": {
+								"type": "string",
+								"description": "The level of logging to enable on the ansibug debuggee run. This is only enabled if logFile is also set.",
+								"default": "info",
+								"enum": [
+									"info",
+									"debug",
+									"warning",
+									"error"
+								]
+							},
 							"playbook": {
 								"type": "string",
-								"description": "The Ansible playbook to launch",
-								"default": "${command:PickAnsiblePlaybook"
+								"description": "The path to the Ansible playbook to launch.",
+								"default": "${command:PickAnsiblePlaybook}"
 							}
 						},
 						"required": [

@@ -24,8 +24,8 @@ log = logging.getLogger(__name__)
 def start_dap() -> None:
     log.info("starting")
 
-    debugpy.listen(("localhost", 12535))
-    debugpy.wait_for_client()
+    # debugpy.listen(("localhost", 12535))
+    # debugpy.wait_for_client()
 
     try:
         with DAServer() as da:
@@ -208,26 +208,72 @@ class DAServer:
 
     @_process_msg.register
     def _(self, msg: dap.LaunchRequest) -> None:
-        addr = self._debuggee.address
-        addr_str = f"{addr[0]}:{addr[1]}"
+        try:
+            launch_arguments = msg.arguments
+            if (launch_type := launch_arguments.get("type")) != "ansibug":
+                raise Exception(f"Unknown launch type '{launch_type}'")
 
-        req = dap.RunInTerminalRequest(
-            kind="integrated",
-            cwd=str(pathlib.Path(__file__).parent.parent.parent),
-            args=[
-                sys.executable,
-                "-m",
-                "ansibug",
-                "launch",
-                "--wait-for-client",
-                "--connect",
-                addr_str,
-                "main.yml",
-                "-vv",
-            ],
-            title="Ansible Debug Console",
-        )
-        self.send_to_client(req)
+            launch_request = launch_arguments.get("request", None)
+            if launch_request == "attach":
+                raise NotImplementedError("attach is not implemented yet")
+
+            elif launch_request == "launch":
+                addr = self._debuggee.address
+                addr_str = f"{addr[0]}:{addr[1]}"
+
+                ansibug_args = [
+                    sys.executable,
+                    "-m",
+                    "ansibug",
+                    "launch",
+                    "--wait-for-client",
+                    "--connect",
+                    addr_str,
+                ]
+                if log_file := launch_arguments.get("logFile", None):
+                    ansibug_args.extend(
+                        [
+                            "--log-file",
+                            log_file,
+                            "--log-level",
+                            launch_arguments.get("logLevel", "info"),
+                        ]
+                    )
+
+                ansibug_args.append(launch_arguments["playbook"])
+                ansibug_args += launch_arguments.get("args", [])
+
+                launch_console = launch_arguments.get("console", "integratedTerminal")
+                console_kind: t.Literal["external", "integrated"]
+                if launch_console == "integratedTerminal":
+                    console_kind = "integrated"
+                elif launch_console == "externalTerminal":
+                    console_kind = "external"
+                else:
+                    raise Exception(
+                        f"Unknown console value '{launch_console}' - expected integratedTerminal or externalTerminal."
+                    )
+
+                self.send_to_client(
+                    dap.RunInTerminalRequest(
+                        cwd=launch_arguments.get("cwd", ""),
+                        kind=console_kind,
+                        args=ansibug_args,
+                        title="Ansible Debug Console",
+                    )
+                )
+
+            else:
+                raise Exception(f"Unknown launch request '{launch_request}', expecting attach or launch")
+
+        except Exception as e:
+            self.send_to_client(
+                dap.ErrorResponse(
+                    command=msg.command,
+                    request_seq=msg.seq,
+                    message=str(e),
+                )
+            )
 
     @_process_msg.register
     def _(self, msg: dap.RunInTerminalResponse) -> None:

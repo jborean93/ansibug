@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import functools
 import logging
 import os
@@ -12,6 +13,8 @@ import pathlib
 import queue
 import threading
 import typing as t
+import uuid
+import weakref
 
 from . import dap
 from ._mp_queue import ClientMPQueue, MPProtocol, MPQueue, ServerMPQueue
@@ -73,13 +76,26 @@ class DAProtocol(MPProtocol):
         self,
         msg: dap.ProtocolMessage,
     ) -> None:
-        self._debugger.process_message(msg)
+        try:
+            self._debugger.process_message(msg)
+        except Exception as e:
+            # FIXME: log exception
+
+            if isinstance(msg, dap.Request):
+                resp = dap.ErrorResponse(
+                    command=msg.command,
+                    request_seq=msg.seq,
+                    message=str(e),
+                    # error=dap.Message(),  # FIXME
+                )
+                self._debugger.send(resp)
 
     def connection_closed(
         self,
         exp: t.Optional[Exception],
     ) -> None:
-        self._debugger.send(exp)
+        # FIXME: log exception
+        self._debugger.send(None)
 
 
 class DebugState(t.Protocol):
@@ -107,23 +123,34 @@ class DebugState(t.Protocol):
     ) -> t.Iterable[t.Any]:
         raise NotImplementedError()
 
-    def set_breakpoint(
-        self,
-        request: dap.SetBreakpointsRequest,
-    ) -> dap.SetBreakpointsResponse:
-        raise NotImplementedError()
-
-    def set_exception_breakpoint(
-        self,
-        request: dap.SetExceptionBreakpointsRequest,
-    ) -> dap.SetExceptionBreakpointsResponse:
-        raise NotImplementedError()
-
     def set_variable(
         self,
         request: dap.Request,
     ) -> dap.Response:
         raise NotImplementedError()
+
+
+@dataclasses.dataclass
+class AnsibleLineBreakpoint:
+
+    id: int
+    source: dap.Source
+    start_line: int
+    end_line: int = -1
+    verified: bool = False
+
+    def generate_breakpoint(
+        self,
+        message: t.Optional[str] = None,
+    ) -> dap.Breakpoint:
+        return dap.Breakpoint(
+            id=self.id,
+            verified=self.verified,
+            message=message,
+            source=self.source,
+            line=self.start_line,
+            end_line=self.end_line,
+        )
 
 
 class AnsibleDebugger(metaclass=Singleton):
@@ -136,6 +163,34 @@ class AnsibleDebugger(metaclass=Singleton):
         self._proto = DAProtocol(self)
         self._strategy_connected = threading.Condition()
         self._strategy: t.Optional[DebugState] = None
+
+        # Stores all the client breakpoints, key is the breakpoint number/id
+        self._breakpoints: t.Dict[int, AnsibleLineBreakpoint] = {}
+
+        # Key is the path, the value is a list of the lines in that file where:
+        #   None - Line is a continuation of a breakpoint range
+        #   0    - Line is not something a breakpoint can be set at.
+        #   1    - Line is the start of a breakpoint range
+        #
+        # A continuation means the behaviour of the previous int in the list
+        # continues to apply at that line.
+        #
+        # Examples of None would be
+        #   - block/rescue/always - cannot stop on this, bp needs to be on a
+        #     task.
+        #   - import_* - These tasks are seen as the imported value not as
+        #     itself
+        #
+        # Known Problems:
+        #   - import_* tasks aren't present in the Playbook block. According to
+        #     these rules it will be set as a breakpoint for the previous entry
+        #   - roles in a play act like import_role - same as above
+        #   - always and rescue aren't seen as an exact entry, will be set to
+        #     the task that preceeds it
+        #   - Won't contain the remaining lines of the file - bp checks will
+        #     just have to use the last entry
+        # FIXME: Somehow detect import entries to invalidate them.
+        self._playbook_sections: t.Dict[str, t.List[t.Optional[int]]] = {}
 
     @contextlib.contextmanager
     def with_strategy(
@@ -208,7 +263,6 @@ class AnsibleDebugger(metaclass=Singleton):
         """
         log.debug("Shutting down DebugServer")
         self._cancel_token.cancel()
-        self.send(None)
         if self._recv_thread:
             self._recv_thread.join()
 
@@ -216,24 +270,33 @@ class AnsibleDebugger(metaclass=Singleton):
 
     def send(
         self,
-        msg: t.Optional[t.Union[Exception, dap.ProtocolMessage]],
+        msg: t.Optional[dap.ProtocolMessage],
     ) -> None:
-        if isinstance(msg, dap.ProtocolMessage):
-            self._send_queue.put(msg)
+        self._send_queue.put(msg)
 
-        else:
-            if isinstance(msg, Exception):
-                raise Exception("FIXME Send back to DA") from msg
-
-            self._send_queue.put(None)
-
-    def stop_event(
+    def register_path_breakpoint(
         self,
-        stopped_event: dap.StoppedEvent,
-        state: DebugState,
+        path: str,
+        line: int,
+        bp_type: int,
     ) -> None:
-        self.send(stopped_event)
-        raise NotImplementedError()
+        """Register a valid breakpoint section.
+
+        Registers a line as a valid breakpoint in a path. This registration is
+        used when responding the breakpoint requests from the client.
+
+        Args:
+            path: The file path the line is set.
+            line: The line the breakpoint is registered to.
+            bp_type: Set to 1 for a valid breakpoint and 0 for an invalid
+                breakpoint section.
+        """
+        # Ensure each new entry has a starting value of 0 which denotes that
+        # a breakpoint cannot be set at the start of the file. It can only be
+        # set when a line was registered.
+        file_lines = self._playbook_sections.setdefault(path, [0])
+        file_lines.extend([None] * (1 + line - len(file_lines)))
+        file_lines[line] = bp_type
 
     def _get_strategy(self) -> DebugState:
         with self._strategy_connected:
@@ -290,6 +353,7 @@ class AnsibleDebugger(metaclass=Singleton):
 
         # Ensures client isn't stuck waiting for something to never come.
         self._da_connected.set()
+        self._configuration_done.set()
         log.debug("DAP server thread task ended")
 
     @functools.singledispatchmethod
@@ -306,17 +370,46 @@ class AnsibleDebugger(metaclass=Singleton):
     ) -> None:
         resp = dap.ConfigurationDoneResponse(request_seq=msg.seq)
         self._send_queue.put(resp)
-
-        self._get_strategy().configuration_done()
-        self._configuration_done = True
+        self._configuration_done.set()
 
     @process_message.register
     def _(
         self,
         msg: dap.SetBreakpointsRequest,
     ) -> None:
-        strategy = self._get_strategy()
-        resp = strategy.set_breakpoint(msg)
+        # FIXME: Deal with source_reference if set
+        source_path = msg.source.path or ""
+        playbook_lines = self._playbook_sections.get(source_path, None)
+
+        # FIXME: Use global id for bp_id
+        breakpoint_info: t.List[dap.Breakpoint] = []
+        for idx, source_breakpoint in enumerate(msg.breakpoints):
+            bp_line = source_breakpoint.line
+            verified = False
+            bp_msg: t.Optional[str] = None
+
+            if msg.source_modified:
+                bp_msg = "Cannot set breakpoint on modified source."
+
+            elif not playbook_lines:
+                bp_msg = "File not loaded in current playbook."
+
+            else:
+                a = ""
+
+            bp_info = AnsibleLineBreakpoint(
+                id=idx,
+                source=msg.source,
+                start_line=bp_line,
+                verified=verified,
+            )
+            self._breakpoints[idx] = bp_info
+            breakpoint_info.append(bp_info.generate_breakpoint(bp_msg))
+
+        resp = dap.SetBreakpointsResponse(
+            request_seq=msg.seq,
+            breakpoints=breakpoint_info,
+        )
         self._send_queue.put(resp)
 
     @process_message.register
@@ -324,9 +417,7 @@ class AnsibleDebugger(metaclass=Singleton):
         self,
         msg: dap.SetExceptionBreakpointsRequest,
     ) -> None:
-        strategy = self._get_strategy()
-        resp = strategy.set_exception_breakpoint(msg)
-        self._send_queue.put(resp)
+        raise NotImplementedError()
 
     @process_message.register
     def _(

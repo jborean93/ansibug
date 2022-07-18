@@ -87,7 +87,13 @@ import typing as t
 
 from ansible.errors import AnsibleError
 from ansible.executor.stats import AggregateStats
+from ansible.executor.task_result import TaskResult
 from ansible.playbook import Playbook
+from ansible.playbook.block import Block
+from ansible.playbook.included_file import IncludedFile
+from ansible.playbook.play import Play
+from ansible.playbook.role import Role
+from ansible.playbook.task import Task
 from ansible.plugins.callback import CallbackBase
 
 import ansibug
@@ -118,6 +124,41 @@ def configure_logging(
     ansibug_logger.addHandler(fh)
 
 
+def load_playbook_tasks(
+    debugger: ansibug.AnsibleDebugger,
+    playbook: Playbook,
+) -> None:
+    play: Play
+    block: Block
+    task: Task
+
+    def split_task_path(task: str) -> t.Tuple[str, int]:
+        split = task.rsplit(":", 1)
+        return split[0], int(split[1])
+
+    for play in playbook.get_plays():
+        # This is essentially doing what play.compile() does but without the
+        # flush stages.
+        play_path, play_line = split_task_path(play.get_path())
+        debugger.register_path_breakpoint(play_path, play_line, 1)
+
+        for block in play.compile():
+            block_path_and_line = block.get_path()
+            if block_path_and_line:
+                # If the path is set this is an explicit block and should be
+                # marked as an invalid breakpoint section.
+                block_path, block_line = split_task_path(block_path_and_line)
+                debugger.register_path_breakpoint(block_path, block_line, 0)
+
+            task_list: t.List[Task] = block.block[:]
+            task_list.extend(block.rescue)
+            task_list.extend(block.always)
+
+            for task in task_list:
+                task_path, task_line = split_task_path(task.get_path())
+                debugger.register_path_breakpoint(task_path, task_line, 1)
+
+
 class CallbackModule(CallbackBase):
 
     CALLBACK_VERSION = 2.0
@@ -133,10 +174,19 @@ class CallbackModule(CallbackBase):
         super().__init__(*args, **kwargs)
         self._debugger = ansibug.AnsibleDebugger()
 
+    def v2_playbook_on_include(
+        self,
+        included_file: IncludedFile,
+    ) -> None:
+        # FIXME: Register new breakpoint locations in debugger
+        ...
+
     def v2_playbook_on_start(
         self,
         playbook: Playbook,
     ) -> None:
+        load_playbook_tasks(self._debugger, playbook)
+
         log_file = self.get_option("log_file")
         if log_file:
             configure_logging(
@@ -174,3 +224,16 @@ class CallbackModule(CallbackBase):
     ) -> None:
         log.info("Shutting down Ansible Debugger")
         self._debugger.shutdown()
+
+    # def v2_playbook_on_task_start(
+    #     self,
+    #     task: Task,
+    #     is_conditional: bool,
+    # ) -> None:
+    #     ...
+
+    # def v2_runner_on_ok(
+    #     self,
+    #     result: TaskResult,
+    # ) -> None:
+    #     ...
