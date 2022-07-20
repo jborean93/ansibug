@@ -207,7 +207,7 @@ class CallbackModule(CallbackBase):
         else:
             raise AnsibleError("socket_addr must be in the format [host:]port")
 
-        log.info("Staring Ansible Debugger with %s on %s:%d", mode, addr[0], addr[1])
+        log.info("Staring Ansible Debugger with %s on %s:%d", mode, hostname, port)
         self._debugger.start((hostname, port), mode)
 
         wait_for_config_done = self.get_option("wait_for_config_done")

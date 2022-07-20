@@ -106,13 +106,17 @@ class MessageType(enum.Enum):
 class Command(enum.Enum):
     CANCEL = "cancel"
     CONFIGURATION_DONE = "configurationDone"
+    CONTINUE = "continue"
     DISCONNECT = "disconnect"
     INITIALIZE = "initialize"
     LAUNCH = "launch"
     RUN_IN_TERMINAL = "runInTerminal"
     SET_BREAKPOINTS = "setBreakpoints"
     SET_EXCEPTION_BREAKPOINTS = "setExceptionBreakpoints"
+    STACK_TRACE = "stackTrace"
     THREADS = "threads"
+    SCOPES = "scopes"
+    VARIABLES = "variables"
 
 
 class EventType(enum.Enum):

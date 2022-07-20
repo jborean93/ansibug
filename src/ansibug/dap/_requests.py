@@ -8,7 +8,14 @@ import dataclasses
 import typing as t
 
 from ._messages import Command, Request, register_request
-from ._types import ExceptionFilterOptions, ExceptionOptions, Source, SourceBreakpoint
+from ._types import (
+    ExceptionFilterOptions,
+    ExceptionOptions,
+    Source,
+    SourceBreakpoint,
+    StackFrameFormat,
+    ValueFormat,
+)
 
 
 @register_request
@@ -67,6 +74,44 @@ class ConfigurationDoneRequest(Request):
         arguments: t.Dict[str, t.Any],
     ) -> ConfigurationDoneRequest:
         return ConfigurationDoneRequest()
+
+
+@register_request
+@dataclasses.dataclass()
+class ContinueRequest(Request):
+    """Request execution to resume.
+
+    Sent by the client to request the thread execution to resume.
+
+    Args:
+        thread_id: The thread to resume
+        single_thread: Resume only the thread specified or all threads if
+            False.
+    """
+
+    command = Command.CONTINUE
+
+    thread_id: int
+    single_thread: bool = True
+
+    def pack(self) -> t.Dict[str, t.Any]:
+        obj = super().pack()
+        obj["arguments"] = {
+            "threadId": self.thread_id,
+            "singleThread": self.single_thread,
+        }
+
+        return obj
+
+    @classmethod
+    def unpack(
+        cls,
+        arguments: t.Dict[str, t.Any],
+    ) -> ContinueRequest:
+        return ContinueRequest(
+            thread_id=arguments["threadId"],
+            single_thread=arguments.get("singleThread", True),
+        )
 
 
 @register_request
@@ -304,6 +349,39 @@ class RunInTerminalRequest(Request):
 
 @register_request
 @dataclasses.dataclass
+class ScopesRequest(Request):
+    """Request variables scopes.
+
+    Requests variable scopes for a given stackframe ID.
+
+    Args:
+        frame_id: The stackframe identifier to retrieve the scopes for.
+    """
+
+    command = Command.SCOPES
+
+    frame_id: int
+
+    def pack(self) -> t.Dict[str, t.Any]:
+        obj = super().pack()
+        obj["arguments"] = {
+            "frameId": self.frame_id,
+        }
+
+        return obj
+
+    @classmethod
+    def unpack(
+        cls,
+        arguments: t.Dict[str, t.Any],
+    ) -> ScopesRequest:
+        return ScopesRequest(
+            frame_id=arguments["frameId"],
+        )
+
+
+@register_request
+@dataclasses.dataclass
 class SetBreakpointsRequest(Request):
     """Set breakpoint for a source.
 
@@ -395,6 +473,52 @@ class SetExceptionBreakpointsRequest(Request):
 
 @register_request
 @dataclasses.dataclass()
+class StackTraceRequest(Request):
+    """Request a stacktrace.
+
+    Sent by the client to request a stacktrace from the current execution
+    state of a given thread.
+
+    Args:
+        thread_id: The stacktrace for this thread.
+        start_frame: Index of the first frame to return.
+        levels: The maximum number of frames to return.
+        format: Details on how to format the stack frames.
+    """
+
+    command = Command.STACK_TRACE
+
+    thread_id: int
+    start_frame: t.Optional[int] = None
+    levels: t.Optional[int] = None
+    format: t.Optional[StackFrameFormat] = None
+
+    def pack(self) -> t.Dict[str, t.Any]:
+        obj = super().pack()
+        obj["arguments"] = {
+            "threadId": self.thread_id,
+            "startFrame": self.start_frame,
+            "levels": self.levels,
+            "format": self.format.pack() if self.format else None,
+        }
+
+        return obj
+
+    @classmethod
+    def unpack(
+        cls,
+        arguments: t.Dict[str, t.Any],
+    ) -> StackTraceRequest:
+        return StackTraceRequest(
+            thread_id=arguments["threadId"],
+            start_frame=arguments.get("startFrame", None),
+            levels=arguments.get("levels", None),
+            format=StackFrameFormat.unpack(arguments["format"]) if "format" in arguments else None,
+        )
+
+
+@register_request
+@dataclasses.dataclass()
 class ThreadsRequest(Request):
     """Request to retrieve a list of all thread.
 
@@ -409,3 +533,54 @@ class ThreadsRequest(Request):
         arguments: t.Dict[str, t.Any],
     ) -> ThreadsRequest:
         return ThreadsRequest()
+
+
+@register_request
+@dataclasses.dataclass()
+class VariablesRequest(Request):
+    """Retrieves variables.
+
+    Request sent by the client to retrieve all child variables for the given
+    variable reference.
+
+    Args:
+        variables_reference: The reference id to retrieve.
+        filter: Optionally filter child variables to either named or indexed
+            variables.
+        start: The index of the first variable to return.
+        count: The number of variables to return or 0 for all.
+        format: Details on how to format the variable values.
+    """
+
+    command = Command.VARIABLES
+
+    variables_reference: int
+    filter: t.Optional[t.Literal["indexed", "named"]] = None
+    start: t.Optional[int] = None
+    count: t.Optional[int] = None
+    format: t.Optional[ValueFormat] = None
+
+    def pack(self) -> t.Dict[str, t.Any]:
+        obj = super().pack()
+        obj["arguments"] = {
+            "variablesReference": self.variables_reference,
+            "filter": self.filter,
+            "start": self.start,
+            "count": self.count,
+            "format": self.format.pack() if self.format else None,
+        }
+
+        return obj
+
+    @classmethod
+    def unpack(
+        cls,
+        arguments: t.Dict[str, t.Any],
+    ) -> VariablesRequest:
+        return VariablesRequest(
+            variables_reference=arguments["variablesReference"],
+            filter=arguments.get("filter", None),
+            start=arguments.get("start", None),
+            count=arguments.get("count", None),
+            format=ValueFormat.unpack(arguments["format"]) if "format" in arguments else None,
+        )

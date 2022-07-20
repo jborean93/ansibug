@@ -49,7 +49,7 @@ def launch(
     new_environ["ANSIBUG_WAIT_FOR_CLIENT"] = str(wait_for_client).lower()
 
     if log_file:
-        new_environ["ANSIBUG_LOG_FILE"] = str(log_file.absolute)
+        new_environ["ANSIBUG_LOG_FILE"] = str(log_file.absolute())
         new_environ["ANSIBUG_LOG_LEVEL"] = log_level
 
     python_path = [e for e in new_environ.get("PYTHONPATH", "").split(os.pathsep) if e]

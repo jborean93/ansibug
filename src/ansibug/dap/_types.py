@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import dataclasses
 import typing as t
+from operator import index
 
 
 @dataclasses.dataclass()
@@ -379,7 +380,7 @@ class Scope:
 
     name: str
     variables_reference: int
-    presentation_hint: t.Optional[t.Literal["arguments", "locals", "registers"]] = None
+    presentation_hint: t.Optional[t.Union[str, t.Literal["arguments", "locals", "registers"]]] = None
     named_variables: t.Optional[int] = None
     indexed_variables: t.Optional[int] = None
     expensive: bool = False
@@ -533,6 +534,128 @@ class SourceBreakpoint:
 
 
 @dataclasses.dataclass()
+class StackFrame:
+    """A stackframe.
+
+    A stackframe contains the source location.
+
+    Args:
+        id: Id for the stack frame.
+        name: The name of the stack frame.
+        source: The optional source of the frame.
+        line: The line within the file of the frame, will be ignored if source
+            is None.
+        column: The column within the file of the frame, will be ignored if
+            source is None.
+        end_line: Optional end line of the range covered by the stack frame.
+        end_column: Optional end column of the range covered by the stack frame.
+        can_restart: Indicates whether this frame can be restarted.
+        instruction_pointer_reference: Optional memory reference for the
+            current instruction pointer.
+        module_id: Optional module associated with this frame.
+        presentation_hint: How to present this frame in the UI.
+    """
+
+    id: int
+    name: str
+    source: t.Optional[Source] = None
+    line: int = 0
+    column: int = 0
+    end_line: t.Optional[int] = None
+    end_column: t.Optional[int] = None
+    can_restart: bool = False
+    instruction_pointer_reference: t.Optional[str] = None
+    module_id: t.Optional[t.Union[int, str]] = None
+    presentation_hint: t.Literal["normal", "label", "subtle"] = "normal"
+
+    def pack(self) -> t.Dict[str, t.Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "source": self.source.pack() if self.source else None,
+            "line": self.line,
+            "column": self.column,
+            "endLine": self.end_line,
+            "endColumn": self.end_column,
+            "canRestart": self.can_restart,
+            "instructionPointerReference": self.instruction_pointer_reference,
+            "moduleId": self.module_id,
+            "presentationHint": self.presentation_hint,
+        }
+
+    @classmethod
+    def unpack(
+        cls,
+        body: t.Dict[str, t.Any],
+    ) -> StackFrame:
+        return StackFrame(
+            id=body["id"],
+            name=body["name"],
+            source=Source.unpack(body["source"]) if "source" in body else None,
+            line=body["line"],
+            column=body["column"],
+            end_line=body.get("endLine", None),
+            end_column=body.get("endColumn", None),
+            can_restart=body.get("canRestart", False),
+            instruction_pointer_reference=body.get("instructionPointerReference", None),
+            module_id=body.get("moduleId", None),
+            presentation_hint=body.get("presentationHint", "normal"),
+        )
+
+
+@dataclasses.dataclass()
+class StackFrameFormat:
+    """Formatting info for a stack frame.
+
+    Provides formatting information for a stack frame.
+
+    Args:
+        parameters: Display parameters for the stack frame.
+        parameter_types: Displays the types of parameters for the stack frame.
+        parameter_names: Displays the names of parameters for the stack frame.
+        parameter_values: Displays the values of parameters for the stack frame.
+        line: Displays the line number of the stack frame.
+        module: Displays the module of the stack frame.
+        include_all: Includes all stack frames, including those the debug
+            adapter might otherwise hide.
+    """
+
+    parameters: bool = False
+    parameter_types: bool = False
+    parameter_names: bool = False
+    parameter_values: bool = False
+    line: bool = False
+    module: bool = False
+    include_all: bool = False
+
+    def pack(self) -> t.Dict[str, t.Any]:
+        return {
+            "parameters": self.parameters,
+            "parameterTypes": self.parameter_types,
+            "parameterNames": self.parameter_names,
+            "parameterValues": self.parameter_values,
+            "line": self.line,
+            "module": self.module,
+            "includeAll": self.include_all,
+        }
+
+    @classmethod
+    def unpack(
+        cls,
+        body: t.Dict[str, t.Any],
+    ) -> StackFrameFormat:
+        return StackFrameFormat(
+            parameters=body.get("parameters", False),
+            parameter_types=body.get("parameterTypes", False),
+            parameter_names=body.get("parameterNames", False),
+            parameter_values=body.get("parameterValues", False),
+            line=body.get("line", False),
+            module=body.get("module", False),
+            include_all=body.get("includeAll", False),
+        )
+
+
+@dataclasses.dataclass()
 class Thread:
     """A thread.
 
@@ -560,4 +683,166 @@ class Thread:
         return Thread(
             id=body["id"],
             name=body["name"],
+        )
+
+
+@dataclasses.dataclass()
+class ValueFormat:
+    """Provides formatting information for a value.
+
+    Args:
+        hex: Display the value in hex.
+    """
+
+    hex: bool = False
+
+    def pack(self) -> t.Dict[str, t.Any]:
+        return {
+            "hex": self.hex,
+        }
+
+    @classmethod
+    def unpack(
+        cls,
+        body: t.Dict[str, t.Any],
+    ) -> ValueFormat:
+        return ValueFormat(
+            hex=body.get("hex", False),
+        )
+
+
+@dataclasses.dataclass()
+class Variable:
+    """A variable is a name/value pair.
+
+    Represents a variable with a name and value as well as other metadata to
+    display in the client GUI.
+
+    Args:
+        name: The variable's name.
+        value: The variable's value.
+        type: The type of the variable's value to display in the client.
+        presentation_hint: Properties of a variable that can be used to
+            determine how to render the variable in the client.
+        evaluate_name: Optional evaluable name of this variable which can be
+            passed to the EvaluateRequest to fetch the variable's name.
+        variables_reference: If set to > 1, the variable is structured and
+            contains indexed or named variables.
+        named_variables: The number of named child variables.
+        indexed_variables: The number of indexed child variables.
+        memory_reference: Optional memory reference for the variable if the
+            variable represents executable code, such as a function pointer.
+    """
+
+    name: str
+    value: str
+    type: t.Optional[str] = None
+    presentation_hint: t.Optional[VariablePresentationHint] = None
+    evaluate_name: t.Optional[str] = None
+    variables_reference: int = 0
+    named_variables: t.Optional[int] = None
+    indexed_variables: t.Optional[int] = None
+    memory_reference: t.Optional[str] = None
+
+    def pack(self) -> t.Dict[str, t.Any]:
+        return {
+            "name": self.name,
+            "value": self.value,
+            "type": self.type,
+            "presentationHint": self.presentation_hint.pack() if self.presentation_hint else None,
+            "evaluateName": self.evaluate_name,
+            "variablesReference": self.variables_reference,
+            "namedVariables": self.named_variables,
+            "indexedVariables": self.indexed_variables,
+            "memoryReference": self.memory_reference,
+        }
+
+    @classmethod
+    def unpack(
+        cls,
+        body: t.Dict[str, t.Any],
+    ) -> Variable:
+        return Variable(
+            name=body["name"],
+            value=body["value"],
+            type=body.get("type", None),
+            presentation_hint=VariablePresentationHint.unpack(body["presentationHint"])
+            if "presentationHint" in body
+            else None,
+            evaluate_name=body.get("evaluateName", None),
+            variables_reference=body.get("variablesReference", 0),
+            named_variables=body.get("namedVariables", None),
+            indexed_variables=body.get("indexedVariables", None),
+            memory_reference=body.get("memoryReference", None),
+        )
+
+
+@dataclasses.dataclass
+class VariablePresentationHint:
+    """Optional properties of a variable.
+
+    Optional properties of a variable that can be used to determine how to
+    render the variable in the UI.
+
+    Args:
+        kind: The kind of variable.
+        attributes: Set of attributes represented as a list of strings.
+        visbility: Visibility of the variable.
+        lazy: The value can be retrieved through a specific request.
+    """
+
+    kind: t.Optional[
+        t.Union[
+            str,
+            t.Literal[
+                "property",
+                "method",
+                "class",
+                "data",
+                "event",
+                "baseClass",
+                "innerClass",
+                "interface",
+                "mostDerivedClass",
+                "virtual",
+                "dataBreakpoint",
+            ],
+        ]
+    ] = None
+    attributes: t.List[
+        t.Union[
+            str,
+            t.Literal[
+                "static",
+                "constant",
+                "readOnly",
+                "rawString",
+                "hasObjectId",
+                "canHaveObjectId",
+                "hasSideEffect",
+                "hasDataBreakpoint",
+            ],
+        ]
+    ] = dataclasses.field(default_factory=list)
+    visibility: t.Optional[t.Union[str, t.Literal["public", "private", "protected", "internal"]]] = None
+    lazy: bool = False
+
+    def pack(self) -> t.Dict[str, t.Any]:
+        return {
+            "kind": self.kind,
+            "attributes": self.attributes,
+            "visibility": self.visibility,
+            "lazy": self.lazy,
+        }
+
+    @classmethod
+    def unpack(
+        cls,
+        body: t.Dict[str, t.Any],
+    ) -> VariablePresentationHint:
+        return VariablePresentationHint(
+            kind=body.get("kind", None),
+            attributes=body.get("attributes", []),
+            visibility=body.get("visibility", None),
+            lazy=body.get("lazy", False),
         )

@@ -55,16 +55,52 @@ display = Display()
 class DebugState(ansibug.DebugState):
     def __init__(
         self,
+        debugger: ansibug.AnsibleDebugger,
         iterator: PlayIterator,
         play: Play,
     ) -> None:
+        self._debugger = debugger
         self._iterator = iterator
         self._play = play
 
         self._counters = {
             "thread": 1,
+            "scopes": 1,
+            "stack_frames": 1,
         }
         self.threads: t.Dict[int, str] = {}
+        self.stack_frames: t.Dict[int, t.Tuple[ansibug.dap.StackFrame, t.Dict[str, t.Any]]] = {}
+        self.scopes: t.Dict[int, t.Dict[str, t.Any]] = {}
+        self._waiting_condition = threading.Condition()
+        self._waiting_threads: t.Dict[int, t.Tuple[Task, t.Dict[str, t.Any]]] = {}
+
+    def ended(self) -> None:
+        with self._waiting_condition:
+            self._waiting_threads = {}
+            self._waiting_condition.notify_all()
+
+    def continue_request(
+        self,
+        request: ansibug.dap.ContinueRequest,
+    ) -> ansibug.dap.ContinueResponse:
+        thread_ids: t.Iterable[int]
+        if request.single_thread:
+            thread_ids = [request.thread_id]
+            all_threads_continued = False
+        else:
+            thread_ids = self._waiting_threads.keys()
+            all_threads_continued = True
+
+        with self._waiting_condition:
+            for tid in thread_ids:
+                self._waiting_threads.pop(tid, None)
+
+            self._waiting_condition.notify_all()
+
+        return ansibug.dap.ContinueResponse(
+            request_seq=request.seq,
+            all_threads_continued=all_threads_continued,
+        )
 
     def add_thread(
         self,
@@ -76,11 +112,107 @@ class DebugState(ansibug.DebugState):
 
         return tid
 
+    def get_scopes(
+        self,
+        request: ansibug.dap.ScopesRequest,
+    ) -> ansibug.dap.ScopesResponse:
+        sf = self.stack_frames.get(request.frame_id, None)
+        scopes: t.List[ansibug.dap.Scope] = []
+
+        if sf:
+            stack_frame, task_vars = sf
+            scope_id = self._counters["scopes"]
+            self._counters["scopes"] += 1
+            scope = ansibug.dap.Scope(
+                name="hostvars",
+                variables_reference=1,
+                named_variables=0,
+                indexed_variables=0,
+            )
+            scopes.append(scope)
+            self.scopes[scope_id] = task_vars
+
+        return ansibug.dap.ScopesResponse(
+            request_seq=request.seq,
+            scopes=scopes,
+        )
+
+    def get_stacktrace(
+        self,
+        request: ansibug.dap.StackTraceRequest,
+    ) -> ansibug.dap.StackTraceResponse:
+        with self._waiting_condition:
+            wait_info = self._waiting_threads.get(request.thread_id, None)
+
+        stack_frames: t.List[ansibug.dap.StackFrame] = []
+        if wait_info:
+            task, task_vars = wait_info
+            sfid = self._counters["stack_frames"]
+            self._counters["stack_frames"] += 1
+            sf = ansibug.dap.StackFrame(
+                id=sfid,
+                name=str(task),
+            )
+            self.stack_frames[sfid] = (sf, task_vars)
+            stack_frames.append(sf)
+
+        return ansibug.dap.StackTraceResponse(
+            request_seq=request.seq,
+            stack_frames=stack_frames,
+            total_frames=len(stack_frames),
+        )
+
     def get_threads(
         self,
         request: ansibug.dap.ThreadsRequest,
     ) -> ansibug.dap.ThreadsResponse:
-        raise NotImplementedError()
+        return ansibug.dap.ThreadsResponse(
+            request_seq=request.seq,
+            threads=[ansibug.dap.Thread(id=tid, name=name) for tid, name in self.threads.items()],
+        )
+
+    def get_variables(
+        self,
+        request: ansibug.dap.VariablesRequest,
+    ) -> ansibug.dap.VariablesResponse:
+        # FIXME: Implement this
+        # request.variables_reference
+        variables: t.List[ansibug.dap.Variable] = [
+            ansibug.dap.Variable(
+                name="foo",
+                value="bar",
+                type="str",
+            )
+        ]
+
+        return ansibug.dap.VariablesResponse(
+            request_seq=request.seq,
+            variables=variables,
+        )
+
+    def wait_breakpoint(
+        self,
+        host: Host,
+        task: Task,
+        task_vars: t.Dict[str, t.Any],
+    ) -> None:
+        task_path = task.get_path()
+        if not task_path:
+            return
+
+        path_and_line = task_path.rsplit(":", 1)
+        path = path_and_line[0]
+        line = int(path_and_line[1])
+        thread_id = next(tid for tid, name in self.threads.items() if name == host.name)
+
+        with self._waiting_condition:
+            self._waiting_threads[thread_id] = (task, task_vars)
+
+            if self._debugger.wait_breakpoint(path, line, thread_id):
+                self._waiting_condition.wait_for(lambda: thread_id not in self._waiting_threads)
+
+            else:
+                del self._waiting_threads[thread_id]
 
 
 class StrategyModule(LinearStrategy):
@@ -141,9 +273,12 @@ class StrategyModule(LinearStrategy):
         play_context: PlayContext,
     ) -> None:
         """Called just as a task is about to be queue"""
-        path, line_no = task.get_path().rsplit(":", 1)
         # include_* are set as actual tasks, we can use _parent to determine
         # heirarchy and see if this is part of a parent include.
+
+        if self._debug_state:
+            self._debug_state.wait_breakpoint(host, task, task_vars)
+
         return super()._queue_task(host, task, task_vars, play_context)
 
     def _process_pending_results(
@@ -168,13 +303,14 @@ class StrategyModule(LinearStrategy):
         step is to associate the current strategy with the debuggee adapter so
         it can respond to breakpoint and other information.
         """
-        # if not debugpy.is_client_connected():
-        #     debugpy.listen(("localhost", 12535))
-        #     debugpy.wait_for_client()
+        if not debugpy.is_client_connected():
+            debugpy.listen(("localhost", 12535))
+            debugpy.wait_for_client()
 
-        self._debug_state = DebugState(iterator, iterator._play)
+        debugger = ansibug.AnsibleDebugger()
+        self._debug_state = DebugState(debugger, iterator, iterator._play)
         try:
-            with ansibug.AnsibleDebugger().with_strategy(self._debug_state):
+            with debugger.with_strategy(self._debug_state):
                 return super().run(iterator, play_context)
         finally:
             self._debug_state = None

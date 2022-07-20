@@ -8,7 +8,7 @@ import dataclasses
 import typing as t
 
 from ._messages import Command, Response, register_response
-from ._types import Breakpoint, Capabilities, Thread
+from ._types import Breakpoint, Capabilities, Scope, StackFrame, Thread, Variable
 
 
 @register_response
@@ -41,6 +41,35 @@ class ConfigurationDoneResponse(Response):
         body: t.Dict[str, t.Any],
     ) -> ConfigurationDoneResponse:
         return ConfigurationDoneResponse(request_seq=request_seq)
+
+
+@register_response
+@dataclasses.dataclass()
+class ContinueResponse(Response):
+    """Response to the ContinueRequest."""
+
+    command = Command.CONTINUE
+
+    all_threads_continued: bool = True
+
+    def pack(self) -> t.Dict[str, t.Any]:
+        obj = super().pack()
+        obj["body"] = {
+            "allThreadsContinued": self.all_threads_continued,
+        }
+
+        return obj
+
+    @classmethod
+    def unpack(
+        cls,
+        request_seq: int,
+        body: t.Dict[str, t.Any],
+    ) -> ContinueResponse:
+        return ContinueResponse(
+            request_seq=request_seq,
+            all_threads_continued=body.get("allThreadsContinued", True),
+        )
 
 
 @register_response
@@ -150,6 +179,42 @@ class RunInTerminalResponse(Response):
 
 @register_response
 @dataclasses.dataclass()
+class ScopesResponse(Response):
+    """Response to ScopesRequest.
+
+    The response to ScopesRequest that requests the variable scopes for a given
+    stackframe ID.
+
+    Args:
+        scopes: The variable scopes.
+    """
+
+    command = Command.SCOPES
+
+    scopes: t.List[Scope] = dataclasses.field(default_factory=list)
+
+    def pack(self) -> t.Dict[str, t.Any]:
+        obj = super().pack()
+        obj["body"] = {
+            "scopes": [s.pack() for s in self.scopes],
+        }
+
+        return obj
+
+    @classmethod
+    def unpack(
+        cls,
+        request_seq: int,
+        body: t.Dict[str, t.Any],
+    ) -> ScopesResponse:
+        return ScopesResponse(
+            request_seq=request_seq,
+            scopes=[Scope.unpack(s) for s in body["scopes"]],
+        )
+
+
+@register_response
+@dataclasses.dataclass()
 class SetBreakpointsResponse(Response):
     """Response to SetBreakpointsRequest.
 
@@ -222,6 +287,46 @@ class SetExceptionBreakpointsResponse(Response):
 
 @register_response
 @dataclasses.dataclass()
+class StackTraceResponse(Response):
+    """Response to a StackTraceRequest.
+
+    A response to a StackTraceRequest that returns the stack frames for the
+    thread(s) requested.
+
+    Args:
+        stack_frames: The frames of the stack frame.
+        total_frames: The total number of frames available in the stack.
+    """
+
+    command = Command.STACK_TRACE
+
+    stack_frames: t.List[StackFrame] = dataclasses.field(default_factory=list)
+    total_frames: t.Optional[int] = None
+
+    def pack(self) -> t.Dict[str, t.Any]:
+        obj = super().pack()
+        obj["body"] = {
+            "stackFrames": [f.pack() for f in self.stack_frames],
+            "totalFrames": self.total_frames,
+        }
+
+        return obj
+
+    @classmethod
+    def unpack(
+        cls,
+        request_seq: int,
+        body: t.Dict[str, t.Any],
+    ) -> StackTraceResponse:
+        return StackTraceResponse(
+            request_seq=request_seq,
+            stack_frames=[StackFrame.unpack(s) for s in body["stackFrames"]],
+            total_frames=body.get("totalFrames", None),
+        )
+
+
+@register_response
+@dataclasses.dataclass()
 class ThreadsResponse(Response):
     """Response to a ThreadsRequest.
 
@@ -252,4 +357,39 @@ class ThreadsResponse(Response):
         return ThreadsResponse(
             request_seq=request_seq,
             threads=[Thread.unpack(b) for b in body.get("threads", [])],
+        )
+
+
+@register_response
+@dataclasses.dataclass()
+class VariablesResponse(Response):
+    """Response to a VariablesRequest.
+
+    A response to a VariablesRequest that is sent to the client.
+
+    Args:
+        variables: The variables.
+    """
+
+    command = Command.VARIABLES
+
+    variables: t.List[Variable] = dataclasses.field(default_factory=list)
+
+    def pack(self) -> t.Dict[str, t.Any]:
+        obj = super().pack()
+        obj["body"] = {
+            "variables": [v.pack() for v in self.variables],
+        }
+
+        return obj
+
+    @classmethod
+    def unpack(
+        cls,
+        request_seq: int,
+        body: t.Dict[str, t.Any],
+    ) -> VariablesResponse:
+        return VariablesResponse(
+            request_seq=request_seq,
+            variables=[Variable.unpack(v) for v in body["variables"]],
         )
