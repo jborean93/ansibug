@@ -234,7 +234,7 @@ class AnsibleDebugger(metaclass=Singleton):
 
         breakpoint: t.Optional[AnsibleLineBreakpoint] = None
         for b in self._breakpoints.values():
-            if b.path == path and b.start_line <= line and (b.end_line is None or b.end_line <= line):
+            if b.path == path and b.start_line <= line and (b.end_line is None or b.end_line >= line):
                 breakpoint = b
                 break
 
@@ -439,17 +439,15 @@ class AnsibleDebugger(metaclass=Singleton):
 
             else:
                 start_line = min(start_line, len(playbook_lines) - 1)
-                end_line = start_line
+                end_line = start_line + 1
 
                 line_type = playbook_lines[start_line]
                 while line_type is None:
                     start_line -= 1
                     line_type = playbook_lines[start_line]
 
-                end_line_type = playbook_lines[end_line]
-                while end_line_type is None and end_line < len(playbook_lines):
+                while end_line < len(playbook_lines) and playbook_lines[end_line] is None:
                     end_line += 1
-                    end_line_type = playbook_lines[end_line]
 
                 end_line = min(end_line - 1, len(playbook_lines))
 
