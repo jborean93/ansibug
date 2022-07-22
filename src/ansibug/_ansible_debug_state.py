@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import collections.abc
 import dataclasses
 import os
 import threading
@@ -11,8 +12,10 @@ import typing as t
 
 from ansible.executor.play_iterator import PlayIterator
 from ansible.inventory.host import Host
+from ansible.parsing.dataloader import DataLoader
 from ansible.playbook.play import Play
 from ansible.playbook.task import Task
+from ansible.template import Templar
 
 from . import dap
 from ._debuggee import AnsibleDebugger, DebugState
@@ -37,6 +40,7 @@ class AnsibleStackFrame:
     task: Task
     task_vars: t.Dict[str, t.Any]
     scopes: t.List[int] = dataclasses.field(default_factory=list)
+    variables: t.List[int] = dataclasses.field(default_factory=list)
     last_task: t.Optional[Task] = None
 
     def to_dap(self) -> dap.StackFrame:
@@ -59,50 +63,37 @@ class AnsibleStackFrame:
         )
 
 
-# @dataclasses.dataclass()
-# class AnsibleScope:
-#     id: int
-#     name: str
-#     variables: t.List[int] = dataclasses.field(default_factory=list)
-
-
-# @dataclasses.dataclass()
-# class AnsibleVariable:
-#     id: int
-#     name: str
-#     value: t.Any
+@dataclasses.dataclass()
+class AnsibleVariable:
+    id: int
+    value: t.Iterable[t.Any]
+    stackframe: AnsibleStackFrame
+    named_variables: int
+    indexed_variables: int
 
 
 class AnsibleDebugState(DebugState):
     def __init__(
         self,
         debugger: AnsibleDebugger,
+        loader: DataLoader,
         iterator: PlayIterator,
         play: Play,
     ) -> None:
         self.threads: t.Dict[int, AnsibleThread] = {1: AnsibleThread(id=1, host=None)}
         self.stackframes: t.Dict[int, AnsibleStackFrame] = {}
-        # self.scopes: t.Dict[int, AnsibleScope] = {}
-        # self.variables: t.Dict[int, AnsibleVariable] = {}
+        self.variables: t.Dict[int, AnsibleVariable] = {}
 
         self._debugger = debugger
+        self._loader = loader
         self._iterator = iterator
         self._play = play
 
         # These might need to live in AnsibleDebugger to preserve across runs.
         self._thread_counter = 2  # 1 is the "Main" thread that is always present.
-        self._scope_counter = 1
         self._stackframe_counter = 1
         self._variable_counter = 1
 
-        # self._counters = {
-        #     "thread": 1,
-        #     "scopes": 1,
-        #     "stack_frames": 1,
-        # }
-        # self.threads: t.Dict[int, str] = {}
-        # self.stack_frames: t.Dict[int, t.Tuple[ansibug.dap.StackFrame, t.Dict[str, t.Any]]] = {}
-        # self.scopes: t.Dict[int, t.Dict[str, t.Any]] = {}
         self._waiting_condition = threading.Condition()
         self._waiting_threads: t.Dict[int, t.Any] = {}
 
@@ -158,7 +149,10 @@ class AnsibleDebugState(DebugState):
         # existing stack frame to include the last task details so it knows
         # when to remove it from the thread.
         thread = next(iter([t for t in self.threads.values() if t.host == host]))
-        del thread.stack_frames[-1]
+        sfid = thread.stack_frames.pop(-1)
+        sf = self.stackframes.pop(sfid)
+        for variable_id in sf.variables:
+            del self.variables[variable_id]
 
         # FIXME: Now check last frame to see if it's an include_tasks and
         # whether this is the last task in that frame.
@@ -185,6 +179,32 @@ class AnsibleDebugState(DebugState):
             )
 
         return thread
+
+    def add_variable(
+        self,
+        stackframe: AnsibleStackFrame,
+        value: t.Iterable[t.Any],
+    ) -> AnsibleVariable:
+        var_id = self._variable_counter
+        self._variable_counter += 1
+
+        named_variables = 0
+        if isinstance(value, collections.abc.Mapping):
+            named_variables = len(value)
+
+        indexed_variables = 0
+        if isinstance(value, list):
+            indexed_variables = len(value)
+
+        var = self.variables[var_id] = AnsibleVariable(
+            var_id,
+            value=value,
+            stackframe=stackframe,
+            named_variables=named_variables,
+            indexed_variables=indexed_variables,
+        )
+        stackframe.variables.append(var_id)
+        return var
 
     def remove_thread(
         self,
@@ -236,27 +256,37 @@ class AnsibleDebugState(DebugState):
     ) -> dap.ScopesResponse:
         sf = self.stackframes[request.frame_id]
 
+        # This is a very basic templating of the args and doesn't handle loops.
+        templar = Templar(loader=self._loader, variables=sf.task_vars)
+        task_args = templar.template(sf.task.args, fail_on_undefined=False)
+        omit_value = sf.task_vars["omit"]
+        for task_key, task_value in list(task_args.items()):
+            if task_value == omit_value:
+                del task_args[task_key]
+
+        task_vars = self.add_variable(sf, task_args)
+        host_vars = self.add_variable(sf, sf.task_vars["hostvars"][sf.task_vars["inventory_hostname"]])
+        global_vars = self.add_variable(sf, sf.task_vars["vars"])
+
         scopes: t.List[dap.Scope] = [
-            # sf.task.args  # Needs templating though
             dap.Scope(
                 name="Module Options",
-                variables_reference=1,
-                named_variables=0,
-                indexed_variables=0,
+                variables_reference=task_vars.id,
+                named_variables=task_vars.named_variables,
+                indexed_variables=task_vars.indexed_variables,
             ),
-            # sf.task_vars['hostvars'][inventory_hostname]
             dap.Scope(
                 name="Host Variables",
-                variables_reference=2,
-                named_variables=0,
-                indexed_variables=0,
+                variables_reference=host_vars.id,
+                named_variables=host_vars.named_variables,
+                indexed_variables=host_vars.indexed_variables,
+                expensive=True,
             ),
-            # sf.task_vars['vars']
             dap.Scope(
                 name="Global",
-                variables_reference=3,
-                named_variables=0,
-                indexed_variables=0,
+                variables_reference=global_vars.id,
+                named_variables=global_vars.named_variables,
+                indexed_variables=global_vars.indexed_variables,
                 expensive=True,
             ),
         ]
@@ -298,15 +328,40 @@ class AnsibleDebugState(DebugState):
         self,
         request: dap.VariablesRequest,
     ) -> dap.VariablesResponse:
-        # FIXME: Implement this
-        # request.variables_reference
-        variables: t.List[dap.Variable] = [
-            dap.Variable(
-                name="foo",
-                value="bar",
-                type="str",
+        non_iterable_types = (str,)
+        variable = self.variables[request.variables_reference]
+
+        variables: t.List[dap.Variable] = []
+        enumerator: t.Iterable[t.Tuple[t.Any, t.Any]]
+        if isinstance(variable.value, collections.abc.Mapping):
+            enumerator = variable.value.items()
+
+        elif isinstance(variable.value, collections.abc.Iterable) and not isinstance(
+            variable.value, non_iterable_types
+        ):
+            enumerator = enumerate(variable.value)
+
+        else:
+            raise NotImplementedError("abc")
+
+        for name, value in enumerator:
+            child_var: t.Optional[AnsibleVariable] = None
+            if isinstance(value, collections.abc.Iterable) and not isinstance(value, non_iterable_types):
+                child_var = self.add_variable(
+                    stackframe=variable.stackframe,
+                    value=value,
+                )
+
+            variables.append(
+                dap.Variable(
+                    name=str(name),
+                    value=repr(value),
+                    type=type(value).__name__,
+                    named_variables=child_var.named_variables if child_var else 0,
+                    indexed_variables=child_var.indexed_variables if child_var else 0,
+                    variables_reference=child_var.id if child_var else 0,
+                )
             )
-        ]
 
         return dap.VariablesResponse(
             request_seq=request.seq,

@@ -16,27 +16,14 @@ author: Jordan Borean (@jborean93)
 
 import typing as t
 
-import debugpy
-from ansible import constants as C
-from ansible.errors import AnsibleAssertionError, AnsibleError, AnsibleParserError
 from ansible.executor.play_iterator import PlayIterator
 from ansible.executor.task_queue_manager import TaskQueueManager
 from ansible.executor.task_result import TaskResult
 from ansible.inventory.host import Host
-from ansible.inventory.manager import InventoryManager
-from ansible.module_utils._text import to_text
-from ansible.parsing.dataloader import DataLoader
-from ansible.playbook.block import Block
-from ansible.playbook.included_file import IncludedFile
-from ansible.playbook.play import Play
 from ansible.playbook.play_context import PlayContext
 from ansible.playbook.task import Task
-from ansible.plugins.loader import action_loader
-from ansible.plugins.strategy import StrategyBase
 from ansible.plugins.strategy.linear import StrategyModule as LinearStrategy
-from ansible.template import Templar
 from ansible.utils.display import Display
-from ansible.vars.manager import VariableManager
 
 import ansibug
 
@@ -105,12 +92,13 @@ class StrategyModule(LinearStrategy):
         step is to associate the current strategy with the debuggee adapter so
         it can respond to breakpoint and other information.
         """
-        if not debugpy.is_client_connected():
-            debugpy.listen(("localhost", 12535))
-            debugpy.wait_for_client()
+        # import debugpy
+        # if not debugpy.is_client_connected():
+        #     debugpy.listen(("localhost", 12535))
+        #     debugpy.wait_for_client()
 
         debugger = ansibug.AnsibleDebugger()
-        self._debug_state = ansibug.AnsibleDebugState(debugger, iterator, iterator._play)
+        self._debug_state = ansibug.AnsibleDebugState(debugger, self._loader, iterator, iterator._play)
         try:
             with debugger.with_strategy(self._debug_state):
                 return super().run(iterator, play_context)
