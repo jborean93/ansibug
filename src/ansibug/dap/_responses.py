@@ -139,6 +139,22 @@ class LaunchResponse(Response):
 
 @register_response
 @dataclasses.dataclass()
+class NextResponse(Response):
+    """Response to a NextRequest."""
+
+    command = Command.NEXT
+
+    @classmethod
+    def unpack(
+        cls,
+        request_seq: int,
+        body: t.Dict[str, t.Any],
+    ) -> NextResponse:
+        return NextResponse(request_seq=request_seq)
+
+
+@register_response
+@dataclasses.dataclass()
 class RunInTerminalResponse(Response):
     """Response to RunInTerminalRequest.
 
@@ -287,6 +303,47 @@ class SetExceptionBreakpointsResponse(Response):
 
 @register_response
 @dataclasses.dataclass()
+class SetVariableResponse(Response):
+    """Response to SetVariableRequest."""
+
+    command = Command.SET_VARIABLE
+
+    value: str
+    type: t.Optional[str] = None
+    variables_reference: t.Optional[int] = None
+    named_variables: t.Optional[int] = None
+    indexed_variables: t.Optional[int] = None
+
+    def pack(self) -> t.Dict[str, t.Any]:
+        obj = super().pack()
+        obj["body"] = {
+            "value": self.value,
+            "type": self.type,
+            "variablesReference": self.variables_reference,
+            "namedVariables": self.named_variables,
+            "indexedVariables": self.indexed_variables,
+        }
+
+        return obj
+
+    @classmethod
+    def unpack(
+        cls,
+        request_seq: int,
+        body: t.Dict[str, t.Any],
+    ) -> SetVariableResponse:
+        return SetVariableResponse(
+            request_seq=request_seq,
+            value=body["value"],
+            type=body.get("type", None),
+            variables_reference=body.get("variablesReference", None),
+            named_variables=body.get("namedVariables", None),
+            indexed_variables=body.get("indexedVariables", None),
+        )
+
+
+@register_response
+@dataclasses.dataclass()
 class StackTraceResponse(Response):
     """Response to a StackTraceRequest.
 
@@ -323,6 +380,38 @@ class StackTraceResponse(Response):
             stack_frames=[StackFrame.unpack(s) for s in body["stackFrames"]],
             total_frames=body.get("totalFrames", None),
         )
+
+
+@register_response
+@dataclasses.dataclass()
+class StepInResponse(Response):
+    """Response to a StepInRequest."""
+
+    command = Command.STEP_IN
+
+    @classmethod
+    def unpack(
+        cls,
+        request_seq: int,
+        body: t.Dict[str, t.Any],
+    ) -> StepInResponse:
+        return StepInResponse(request_seq=request_seq)
+
+
+@register_response
+@dataclasses.dataclass()
+class StepOutResponse(Response):
+    """Response to a StepOutRequest."""
+
+    command = Command.STEP_OUT
+
+    @classmethod
+    def unpack(
+        cls,
+        request_seq: int,
+        body: t.Dict[str, t.Any],
+    ) -> StepOutResponse:
+        return StepOutResponse(request_seq=request_seq)
 
 
 @register_response

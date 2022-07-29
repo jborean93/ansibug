@@ -10,6 +10,7 @@ import os
 import threading
 import typing as t
 
+from ansible import constants as C
 from ansible.executor.play_iterator import PlayIterator
 from ansible.inventory.host import Host
 from ansible.parsing.dataloader import DataLoader
@@ -27,11 +28,53 @@ class AnsibleThread:
     host: t.Optional[Host]
     stack_frames: t.List[int] = dataclasses.field(default_factory=list)
 
+    stepping_type: t.Optional[t.Literal["in", "out", "over"]] = None
+    stepping_task: t.Optional[Task] = None
+
     def to_dap(self) -> dap.Thread:
         return dap.Thread(
             id=self.id,
             name=self.host.get_name() if self.host else "main",
         )
+
+    def break_step_over(
+        self,
+        task: Task,
+    ) -> bool:
+        if self.stepping_type != "over" or not self.stepping_task:
+            return False
+
+        while task := task._parent:
+            if isinstance(task, Task):
+                break
+
+        stepping_task = self.stepping_task
+        while stepping_task := stepping_task._parent:
+            if isinstance(stepping_task, Task):
+                break
+
+        # If over, this should only break if the task shares the same parent as
+        # the previous stepping task.
+        return getattr(stepping_task, "_uuid", None) == getattr(task, "_uuid", None)
+
+    def break_step_in(self) -> bool:
+        # If in, then the first task to call this will need to break.
+        return self.stepping_type == "in"
+
+    def break_step_out(
+        self,
+        task: Task,
+    ) -> bool:
+        if self.stepping_type != "out" or not self.stepping_task:
+            return False
+
+        # If out, then the first task that does not have the stepping_task as
+        # its parent will need to break.
+        while task := task._parent:
+            if task._uuid == self.stepping_task._uuid:
+                return False
+
+        return True
 
 
 @dataclasses.dataclass()
@@ -41,7 +84,6 @@ class AnsibleStackFrame:
     task_vars: t.Dict[str, t.Any]
     scopes: t.List[int] = dataclasses.field(default_factory=list)
     variables: t.List[int] = dataclasses.field(default_factory=list)
-    last_task: t.Optional[Task] = None
 
     def to_dap(self) -> dap.StackFrame:
         task_path = self.task.get_path()
@@ -72,6 +114,137 @@ class AnsibleVariable:
     indexed_variables: int
 
 
+class VariableContainer(t.Protocol):
+    id: int
+    stackframe: AnsibleStackFrame
+    named_variables: int = 0
+    indexed_variables: int = 0
+
+    def get(
+        self,
+        debug: AnsibleDebugState,
+    ) -> t.List[dap.Variable]:
+        raise NotImplementedError()
+
+    def set(
+        self,
+        debug: AnsibleDebugState,
+        name: str,
+        value: str,
+        format: t.Optional[dap.ValueFormat] = None,
+    ) -> t.Tuple[str, str, t.Optional[VariableContainer]]:
+        raise NotImplementedError()
+
+
+class DictVariableContainer(VariableContainer):
+    def __init__(
+        self,
+        id: int,
+        stackframe: AnsibleStackFrame,
+        value: collections.abc.Mapping,
+    ) -> None:
+        self.id = id
+        self.named_variables = len(value)
+        self.stackframe = stackframe
+        self._value = value
+
+    def get(
+        self,
+        debug: AnsibleDebugState,
+    ) -> t.List[dap.Variable]:
+        non_iterable_types = (str,)
+
+        variables: t.List[dap.Variable] = []
+        for key, value in self._value.items():
+            child_var: t.Optional[VariableContainer] = None
+            if isinstance(value, (collections.abc.Mapping, collections.abc.Sequence)) and not isinstance(
+                value, non_iterable_types
+            ):
+                child_var = debug.add_variable(
+                    stackframe=self.stackframe,
+                    value=value,
+                )
+
+            variables.append(
+                dap.Variable(
+                    name=str(key),
+                    value=repr(value),
+                    type=type(value).__name__,
+                    named_variables=child_var.named_variables if child_var else 0,
+                    indexed_variables=child_var.indexed_variables if child_var else 0,
+                    variables_reference=child_var.id if child_var else 0,
+                )
+            )
+
+        return variables
+
+    def set(
+        self,
+        debug: AnsibleDebugState,
+        name: str,
+        value: str,
+        format: t.Optional[dap.ValueFormat] = None,
+    ) -> t.Tuple[str, str, t.Optional[VariableContainer]]:
+        # FIXME: Support complex objects through yaml/json and ints by trying to parse
+        # Looks like I need to also set this somewhere else as it isn't persisted beyond the task.
+        self._value[name] = value
+        return name, value, None
+
+
+class ListVariableContainer(VariableContainer):
+    def __init__(
+        self,
+        id: int,
+        stackframe: AnsibleStackFrame,
+        value: t.Sequence[t.Any],
+    ) -> None:
+        self.id = id
+        self.indexed_variables = len(value)
+        self.stackframe = stackframe
+        self._value = value
+
+    def get(
+        self,
+        debug: AnsibleDebugState,
+    ) -> t.List[dap.Variable]:
+        non_iterable_types = (str,)
+
+        variables: t.List[dap.Variable] = []
+        for idx, value in enumerate(self._value):
+            child_var: t.Optional[VariableContainer] = None
+            if isinstance(value, (collections.abc.Mapping, collections.abc.Sequence)) and not isinstance(
+                value, non_iterable_types
+            ):
+                child_var = debug.add_variable(
+                    stackframe=self.stackframe,
+                    value=value,
+                )
+
+            variables.append(
+                dap.Variable(
+                    name=str(idx),
+                    value=repr(value),
+                    type=type(value).__name__,
+                    named_variables=child_var.named_variables if child_var else 0,
+                    indexed_variables=child_var.indexed_variables if child_var else 0,
+                    variables_reference=child_var.id if child_var else 0,
+                )
+            )
+
+        return variables
+
+    def set(
+        self,
+        debug: AnsibleDebugState,
+        name: str,
+        value: str,
+        format: t.Optional[dap.ValueFormat] = None,
+    ) -> t.Tuple[str, str, t.Optional[VariableContainer]]:
+        # FIXME: Support complex objects through yaml/json and ints by trying to parse
+        self._value[int(name)] = value
+        return name, value, None
+
+
 class AnsibleDebugState(DebugState):
     def __init__(
         self,
@@ -82,20 +255,15 @@ class AnsibleDebugState(DebugState):
     ) -> None:
         self.threads: t.Dict[int, AnsibleThread] = {1: AnsibleThread(id=1, host=None)}
         self.stackframes: t.Dict[int, AnsibleStackFrame] = {}
-        self.variables: t.Dict[int, AnsibleVariable] = {}
+        self.variables: t.Dict[int, VariableContainer] = {}
 
         self._debugger = debugger
         self._loader = loader
         self._iterator = iterator
         self._play = play
 
-        # These might need to live in AnsibleDebugger to preserve across runs.
-        self._thread_counter = 2  # 1 is the "Main" thread that is always present.
-        self._stackframe_counter = 1
-        self._variable_counter = 1
-
         self._waiting_condition = threading.Condition()
-        self._waiting_threads: t.Dict[int, t.Any] = {}
+        self._waiting_threads: t.Dict[int, t.Optional[t.Literal["in", "out", "over"]]] = {}
 
     def process_task(
         self,
@@ -110,15 +278,25 @@ class AnsibleDebugState(DebugState):
         if not thread:
             thread = self.add_thread(host, advertise=True)
 
-        sfid = self._stackframe_counter
-        self._stackframe_counter += 1
+        last_frame_id = thread.stack_frames[0] if thread.stack_frames else None
+        if last_frame_id is not None:
+            # The parent is the implicit block and we want the parent of that.
+            parent_task = task._parent._parent
+            last_frame = self.stackframes[last_frame_id]
+            if parent_task and last_frame.task and last_frame.task._uuid != parent_task._uuid:
+                thread.stack_frames.pop(0)
+                self.stackframes.pop(last_frame_id)
+                for variable_id in last_frame.variables:
+                    del self.variables[variable_id]
+
+        sfid = self._debugger.next_stackframe_id()
 
         sf = self.stackframes[sfid] = AnsibleStackFrame(
             id=sfid,
             task=task,
             task_vars=task_vars,
         )
-        thread.stack_frames.append(sfid)
+        thread.stack_frames.insert(0, sfid)
 
         task_path = task.get_path()
         if not task_path:
@@ -130,13 +308,59 @@ class AnsibleDebugState(DebugState):
 
         with self._waiting_condition:
             tid = thread.id
-            self._waiting_threads[tid] = None
 
-            if self._debugger.wait_breakpoint(path, line, tid):
-                self._waiting_condition.wait_for(lambda: tid not in self._waiting_threads)
+            stopped_kwargs: t.Dict[str, t.Any] = {}
 
-            else:
-                del self._waiting_threads[tid]
+            if thread.break_step_over(task):
+                stopped_kwargs = {
+                    "reason": dap.StoppedReason.STEP,
+                    "description": "Step over",
+                }
+
+            elif thread.break_step_out(task):
+                stopped_kwargs = {
+                    "reason": dap.StoppedReason.STEP,
+                    "description": "Step out",
+                }
+
+            elif thread.break_step_in():
+                stopped_kwargs = {
+                    "reason": dap.StoppedReason.STEP,
+                    "description": "Step in",
+                }
+
+            # Breakpoints are ignored when in step out mode.
+            elif thread.stepping_type != "out" and self._debugger.wait_breakpoint(path, line):
+                stopped_kwargs = {
+                    "reason": dap.StoppedReason.BREAKPOINT,
+                    "description": "Breakpoint hit",
+                }
+
+            if stopped_kwargs:
+                stopped_event = dap.StoppedEvent(
+                    thread_id=tid,
+                    **stopped_kwargs,
+                )
+                self._debugger.send(stopped_event)
+                self._waiting_condition.wait_for(lambda: tid in self._waiting_threads)
+
+                stepping_type = self._waiting_threads.pop(tid)
+                if stepping_type == "in" and task.action not in C._ACTION_ALL_INCLUDES:
+                    stepping_type = "over"
+
+                if stepping_type:
+                    thread.stepping_type = stepping_type
+
+                    stepping_task = task
+                    if stepping_type == "out":
+                        while stepping_task := stepping_task._parent:
+                            if isinstance(stepping_task, Task) and stepping_task.action in C._ACTION_ALL_INCLUDES:
+                                break
+
+                    thread.stepping_task = stepping_task
+                else:
+                    thread.stepping_type = None
+                    thread.stepping_task = None
 
         return sf
 
@@ -145,17 +369,13 @@ class AnsibleDebugState(DebugState):
         host: Host,
         task: Task,
     ) -> None:
-        # FIXME: Handle include_tasks and the results. Will need to update the
-        # existing stack frame to include the last task details so it knows
-        # when to remove it from the thread.
         thread = next(iter([t for t in self.threads.values() if t.host == host]))
-        sfid = thread.stack_frames.pop(-1)
-        sf = self.stackframes.pop(sfid)
-        for variable_id in sf.variables:
-            del self.variables[variable_id]
 
-        # FIXME: Now check last frame to see if it's an include_tasks and
-        # whether this is the last task in that frame.
+        if task.action not in C._ACTION_ALL_INCLUDES:
+            sfid = thread.stack_frames.pop(0)
+            sf = self.stackframes.pop(sfid)
+            for variable_id in sf.variables:
+                del self.variables[variable_id]
 
     def add_thread(
         self,
@@ -163,8 +383,7 @@ class AnsibleDebugState(DebugState):
         *,
         advertise: bool = True,
     ) -> AnsibleThread:
-        tid = self._thread_counter
-        self._thread_counter += 1
+        tid = self._debugger.next_thread_id()
 
         thread = self.threads[tid] = AnsibleThread(
             id=tid,
@@ -184,25 +403,19 @@ class AnsibleDebugState(DebugState):
         self,
         stackframe: AnsibleStackFrame,
         value: t.Iterable[t.Any],
-    ) -> AnsibleVariable:
-        var_id = self._variable_counter
-        self._variable_counter += 1
+    ) -> VariableContainer:
+        var_id = self._debugger.next_variable_id()
 
-        named_variables = 0
+        var: VariableContainer
         if isinstance(value, collections.abc.Mapping):
-            named_variables = len(value)
+            var = self.variables[var_id] = DictVariableContainer(var_id, stackframe, value)
 
-        indexed_variables = 0
-        if isinstance(value, list):
-            indexed_variables = len(value)
+        elif isinstance(value, collections.abc.Sequence):
+            var = self.variables[var_id] = ListVariableContainer(var_id, stackframe, value)
 
-        var = self.variables[var_id] = AnsibleVariable(
-            var_id,
-            value=value,
-            stackframe=stackframe,
-            named_variables=named_variables,
-            indexed_variables=indexed_variables,
-        )
+        else:
+            raise Exception(f"Cannot store variable of type {type(value).__name__} - must be list or dict")
+
         stackframe.variables.append(var_id)
         return var
 
@@ -231,19 +444,12 @@ class AnsibleDebugState(DebugState):
         self,
         request: dap.ContinueRequest,
     ) -> dap.ContinueResponse:
-        thread_ids: t.Iterable[int]
         if request.single_thread:
-            thread_ids = [request.thread_id]
+            self._continue([request.thread_id], None)
             all_threads_continued = False
         else:
-            thread_ids = self._waiting_threads.keys()
+            self._continue(self._waiting_threads.keys(), None)
             all_threads_continued = True
-
-        with self._waiting_condition:
-            for tid in thread_ids:
-                self._waiting_threads.pop(tid, None)
-
-            self._waiting_condition.notify_all()
 
         return dap.ContinueResponse(
             request_seq=request.seq,
@@ -328,42 +534,53 @@ class AnsibleDebugState(DebugState):
         self,
         request: dap.VariablesRequest,
     ) -> dap.VariablesResponse:
-        non_iterable_types = (str,)
         variable = self.variables[request.variables_reference]
-
-        variables: t.List[dap.Variable] = []
-        enumerator: t.Iterable[t.Tuple[t.Any, t.Any]]
-        if isinstance(variable.value, collections.abc.Mapping):
-            enumerator = variable.value.items()
-
-        elif isinstance(variable.value, collections.abc.Iterable) and not isinstance(
-            variable.value, non_iterable_types
-        ):
-            enumerator = enumerate(variable.value)
-
-        else:
-            raise NotImplementedError("abc")
-
-        for name, value in enumerator:
-            child_var: t.Optional[AnsibleVariable] = None
-            if isinstance(value, collections.abc.Iterable) and not isinstance(value, non_iterable_types):
-                child_var = self.add_variable(
-                    stackframe=variable.stackframe,
-                    value=value,
-                )
-
-            variables.append(
-                dap.Variable(
-                    name=str(name),
-                    value=repr(value),
-                    type=type(value).__name__,
-                    named_variables=child_var.named_variables if child_var else 0,
-                    indexed_variables=child_var.indexed_variables if child_var else 0,
-                    variables_reference=child_var.id if child_var else 0,
-                )
-            )
-
         return dap.VariablesResponse(
             request_seq=request.seq,
-            variables=variables,
+            variables=variable.get(self),
         )
+
+    def set_variable(
+        self,
+        request: dap.SetVariableRequest,
+    ) -> dap.SetVariableResponse:
+        variable = self.variables[request.variables_reference]
+        new_value, new_type, new_container = variable.set(self, request.name, request.value, request.format)
+
+        return dap.SetVariableResponse(
+            request_seq=request.seq,
+            value=new_value,
+            type=new_type,
+            variables_reference=new_container.id if new_container else 0,
+            named_variables=new_container.named_variables if new_container else 0,
+            indexed_variables=new_container.indexed_variables if new_container else 0,
+        )
+
+    def step_in(
+        self,
+        request: dap.StepInRequest,
+    ) -> None:
+        self._continue([request.thread_id], "in")
+
+    def step_out(
+        self,
+        request: dap.StepOutRequest,
+    ) -> None:
+        self._continue([request.thread_id], "out")
+
+    def step_over(
+        self,
+        request: dap.NextRequest,
+    ) -> None:
+        self._continue([request.thread_id], "over")
+
+    def _continue(
+        self,
+        thread_ids: t.Iterable[int],
+        action: t.Optional[t.Literal["in", "out", "over"]],
+    ) -> None:
+        with self._waiting_condition:
+            for tid in thread_ids:
+                self._waiting_threads[tid] = action
+
+            self._waiting_condition.notify_all()

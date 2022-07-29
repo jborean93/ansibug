@@ -131,15 +131,42 @@ class DebugState(t.Protocol):
     ) -> dap.VariablesResponse:
         raise NotImplementedError()
 
+    def set_variable(
+        self,
+        request: dap.SetVariableRequest,
+    ) -> dap.SetVariableResponse:
+        raise NotImplementedError()
+
+    def step_in(
+        self,
+        request: dap.StepInRequest,
+    ) -> None:
+        raise NotImplementedError()
+
+    def step_out(
+        self,
+        request: dap.StepOutRequest,
+    ) -> None:
+        raise NotImplementedError()
+
+    def step_over(
+        self,
+        request: dap.NextRequest,
+    ) -> None:
+        raise NotImplementedError()
+
 
 @dataclasses.dataclass
 class AnsibleLineBreakpoint:
 
     id: int
-    path: str
-    start_line: int
-    end_line: t.Optional[int] = None
-    verified: bool = False
+    source: dap.Source
+    source_breakpoint: dap.SourceBreakpoint
+    breakpoint: dap.Breakpoint
+
+    @property
+    def path(self) -> str:
+        return self.source.path or ""
 
 
 class AnsibleDebugger(metaclass=Singleton):
@@ -154,15 +181,22 @@ class AnsibleDebugger(metaclass=Singleton):
         self._strategy_connected = threading.Condition()
         self._strategy: t.Optional[DebugState] = None
 
+        self._thread_counter = 2  # 1 is always the main thread
+        self._stackframe_counter = 1
+        self._variable_counter = 1
+
         # Stores all the client breakpoints, key is the breakpoint number/id
         self._breakpoints: t.Dict[int, AnsibleLineBreakpoint] = {}
+        self._breakpoint_counter = 1
 
         # Key is the path, the value is a list of the lines in that file where:
         #   None - Line is a continuation of a breakpoint range
         #   0    - Line is not something a breakpoint can be set at.
         #   1    - Line is the start of a breakpoint range
         #
-        # A continuation means the behaviour of the previous int in the list
+        # The lines are 1 based with the 0 index representing 0 meaning a
+        # breakpoint cannot be set until the first valid entry is found. A
+        # continuation means the behaviour of the previous int in the list
         # continues to apply at that line.
         #
         # Examples of None would be
@@ -180,7 +214,7 @@ class AnsibleDebugger(metaclass=Singleton):
         #   - Won't contain the remaining lines of the file - bp checks will
         #     just have to use the last entry
         # FIXME: Somehow detect import entries to invalidate them.
-        self._playbook_sections: t.Dict[str, t.List[t.Optional[int]]] = {}
+        self._source_info: t.Dict[str, t.List[t.Optional[int]]] = {}
 
     @contextlib.contextmanager
     def with_strategy(
@@ -205,6 +239,24 @@ class AnsibleDebugger(metaclass=Singleton):
                 self._strategy = None
                 self._strategy_connected.notify_all()
 
+    def next_thread_id(self) -> int:
+        tid = self._thread_counter
+        self._thread_counter += 1
+
+        return tid
+
+    def next_stackframe_id(self) -> int:
+        sfid = self._stackframe_counter
+        self._stackframe_counter += 1
+
+        return sfid
+
+    def next_variable_id(self) -> int:
+        vid = self._variable_counter
+        self._variable_counter += 1
+
+        return vid
+
     def wait_for_config_done(
         self,
         timeout: t.Optional[float] = 10.0,
@@ -226,29 +278,20 @@ class AnsibleDebugger(metaclass=Singleton):
         self,
         path: str,
         line: int,
-        thread_id: int,
     ) -> bool:
         # FIXME: This could cause a deadlock
         if not self._connected:
             return False
 
-        breakpoint: t.Optional[AnsibleLineBreakpoint] = None
         for b in self._breakpoints.values():
-            if b.path == path and b.start_line <= line and (b.end_line is None or b.end_line >= line):
-                breakpoint = b
-                break
+            if (
+                b.path == path
+                and (b.breakpoint.line is None or b.breakpoint.line <= line)
+                and (b.breakpoint.end_line is None or b.breakpoint.end_line >= line)
+            ):
+                return True
 
-        if breakpoint:
-            self.send(
-                dap.StoppedEvent(
-                    reason=dap.StoppedReason.BREAKPOINT,
-                    description="Breakpoint hit",
-                    thread_id=thread_id,
-                )
-            )
-            return True
-        else:
-            return False
+        return False
 
     def start(
         self,
@@ -313,9 +356,55 @@ class AnsibleDebugger(metaclass=Singleton):
         # Ensure each new entry has a starting value of 0 which denotes that
         # a breakpoint cannot be set at the start of the file. It can only be
         # set when a line was registered.
-        file_lines = self._playbook_sections.setdefault(path, [0])
+        file_lines = self._source_info.setdefault(path, [0])
         file_lines.extend([None] * (1 + line - len(file_lines)))
         file_lines[line] = bp_type
+
+        # FIXME: Put into common location to share with SetBreakpointRequest.
+        for breakpoint in self._breakpoints.values():
+            if breakpoint.path != path:
+                continue
+
+            source_breakpoint = breakpoint.source_breakpoint
+            start_line = min(source_breakpoint.line, len(file_lines) - 1)
+            end_line = start_line + 1
+
+            line_type = file_lines[start_line]
+            while line_type is None:
+                start_line -= 1
+                line_type = file_lines[start_line]
+
+            while end_line < len(file_lines) and file_lines[end_line] is None:
+                end_line += 1
+
+            end_line = min(end_line - 1, len(file_lines))
+
+            if line_type == 0:
+                verified = False
+                bp_msg = "Breakpoint cannot be set here."
+            else:
+                verified = True
+                bp_msg = None
+
+            if (
+                breakpoint.breakpoint.verified != verified
+                or breakpoint.breakpoint.line != start_line
+                or breakpoint.breakpoint.end_line != end_line
+            ):
+                bp = breakpoint.breakpoint = dap.Breakpoint(
+                    id=breakpoint.id,
+                    verified=verified,
+                    message=bp_msg,
+                    source=breakpoint.source,
+                    line=start_line,
+                    end_line=end_line,
+                )
+                self.send(
+                    dap.BreakpointEvent(
+                        reason="changed",
+                        breakpoint=bp,
+                    )
+                )
 
     def _get_strategy(self) -> DebugState:
         with self._strategy_connected:
@@ -409,6 +498,15 @@ class AnsibleDebugger(metaclass=Singleton):
     @process_message.register
     def _(
         self,
+        msg: dap.NextRequest,
+    ) -> None:
+        strategy = self._get_strategy()
+        strategy.step_over(msg)
+        self.send(dap.NextResponse(request_seq=msg.seq))
+
+    @process_message.register
+    def _(
+        self,
         msg: dap.ScopesRequest,
     ) -> None:
         strategy = self._get_strategy()
@@ -422,58 +520,74 @@ class AnsibleDebugger(metaclass=Singleton):
     ) -> None:
         # FIXME: Deal with source_reference if set
         source_path = msg.source.path or ""
-        playbook_lines = self._playbook_sections.get(source_path, None)
+        source_info = self._source_info.get(source_path, None)
+
+        # Clear out existing breakpoints for the source as each request should send the latest list for a source.
+        self._breakpoints = {bpid: b for bpid, b in self._breakpoints.items() if b.path != source_path}
 
         breakpoint_info: t.List[dap.Breakpoint] = []
         for source_breakpoint in msg.breakpoints:
-            start_line = source_breakpoint.line
-            end_line = None
-            verified = False
-            bp_msg: t.Optional[str] = None
+            bp_id = self._breakpoint_counter
+            self._breakpoint_counter += 1
 
+            bp: dap.Breakpoint
             if msg.source_modified:
-                bp_msg = "Cannot set breakpoint on modified source."
+                bp = dap.Breakpoint(
+                    id=bp_id,
+                    verified=False,
+                    message="Cannot set breakpoint on a modified source.",
+                    source=msg.source,
+                )
+                # I don't think we need to preserve this bp for later reference.
+                breakpoint_info.append(bp)
+                continue
 
-            elif not playbook_lines:
-                bp_msg = "File not loaded in current playbook."
+            if not source_info:
+                bp = dap.Breakpoint(
+                    id=bp_id,
+                    verified=False,
+                    message="File has not been loaded by Ansible, cannot detect breakpoints yet.",
+                    source=msg.source,
+                    line=source_breakpoint.line,
+                )
 
             else:
-                start_line = min(start_line, len(playbook_lines) - 1)
+                start_line = min(source_breakpoint.line, len(source_info) - 1)
                 end_line = start_line + 1
 
-                line_type = playbook_lines[start_line]
+                line_type = source_info[start_line]
                 while line_type is None:
                     start_line -= 1
-                    line_type = playbook_lines[start_line]
+                    line_type = source_info[start_line]
 
-                while end_line < len(playbook_lines) and playbook_lines[end_line] is None:
+                while end_line < len(source_info) and source_info[end_line] is None:
                     end_line += 1
 
-                end_line = min(end_line - 1, len(playbook_lines))
+                end_line = min(end_line - 1, len(source_info))
 
                 if line_type == 0:
-                    bp_msg = "Breakpoint cannot be set here"
+                    verified = False
+                    bp_msg = "Breakpoint cannot be set here."
                 else:
                     verified = True
+                    bp_msg = None
 
-            bp_id = len(self._breakpoints) + 1
-            bp_info = self._breakpoints[bp_id] = AnsibleLineBreakpoint(
-                id=bp_id,
-                path=source_path,
-                start_line=start_line,
-                end_line=end_line,
-                verified=verified,
-            )
-            breakpoint_info.append(
-                dap.Breakpoint(
-                    id=bp_info.id,
-                    verified=bp_info.verified,
+                bp = dap.Breakpoint(
+                    id=bp_id,
+                    verified=verified,
                     message=bp_msg,
                     source=msg.source,
-                    line=bp_info.start_line,
-                    end_line=bp_info.end_line,
+                    line=start_line,
+                    end_line=end_line,
                 )
+
+            self._breakpoints[bp_id] = AnsibleLineBreakpoint(
+                id=bp_id,
+                source=msg.source,
+                source_breakpoint=source_breakpoint,
+                breakpoint=bp,
             )
+            breakpoint_info.append(bp)
 
         resp = dap.SetBreakpointsResponse(
             request_seq=msg.seq,
@@ -491,11 +605,38 @@ class AnsibleDebugger(metaclass=Singleton):
     @process_message.register
     def _(
         self,
+        msg: dap.SetVariableRequest,
+    ) -> None:
+        strategy = self._get_strategy()
+        resp = strategy.set_variable(msg)
+        self.send(resp)
+
+    @process_message.register
+    def _(
+        self,
         msg: dap.StackTraceRequest,
     ) -> None:
         strategy = self._get_strategy()
         resp = strategy.get_stacktrace(msg)
         self.send(resp)
+
+    @process_message.register
+    def _(
+        self,
+        msg: dap.StepInRequest,
+    ) -> None:
+        strategy = self._get_strategy()
+        strategy.step_in(msg)
+        self.send(dap.StepInResponse(request_seq=msg.seq))
+
+    @process_message.register
+    def _(
+        self,
+        msg: dap.StepOutRequest,
+    ) -> None:
+        strategy = self._get_strategy()
+        strategy.step_out(msg)
+        self.send(dap.StepOutResponse(request_seq=msg.seq))
 
     @process_message.register
     def _(

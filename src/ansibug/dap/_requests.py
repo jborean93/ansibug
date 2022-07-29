@@ -275,7 +275,7 @@ class LaunchRequest(Request):
         args["noDebug"] = self.no_debug
         args["__restart"] = self.restart
 
-        obj.update({"arguments": args})
+        obj["arguments"] = args
 
         return obj
 
@@ -291,6 +291,48 @@ class LaunchRequest(Request):
             arguments=args,
             no_debug=no_debug,
             restart=restart,
+        )
+
+
+@register_request
+@dataclasses.dataclass()
+class NextRequest(Request):
+    """Request to execute one step.
+
+    This is a request sent from the client to the debug adapter to execute the
+    next step and send a stop request.
+
+    Args:
+        thread_id: The thread for which to resume execution for one step.
+        single_thread: All other suspended threads are not resumed.
+        granularity: The granularity stepping.
+    """
+
+    command = Command.NEXT
+
+    thread_id: int
+    single_thread: bool = False
+    granularity: t.Literal["statement", "line", "instruction"] = "statement"
+
+    def pack(self) -> t.Dict[str, t.Any]:
+        obj = super().pack()
+        obj["arguments"] = {
+            "threadId": self.thread_id,
+            "singleThread": self.single_thread,
+            "granularity": self.granularity,
+        }
+
+        return obj
+
+    @classmethod
+    def unpack(
+        cls,
+        arguments: t.Dict[str, t.Any],
+    ) -> NextRequest:
+        return NextRequest(
+            thread_id=arguments["threadId"],
+            single_thread=arguments.get("singleThread", False),
+            granularity=arguments.get("granularity", "statement"),
         )
 
 
@@ -473,6 +515,51 @@ class SetExceptionBreakpointsRequest(Request):
 
 @register_request
 @dataclasses.dataclass()
+class SetVariableRequest(Request):
+    """Set the variable with a new value.
+
+    Sets a variable in a given context with a new value.
+
+    Args:
+        variables_reference: The variable container id.
+        name: The name of the variable in the container.
+        value: The value of the variable to set.
+        format: Optional details on how the value is formatted.
+    """
+
+    command = Command.SET_VARIABLE
+
+    variables_reference: int
+    name: str
+    value: str
+    format: t.Optional[ValueFormat] = None
+
+    def pack(self) -> t.Dict[str, t.Any]:
+        obj = super().pack()
+        obj["arguments"] = {
+            "variablesReference": self.variables_reference,
+            "name": self.name,
+            "value": self.value,
+            "format": self.format.pack() if self.format else None,
+        }
+
+        return obj
+
+    @classmethod
+    def unpack(
+        cls,
+        arguments: t.Dict[str, t.Any],
+    ) -> SetVariableRequest:
+        return SetVariableRequest(
+            variables_reference=arguments["variablesReference"],
+            name=arguments["name"],
+            value=arguments["value"],
+            format=ValueFormat.unpack(arguments["format"]) if "format" in arguments else None,
+        )
+
+
+@register_request
+@dataclasses.dataclass()
 class StackTraceRequest(Request):
     """Request a stacktrace.
 
@@ -514,6 +601,94 @@ class StackTraceRequest(Request):
             start_frame=arguments.get("startFrame", None),
             levels=arguments.get("levels", None),
             format=StackFrameFormat.unpack(arguments["format"]) if "format" in arguments else None,
+        )
+
+
+@register_request
+@dataclasses.dataclass()
+class StepInRequest(Request):
+    """Request to step into a function/method.
+
+    Sent by the client to request the given thread to step into a function
+    and allows all other threads to run freely by resuming them.
+
+    Args:
+        thread_id: The thread for which to resume exeuction for on step into.
+        single_thread: If True, all other suspended threads are not resumed.
+        target_id: The id of the target to step into.
+        granularity: Granularity level to step.
+    """
+
+    command = Command.STEP_IN
+
+    thread_id: int
+    single_thread: bool = False
+    target_id: t.Optional[int] = None
+    granularity: t.Literal["statement", "line", "instruction"] = "statement"
+
+    def pack(self) -> t.Dict[str, t.Any]:
+        obj = super().pack()
+        obj["arguments"] = {
+            "threadId": self.thread_id,
+            "singleThread": self.single_thread,
+            "targetId": self.thread_id,
+            "granularity": self.granularity,
+        }
+
+        return obj
+
+    @classmethod
+    def unpack(
+        cls,
+        arguments: t.Dict[str, t.Any],
+    ) -> StepInRequest:
+        return StepInRequest(
+            thread_id=arguments["threadId"],
+            single_thread=arguments.get("singleThread", False),
+            target_id=arguments.get("targetId", None),
+            granularity=arguments.get("granularity", "statement"),
+        )
+
+
+@register_request
+@dataclasses.dataclass()
+class StepOutRequest(Request):
+    """Request to ste out from a function/method.
+
+    Sent by the client to request the given thread to step out of a function
+    and allows all the other threads to run freely by resuming them.
+
+    Args:
+        thread_id: The thread for whcih to resume exeuction for one step out.
+        single_thread: If True, all other suspended threads are not resumed.
+        granularity: Granularity level to step.
+    """
+
+    command = Command.STEP_OUT
+
+    thread_id: int
+    single_thread: bool = False
+    granularity: t.Literal["statement", "line", "instruction"] = "statement"
+
+    def pack(self) -> t.Dict[str, t.Any]:
+        obj = super().pack()
+        obj["arguments"] = {
+            "threadId": self.thread_id,
+            "singleThread": self.single_thread,
+            "granularity": self.granularity,
+        }
+
+        return obj
+
+    @classmethod
+    def unpack(
+        cls,
+        arguments: t.Dict[str, t.Any],
+    ) -> StepOutRequest:
+        return StepOutRequest(
+            thread_id=arguments["threadId"],
+            single_thread=arguments.get("singleThread", False),
+            granularity=arguments.get("granularity", "statement"),
         )
 
 

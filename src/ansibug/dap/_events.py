@@ -9,6 +9,7 @@ import enum
 import typing as t
 
 from ._messages import Event, EventType, register_event
+from ._types import Breakpoint
 
 
 class StoppedReason(enum.Enum):
@@ -25,6 +26,45 @@ class StoppedReason(enum.Enum):
 
 @register_event
 @dataclasses.dataclass()
+class BreakpointEvent(Event):
+    """Indicate information about a breakpoint has changed.
+
+    Event sent by the debuggee that indicates that some information about a
+    breakpoint has changed.
+
+    Args:
+        reason: The reason for the breakpoint event.
+        breakpoint: The id of this value is used to select the breakpoint on
+            the client, the other values are used as the new information.
+    """
+
+    event = EventType.BREAKPOINT
+
+    reason: t.Union[str, t.Literal["changed", "new", "removed"]]
+    breakpoint: Breakpoint
+
+    def pack(self) -> t.Dict[str, t.Any]:
+        obj = super().pack()
+        obj["body"] = {
+            "reason": self.reason,
+            "breakpoint": self.breakpoint.pack(),
+        }
+
+        return obj
+
+    @classmethod
+    def unpack(
+        cls,
+        body: t.Dict[str, t.Any],
+    ) -> BreakpointEvent:
+        return BreakpointEvent(
+            reason=body["reason"],
+            breakpoint=Breakpoint.unpack(body["breakpoint"]),
+        )
+
+
+@register_event
+@dataclasses.dataclass()
 class InitializedEvent(Event):
     """Indicate the DA is ready to accept configuration requests.
 
@@ -35,7 +75,10 @@ class InitializedEvent(Event):
     event = EventType.INITIALIZED
 
     @classmethod
-    def unpack(cls) -> InitializedEvent:
+    def unpack(
+        cls,
+        body: t.Dict[str, t.Any],
+    ) -> InitializedEvent:
         return InitializedEvent()
 
 

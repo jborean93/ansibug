@@ -87,12 +87,9 @@ import typing as t
 
 from ansible.errors import AnsibleError
 from ansible.executor.stats import AggregateStats
-from ansible.executor.task_result import TaskResult
 from ansible.playbook import Playbook
 from ansible.playbook.block import Block
-from ansible.playbook.included_file import IncludedFile
 from ansible.playbook.play import Play
-from ansible.playbook.role import Role
 from ansible.playbook.task import Task
 from ansible.plugins.callback import CallbackBase
 
@@ -131,6 +128,12 @@ def load_playbook_tasks(
     play: Play
     block: Block
     task: Task
+
+    # import debugpy
+
+    # if not debugpy.is_client_connected():
+    #     debugpy.listen(("localhost", 12535))
+    #     debugpy.wait_for_client()
 
     def split_task_path(task: str) -> t.Tuple[str, int]:
         split = task.rsplit(":", 1)
@@ -173,13 +176,6 @@ class CallbackModule(CallbackBase):
     ) -> None:
         super().__init__(*args, **kwargs)
         self._debugger = ansibug.AnsibleDebugger()
-
-    def v2_playbook_on_include(
-        self,
-        included_file: IncludedFile,
-    ) -> None:
-        # FIXME: Register new breakpoint locations in debugger
-        ...
 
     def v2_playbook_on_start(
         self,
@@ -224,16 +220,3 @@ class CallbackModule(CallbackBase):
     ) -> None:
         log.info("Shutting down Ansible Debugger")
         self._debugger.shutdown()
-
-    # def v2_playbook_on_task_start(
-    #     self,
-    #     task: Task,
-    #     is_conditional: bool,
-    # ) -> None:
-    #     ...
-
-    # def v2_runner_on_ok(
-    #     self,
-    #     result: TaskResult,
-    # ) -> None:
-    #     ...

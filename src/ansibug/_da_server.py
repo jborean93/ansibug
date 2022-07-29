@@ -202,6 +202,7 @@ class DAServer:
                 request_seq=msg.seq,
                 capabilities=dap.Capabilities(
                     supports_configuration_done_request=True,
+                    supports_set_variable=True,
                 ),
             )
         )

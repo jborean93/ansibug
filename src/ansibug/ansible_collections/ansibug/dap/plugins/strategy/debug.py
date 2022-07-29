@@ -20,6 +20,8 @@ from ansible.executor.play_iterator import PlayIterator
 from ansible.executor.task_queue_manager import TaskQueueManager
 from ansible.executor.task_result import TaskResult
 from ansible.inventory.host import Host
+from ansible.playbook.block import Block
+from ansible.playbook.included_file import IncludedFile
 from ansible.playbook.play_context import PlayContext
 from ansible.playbook.task import Task
 from ansible.plugins.strategy.linear import StrategyModule as LinearStrategy
@@ -51,6 +53,38 @@ class StrategyModule(LinearStrategy):
     ) -> t.List[t.Dict[str, t.Any]]:
         """Called when a meta task is about to run"""
         return super()._execute_meta(task, play_context, iterator, target_host)
+
+    def _load_included_file(
+        self,
+        included_file: IncludedFile,
+        iterator: PlayIterator,
+        is_handler: bool = False,
+    ) -> t.List[Block]:
+        included_blocks = super()._load_included_file(included_file, iterator, is_handler)
+
+        def split_task_path(task: str) -> t.Tuple[str, int]:
+            split = task.rsplit(":", 1)
+            return split[0], int(split[1])
+
+        # Need to register these blocks as valid breakpoints and update the client bps
+        if self._debug_state:
+            for block in included_blocks:
+                block_path_and_line = block.get_path()
+                if block_path_and_line:
+                    # If the path is set this is an explicit block and should be
+                    # marked as an invalid breakpoint section.
+                    block_path, block_line = split_task_path(block_path_and_line)
+                    self._debug_state._debugger.register_path_breakpoint(block_path, block_line, 0)
+
+                task_list: t.List[Task] = block.block[:]
+                task_list.extend(block.rescue)
+                task_list.extend(block.always)
+
+                for task in task_list:
+                    task_path, task_line = split_task_path(task.get_path())
+                    self._debug_state._debugger.register_path_breakpoint(task_path, task_line, 1)
+
+        return included_blocks
 
     def _queue_task(
         self,
@@ -92,10 +126,11 @@ class StrategyModule(LinearStrategy):
         step is to associate the current strategy with the debuggee adapter so
         it can respond to breakpoint and other information.
         """
-        # import debugpy
-        # if not debugpy.is_client_connected():
-        #     debugpy.listen(("localhost", 12535))
-        #     debugpy.wait_for_client()
+        import debugpy
+
+        if not debugpy.is_client_connected():
+            debugpy.listen(("localhost", 12535))
+            debugpy.wait_for_client()
 
         debugger = ansibug.AnsibleDebugger()
         self._debug_state = ansibug.AnsibleDebugState(debugger, self._loader, iterator, iterator._play)
