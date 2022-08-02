@@ -161,6 +161,52 @@ class DisconnectRequest(Request):
 
 @register_request
 @dataclasses.dataclass()
+class EvaluateRequest(Request):
+    """Evaluate given expression.
+
+    Sent by the client to evaluate a given expression.
+
+    Args:
+        expression: THe expression to evaluate.
+        frame_id: The expression in the scope of this stack frame. If not
+            specified, the expression is evaluated in the global scope.
+        context: The context in which the evluate request is used.
+        format: Details on how to format the result.
+    """
+
+    command = Command.EVALUATE
+
+    expression: str
+    frame_id: t.Optional[int] = None
+    context: t.Optional[t.Union[str, t.Literal["variables", "watch", "repl", "hover", "clipboard"]]] = None
+    format: t.Optional[ValueFormat] = None
+
+    def pack(self) -> t.Dict[str, t.Any]:
+        obj = super().pack()
+        obj["arguments"] = {
+            "expression": self.expression,
+            "frameId": self.frame_id,
+            "context": self.context,
+            "format": self.format.pack() if self.format else None,
+        }
+
+        return obj
+
+    @classmethod
+    def unpack(
+        cls,
+        arguments: t.Dict[str, t.Any],
+    ) -> EvaluateRequest:
+        return EvaluateRequest(
+            expression=arguments["expression"],
+            frame_id=arguments.get("frameId", None),
+            context=arguments.get("context", None),
+            format=ValueFormat.unpack(arguments["format"]) if "format" in arguments else None,
+        )
+
+
+@register_request
+@dataclasses.dataclass()
 class InitializeRequest(Request):
     """Initialize DA with client capabailities.
 

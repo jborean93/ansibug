@@ -8,7 +8,15 @@ import dataclasses
 import typing as t
 
 from ._messages import Command, Response, register_response
-from ._types import Breakpoint, Capabilities, Scope, StackFrame, Thread, Variable
+from ._types import (
+    Breakpoint,
+    Capabilities,
+    Scope,
+    StackFrame,
+    Thread,
+    Variable,
+    VariablePresentationHint,
+)
 
 
 @register_response
@@ -86,6 +94,55 @@ class DisconnectResponse(Response):
         body: t.Dict[str, t.Any],
     ) -> DisconnectResponse:
         return DisconnectResponse(request_seq=request_seq)
+
+
+@register_response
+@dataclasses.dataclass()
+class EvaluateResponse(Response):
+    """Response to the EvaluateRequest."""
+
+    command = Command.EVALUATE
+
+    result: str
+    type: t.Optional[str] = None
+    presentation_hint: t.Optional[VariablePresentationHint] = None
+    variables_reference: int = 0
+    named_variables: t.Optional[int] = None
+    indexed_variables: t.Optional[int] = None
+    memory_reference: t.Optional[str] = None
+
+    def pack(self) -> t.Dict[str, t.Any]:
+        obj = super().pack()
+        obj["body"] = {
+            "result": self.result,
+            "type": self.type,
+            "presentationHint": self.presentation_hint.pack() if self.presentation_hint else None,
+            "variablesReference": self.variables_reference,
+            "namedVariables": self.named_variables,
+            "indexedVariables": self.indexed_variables,
+            "memoryReference": self.memory_reference,
+        }
+
+        return obj
+
+    @classmethod
+    def unpack(
+        cls,
+        request_seq: int,
+        body: t.Dict[str, t.Any],
+    ) -> EvaluateResponse:
+        return EvaluateResponse(
+            request_seq=request_seq,
+            result=body["result"],
+            type=body.get("type", None),
+            presentation_hint=VariablePresentationHint.unpack(body["presentationHint"])
+            if "presentationHint" in body
+            else None,
+            variables_reference=body["variablesReference"],
+            named_variables=body.get("namedVariables", None),
+            indexed_variables=body.get("indexedVariables", None),
+            memory_reference=body.get("memoryReference", None),
+        )
 
 
 @register_response

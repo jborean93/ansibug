@@ -6,14 +6,11 @@ from __future__ import annotations
 
 import functools
 import logging
-import pathlib
 import sys
 import threading
 import time
 import types
 import typing as t
-
-import debugpy
 
 from . import dap as dap
 from ._mp_queue import MPProtocol, ServerMPQueue
@@ -23,9 +20,6 @@ log = logging.getLogger(__name__)
 
 def start_dap() -> None:
     log.info("starting")
-
-    # debugpy.listen(("localhost", 12535))
-    # debugpy.wait_for_client()
 
     try:
         with DAServer() as da:
@@ -201,6 +195,7 @@ class DAServer:
             dap.InitializeResponse(
                 request_seq=msg.seq,
                 capabilities=dap.Capabilities(
+                    supports_conditional_breakpoints=True,
                     supports_configuration_done_request=True,
                     supports_set_variable=True,
                 ),

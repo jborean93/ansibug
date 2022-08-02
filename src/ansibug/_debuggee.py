@@ -101,6 +101,12 @@ class DebugState(t.Protocol):
     def ended(self) -> None:
         ...
 
+    def evaluate(
+        self,
+        request: dap.EvaluateRequest,
+    ) -> dap.EvaluateResponse:
+        raise NotImplementedError()
+
     def continue_request(
         self,
         request: dap.ContinueRequest,
@@ -274,14 +280,14 @@ class AnsibleDebugger(metaclass=Singleton):
         # self._configuration_done.wait(timeout=timeout)
         # FIXME: Add check that this wasn't set on recv shutdown
 
-    def wait_breakpoint(
+    def get_breakpoint(
         self,
         path: str,
         line: int,
-    ) -> bool:
+    ) -> t.Optional[AnsibleLineBreakpoint]:
         # FIXME: This could cause a deadlock
         if not self._connected:
-            return False
+            return None
 
         for b in self._breakpoints.values():
             if (
@@ -289,9 +295,9 @@ class AnsibleDebugger(metaclass=Singleton):
                 and (b.breakpoint.line is None or b.breakpoint.line <= line)
                 and (b.breakpoint.end_line is None or b.breakpoint.end_line >= line)
             ):
-                return True
+                return b
 
-        return False
+        return None
 
     def start(
         self,
@@ -493,6 +499,15 @@ class AnsibleDebugger(metaclass=Singleton):
     ) -> None:
         strategy = self._get_strategy()
         resp = strategy.continue_request(msg)
+        self.send(resp)
+
+    @process_message.register
+    def _(
+        self,
+        msg: dap.EvaluateRequest,
+    ) -> None:
+        strategy = self._get_strategy()
+        resp = strategy.evaluate(msg)
         self.send(resp)
 
     @process_message.register

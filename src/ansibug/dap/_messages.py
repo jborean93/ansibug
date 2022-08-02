@@ -108,6 +108,7 @@ class Command(enum.Enum):
     CONFIGURATION_DONE = "configurationDone"
     CONTINUE = "continue"
     DISCONNECT = "disconnect"
+    EVALUATE = "evaluate"
     INITIALIZE = "initialize"
     LAUNCH = "launch"
     NEXT = "next"
