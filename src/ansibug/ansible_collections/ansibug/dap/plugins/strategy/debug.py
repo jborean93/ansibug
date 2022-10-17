@@ -694,7 +694,7 @@ class StrategyModule(LinearStrategy):
         do_handlers: bool = False,
     ) -> t.List[TaskResult]:
         """Called when gathering the results of a queued task."""
-        res = super()._process_pending_results(iterator, one_pass, max_passes, do_handlers)
+        res = super()._process_pending_results(iterator, one_pass=one_pass, max_passes=max_passes)
 
         if self._debug_state:
             for task_res in res:
