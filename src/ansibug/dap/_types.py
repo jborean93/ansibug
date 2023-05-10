@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import dataclasses
 import typing as t
-from operator import index
 
 
 @dataclasses.dataclass()
