@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import functools
 import logging
+import ssl
 import sys
 import threading
 import time
@@ -18,11 +19,13 @@ from ._mp_queue import MPProtocol, ServerMPQueue
 log = logging.getLogger(__name__)
 
 
-def start_dap() -> None:
+def start_dap(
+    ssl_context: ssl.SSLContext | None = None,
+) -> None:
     log.info("starting")
 
     try:
-        with DAServer() as da:
+        with DAServer(ssl_context=ssl_context) as da:
             da.start()
     except:
         log.exception("Exception when running DA Server")
@@ -46,7 +49,7 @@ class DAProtocol(MPProtocol):
 
     def connection_closed(
         self,
-        exp: t.Optional[Exception],
+        exp: Exception | None,
     ) -> None:
         # Cannot close the debuggee here as this is run in a debuggee thread
         # and close awaits the thread to finish.
@@ -57,16 +60,24 @@ class DAProtocol(MPProtocol):
 
 
 class DAServer:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        ssl_context: ssl.SSLContext | None = None,
+    ) -> None:
         self._adapter = dap.DebugAdapterConnection()
 
         self._proto = DAProtocol(self)
-        self._debuggee = ServerMPQueue(("127.0.0.1", 0), lambda: self._proto)
+        self._debuggee = ServerMPQueue(
+            ("127.0.0.1", 0),
+            lambda: self._proto,
+            ssl_context=ssl_context,
+        )
 
         self._client_connected = True
         self._terminated_sent = False
-        self._connection_exp: t.Optional[Exception] = None
-        self._outgoing_requests: t.Set[int] = set()
+        self._connection_exp: Exception | None = None
+        self._outgoing_requests: set[int] = set()
         self._outgoing_lock = threading.Condition()
 
     def __enter__(self) -> DAServer:
@@ -75,9 +86,9 @@ class DAServer:
 
     def __exit__(
         self,
-        exception_type: t.Optional[t.Type[BaseException]] = None,
-        exception_value: t.Optional[BaseException] = None,
-        traceback: t.Optional[types.TracebackType] = None,
+        exception_type: type[BaseException] | None = None,
+        exception_value: BaseException | None = None,
+        traceback: types.TracebackType | None = None,
         **kwargs: t.Any,
     ) -> None:
         self.stop()
@@ -103,7 +114,7 @@ class DAServer:
 
     def stop(
         self,
-        exp: t.Optional[Exception] = None,
+        exp: Exception | None = None,
         close_debuggee: bool = True,
     ) -> None:
         """Stops the debuggee connection.
@@ -235,6 +246,16 @@ class DAServer:
                             launch_arguments.get("logLevel", "info"),
                         ]
                     )
+
+                if launch_arguments.get("useTLS", False):
+                    ansibug_args.append("--wrap-tls")
+                    if tls_verification := launch_arguments.get("tlsVerification", None):
+                        ansibug_args.extend(
+                            [
+                                "--tls-verification",
+                                tls_verification,
+                            ]
+                        )
 
                 ansibug_args.append(launch_arguments["playbook"])
                 ansibug_args += launch_arguments.get("args", [])

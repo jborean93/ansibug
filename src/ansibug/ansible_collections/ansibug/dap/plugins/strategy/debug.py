@@ -47,14 +47,14 @@ class AnsibleThread:
         self,
         *,
         id: int,
-        host: t.Optional[Host] = None,
+        host: Host | None = None,
     ) -> None:
         self.id = id
         self.host = host
-        self.stack_frames: t.List[int] = []
+        self.stack_frames: list[int] = []
 
-    stepping_type: t.Optional[t.Literal["in", "out", "over"]] = None
-    stepping_task: t.Optional[Task] = None
+    stepping_type: t.Literal["in", "out", "over"] | None = None
+    stepping_task: Task | None = None
 
     def to_dap(self) -> ansibug.dap.Thread:
         return ansibug.dap.Thread(
@@ -108,18 +108,18 @@ class AnsibleStackFrame:
         *,
         id: int,
         task: Task,
-        task_vars: t.Dict[str, t.Any],
+        task_vars: dict[str, t.Any],
     ) -> None:
         self.id = id
         self.task = task
         self.task_vars = task_vars
-        self.scopes: t.List[int] = []
-        self.variables: t.List[int] = []
+        self.scopes: list[int] = []
+        self.variables: list[int] = []
 
     def to_dap(self) -> ansibug.dap.StackFrame:
         task_path = self.task.get_path()
 
-        source: t.Optional[ansibug.dap.Source] = None
+        source: ansibug.dap.Source | None = None
         line = 0
         if task_path:
             task_path_and_line = task_path.rsplit(":", 1)
@@ -142,10 +142,8 @@ class AnsibleVariable:
         *,
         id: int,
         stackframe: AnsibleStackFrame,
-        getter: t.Callable[[], t.Iterable[t.Tuple[str, t.Any]]],
-        setter: t.Optional[
-            t.Callable[[ansibug.dap.SetVariableRequest], t.Tuple[t.Any, t.Optional[AnsibleVariable]]]
-        ] = None,
+        getter: t.Callable[[], collections.abc.Iterable[tuple[str, t.Any]]],
+        setter: t.Callable[[ansibug.dap.SetVariableRequest], tuple[t.Any, AnsibleVariable | None]] | None = None,
         named_variables: int = 0,
         indexed_variables: int = 0,
     ) -> None:
@@ -166,9 +164,9 @@ class AnsibleDebugState(ansibug.DebugState):
         play: Play,
         variable_manager: VariableManager,
     ) -> None:
-        self.threads: t.Dict[int, AnsibleThread] = {1: AnsibleThread(id=1, host=None)}
-        self.stackframes: t.Dict[int, AnsibleStackFrame] = {}
-        self.variables: t.Dict[int, AnsibleVariable] = {}
+        self.threads: dict[int, AnsibleThread] = {1: AnsibleThread(id=1, host=None)}
+        self.stackframes: dict[int, AnsibleStackFrame] = {}
+        self.variables: dict[int, AnsibleVariable] = {}
 
         self._debugger = debugger
         self._loader = loader
@@ -177,15 +175,15 @@ class AnsibleDebugState(ansibug.DebugState):
         self._variable_mamanger = variable_manager
 
         self._waiting_condition = threading.Condition()
-        self._waiting_threads: t.Dict[int, t.Optional[t.Literal["in", "out", "over"]]] = {}
+        self._waiting_threads: dict[int, t.Literal["in", "out", "over"] | None] = {}
 
     def process_task(
         self,
         host: Host,
         task: Task,
-        task_vars: t.Dict[str, t.Any],
+        task_vars: dict[str, t.Any],
     ) -> AnsibleStackFrame:
-        thread: t.Optional[AnsibleThread] = next(
+        thread: AnsibleThread | None = next(
             iter([t for t in self.threads.values() if t.host == host]),
             None,
         )
@@ -226,7 +224,7 @@ class AnsibleDebugState(ansibug.DebugState):
         with self._waiting_condition:
             tid = thread.id
 
-            stopped_kwargs: t.Dict[str, t.Any] = {}
+            stopped_kwargs: dict[str, t.Any] = {}
             line_breakpoint = self._debugger.get_breakpoint(path, line)
             if line_breakpoint and line_breakpoint.source_breakpoint.condition:
                 cond = Conditional(loader=self._loader)
@@ -330,10 +328,8 @@ class AnsibleDebugState(ansibug.DebugState):
     def add_variable(
         self,
         stackframe: AnsibleStackFrame,
-        getter: t.Callable[[], t.Iterable[t.Tuple[str, t.Any]]],
-        setter: t.Optional[
-            t.Callable[[ansibug.dap.SetVariableRequest], t.Tuple[t.Any, t.Optional[AnsibleVariable]]]
-        ] = None,
+        getter: t.Callable[[], collections.abc.Iterable[tuple[str, t.Any]]],
+        setter: t.Callable[[ansibug.dap.SetVariableRequest], tuple[t.Any, AnsibleVariable | None]] | None = None,
         named_variables: int = 0,
         indexed_variables: int = 0,
     ) -> AnsibleVariable:
@@ -354,11 +350,11 @@ class AnsibleDebugState(ansibug.DebugState):
     def add_collection_variable(
         self,
         stackframe: AnsibleStackFrame,
-        value: t.Union[collections.abc.Mapping[t.Any, t.Any], collections.abc.Sequence[t.Any]],
+        value: collections.abc.Mapping[t.Any, t.Any] | collections.abc.Sequence[t.Any],
     ) -> AnsibleVariable:
         if isinstance(value, collections.abc.Mapping):
 
-            def setter(request: ansibug.dap.SetVariableRequest) -> t.Tuple[t.Any, t.Optional[AnsibleVariable]]:
+            def setter(request: ansibug.dap.SetVariableRequest) -> tuple[t.Any, AnsibleVariable | None]:
                 value[request.name] = request.value  # type: ignore[index] # Not checking isinstance
                 return request.value, None
 
@@ -371,7 +367,7 @@ class AnsibleDebugState(ansibug.DebugState):
 
         else:
 
-            def setter(request: ansibug.dap.SetVariableRequest) -> t.Tuple[t.Any, t.Optional[AnsibleVariable]]:
+            def setter(request: ansibug.dap.SetVariableRequest) -> tuple[t.Any, AnsibleVariable | None]:
                 value[int(request.name)] = request.value  # type: ignore[index] # Not checking isinstance
                 return request.value, None
 
@@ -454,7 +450,7 @@ class AnsibleDebugState(ansibug.DebugState):
             if task_value == omit_value:
                 del task_args[task_key]
 
-        def module_opts_setter(request: ansibug.dap.SetVariableRequest) -> t.Tuple[t.Any, t.Optional[AnsibleVariable]]:
+        def module_opts_setter(request: ansibug.dap.SetVariableRequest) -> tuple[t.Any, AnsibleVariable | None]:
             sf.task.args[request.name] = request.value
             return request.value, None
 
@@ -470,7 +466,7 @@ class AnsibleDebugState(ansibug.DebugState):
         host_vars = self.add_collection_variable(sf, sf.task_vars["hostvars"][sf.task_vars["inventory_hostname"]])
         global_vars = self.add_collection_variable(sf, sf.task_vars["vars"])
 
-        scopes: t.List[ansibug.dap.Scope] = [
+        scopes: list[ansibug.dap.Scope] = [
             # Options for the module itself
             ansibug.dap.Scope(
                 name="Module Options",
@@ -515,7 +511,7 @@ class AnsibleDebugState(ansibug.DebugState):
         with self._waiting_condition:
             wait_info = self._waiting_threads.get(request.thread_id, None)
 
-        stack_frames: t.List[ansibug.dap.StackFrame] = []
+        stack_frames: list[ansibug.dap.StackFrame] = []
         thread = self.threads[request.thread_id]
         for sfid in thread.stack_frames:
             sf = self.stackframes[sfid]
@@ -542,9 +538,9 @@ class AnsibleDebugState(ansibug.DebugState):
     ) -> ansibug.dap.VariablesResponse:
         variable = self.variables[request.variables_reference]
 
-        variables: t.List[ansibug.dap.Variable] = []
+        variables: list[ansibug.dap.Variable] = []
         for name, value in variable.getter():
-            child_var: t.Optional[AnsibleVariable] = None
+            child_var: AnsibleVariable | None = None
             if isinstance(value, (collections.abc.Mapping, collections.abc.Sequence)) and not isinstance(value, str):
                 child_var = self.add_collection_variable(variable.stackframe, value)
 
@@ -609,8 +605,8 @@ class AnsibleDebugState(ansibug.DebugState):
 
     def _continue(
         self,
-        thread_ids: t.Iterable[int],
-        action: t.Optional[t.Literal["in", "out", "over"]],
+        thread_ids: collections.abc.Iterable[int],
+        action: t.Literal["in", "out", "over"] | None,
     ) -> None:
         with self._waiting_condition:
             for tid in thread_ids:
@@ -629,7 +625,7 @@ class StrategyModule(LinearStrategy):
         # Used for type annotation checks, technically defined in __init__ as well
         self._tqm = tqm
 
-        self._debug_state: t.Optional[AnsibleDebugState] = None
+        self._debug_state: AnsibleDebugState | None = None
 
     def _execute_meta(
         self,
@@ -637,7 +633,7 @@ class StrategyModule(LinearStrategy):
         play_context: PlayContext,
         iterator: PlayIterator,
         target_host: Host,
-    ) -> t.List[t.Dict[str, t.Any]]:
+    ) -> list[dict[str, t.Any]]:
         """Called when a meta task is about to run"""
         return super()._execute_meta(task, play_context, iterator, target_host)
 
@@ -646,10 +642,10 @@ class StrategyModule(LinearStrategy):
         included_file: IncludedFile,
         iterator: PlayIterator,
         is_handler: bool = False,
-    ) -> t.List[Block]:
+    ) -> list[Block]:
         included_blocks = super()._load_included_file(included_file, iterator, is_handler)
 
-        def split_task_path(task: str) -> t.Tuple[str, int]:
+        def split_task_path(task: str) -> tuple[str, int]:
             split = task.rsplit(":", 1)
             return split[0], int(split[1])
 
@@ -663,7 +659,7 @@ class StrategyModule(LinearStrategy):
                     block_path, block_line = split_task_path(block_path_and_line)
                     self._debug_state._debugger.register_path_breakpoint(block_path, block_line, 0)
 
-                task_list: t.List[Task] = block.block[:]
+                task_list: list[Task] = block.block[:]
                 task_list.extend(block.rescue)
                 task_list.extend(block.always)
 
@@ -677,7 +673,7 @@ class StrategyModule(LinearStrategy):
         self,
         host: Host,
         task: Task,
-        task_vars: t.Dict[str, t.Any],
+        task_vars: dict[str, t.Any],
         play_context: PlayContext,
     ) -> None:
         """Called just as a task is about to be queue"""
@@ -690,9 +686,9 @@ class StrategyModule(LinearStrategy):
         self,
         iterator: PlayIterator,
         one_pass: bool = False,
-        max_passes: t.Optional[int] = None,
+        max_passes: int | None = None,
         do_handlers: bool = False,
-    ) -> t.List[TaskResult]:
+    ) -> list[TaskResult]:
         """Called when gathering the results of a queued task."""
         res = super()._process_pending_results(iterator, one_pass=one_pass, max_passes=max_passes)
 

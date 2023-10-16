@@ -5,10 +5,12 @@
 from __future__ import annotations
 
 import base64
+import collections.abc
 import contextlib
 import logging
 import select
 import socket
+import ssl
 import threading
 import types
 import typing as t
@@ -33,9 +35,9 @@ class SocketHelper:
 
     def __exit__(
         self,
-        exception_type: t.Optional[t.Type[BaseException]] = None,
-        exception_value: t.Optional[BaseException] = None,
-        traceback: t.Optional[types.TracebackType] = None,
+        exception_type: type[BaseException] | None = None,
+        exception_value: BaseException | None = None,
+        traceback: types.TracebackType | None = None,
         **kwargs: t.Any,
     ) -> None:
         log.debug("Exiting %s socket", self.use)
@@ -119,7 +121,7 @@ class SocketHelper:
         self,
         level: int,
         name: int,
-        value: t.Union[int, bytes],
+        value: int | bytes,
     ) -> None:
         self._sock.setsockopt(level, name, value)
 
@@ -132,10 +134,24 @@ class SocketHelper:
         except OSError:
             pass
 
+    def wrap_tls(
+        self,
+        ssl_context: ssl.SSLContext,
+        *,
+        server_side: bool = True,
+        server_hostname: str | None = None,
+    ) -> None:
+        log.debug("Wrapping socket with TLS context")
+        self._sock = ssl_context.wrap_socket(
+            self._sock,
+            server_side=server_side,
+            server_hostname=server_hostname,
+        )
+
 
 class SocketCancellationToken:
     def __init__(self) -> None:
-        self._cancel_funcs: t.Dict[int, t.Callable[[], None]] = {}
+        self._cancel_funcs: dict[int, t.Callable[[], None]] = {}
         self._cancel_id = 0
         self._cancelled = False
         self._lock = threading.Lock()
@@ -144,7 +160,7 @@ class SocketCancellationToken:
         self,
         sock: socket.socket,
         timeout: float = 0,
-    ) -> t.Tuple[socket.socket, t.Any]:
+    ) -> tuple[socket.socket, t.Any]:
         with self.with_cancel(lambda: sock.shutdown(socket.SHUT_RDWR)):
             try:
                 # When cancelled select will detect that sock is ready for a
@@ -188,7 +204,7 @@ class SocketCancellationToken:
     def recv_into(
         self,
         sock: socket.socket,
-        buffer: t.Union[bytearray, memoryview],
+        buffer: bytearray | memoryview,
         n: int,
     ) -> int:
         with self.with_cancel(lambda: sock.shutdown(socket.SHUT_RD)):
@@ -229,7 +245,7 @@ class SocketCancellationToken:
     def with_cancel(
         self,
         cancel_func: t.Callable[[], None],
-    ) -> t.Generator[None, None, None]:
+    ) -> collections.abc.Generator[None, None, None]:
         with self._lock:
             if self._cancelled:
                 raise CancelledError()

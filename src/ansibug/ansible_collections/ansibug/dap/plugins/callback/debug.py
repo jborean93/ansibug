@@ -33,6 +33,41 @@ options:
     type: str
     env:
     - name: ANSIBUG_SOCKET_ADDR
+  tls_cert_validation:
+    description:
+    - The TLS certificate validation behaviour.
+    - Defaults to C(validate) which will validate the hostname and CA trust
+      with the OS trust store.
+    - Can be set to C(ignore) to ignore both the CA and CN validation of the
+      server.
+    choices:
+    - ignore
+    - validate
+    default: validate
+    type: str
+    env:
+    - name: ANSIBUG_TLS_CERT_VALIDATION
+  tls_cert_ca:
+    description:
+    - Can be set to a path to a file containing concatenated CA certificates
+      in the PEM format.
+    - Can also be set to a path to a directory containing several CA
+      certificates in the PEM format following an OpenSSL specific layout.
+    - The certificates provided by this path will be used as the CAs used in
+      the validation process.
+    type: str
+    env:
+    - name: ANSIBUG_TLS_CERT_CA
+  use_tls:
+    description:
+    - Wrap the socket in a TLS stream.
+    - This will use the Python defaults when creating the TLS stream like
+      validating the server hostname and CA trust status.
+    - Use C(tls_cert_validation) to control the server validation behaviour.
+    default: False
+    type: bool
+    env:
+    - name: ANSIBUG_USE_TLS
   wait_for_config_done:
     description:
     - If true, will wait until the DA server has passed through the
@@ -82,7 +117,10 @@ options:
 """
 
 import logging
+import os.path
+import pathlib
 import re
+import ssl
 import typing as t
 
 from ansible.errors import AnsibleError
@@ -135,7 +173,7 @@ def load_playbook_tasks(
     #     debugpy.listen(("localhost", 12535))
     #     debugpy.wait_for_client()
 
-    def split_task_path(task: str) -> t.Tuple[str, int]:
+    def split_task_path(task: str) -> tuple[str, int]:
         split = task.rsplit(":", 1)
         return split[0], int(split[1])
 
@@ -153,7 +191,7 @@ def load_playbook_tasks(
                 block_path, block_line = split_task_path(block_path_and_line)
                 debugger.register_path_breakpoint(block_path, block_line, 0)
 
-            task_list: t.List[Task] = block.block[:]
+            task_list: list[Task] = block.block[:]
             task_list.extend(block.rescue)
             task_list.extend(block.always)
 
@@ -163,7 +201,6 @@ def load_playbook_tasks(
 
 
 class CallbackModule(CallbackBase):
-
     CALLBACK_VERSION = 2.0
     CALLBACK_TYPE = "aggregate"
     CALLBACK_NAME = "debug"
@@ -203,8 +240,36 @@ class CallbackModule(CallbackBase):
         else:
             raise AnsibleError("socket_addr must be in the format [host:]port")
 
+        use_tls = self.get_option("use_tls")
+        tls_cert_ca = self.get_option("tls_cert_ca")
+        tls_cert_validation = self.get_option("tls_cert_validation")
+
+        ssl_context: ssl.SSLContext | None = None
+        if use_tls:
+            ssl_context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
+            if tls_cert_validation == "ignore":
+                ssl_context.check_hostname = False
+                ssl_context.verify_mode = ssl.VerifyMode.CERT_NONE
+
+            elif tls_cert_ca:
+                cert_ca_path = pathlib.Path(os.path.expanduser(os.path.expandvars(tls_cert_ca)))
+
+                if cert_ca_path.is_dir():
+                    ssl_context.load_verify_locations(capath=str(cert_ca_path.absolute()))
+
+                elif cert_ca_path.exists():
+                    ssl_context.load_verify_locations(cafile=str(cert_ca_path.absolute()))
+
+                else:
+                    raise AnsibleError(f"tls_cert_ca path '{tls_cert_ca}' does not exist")
+
         log.info("Staring Ansible Debugger with %s on %s:%d", mode, hostname, port)
-        self._debugger.start((hostname, port), mode)
+
+        self._debugger.start(
+            (hostname, port),
+            mode,
+            ssl_context=ssl_context,
+        )
 
         wait_for_config_done = self.get_option("wait_for_config_done")
         wait_for_config_done_timeout = self.get_option("wait_for_config_done_timeout")

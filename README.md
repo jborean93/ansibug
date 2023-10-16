@@ -111,6 +111,61 @@ The server and client ends depend on the launch mode used:
 The messages exchanged by the DA Server and Debuggee use Python's Pickle library to avoid having to implement it's own serialization logic.
 The messages will be the same DAP dataclasses as defined in `ansibug.dap.*`.
 
+## TLS Certificates
+
+While not fully tested the current code is written in a way that it should be trivial to support TLS wrapped sockets so the client can verify the server's identity as well as encrypt the data exchanged between the two parties.
+For this to work the server certificates need to be generated, the following can be used to generate some for testing:
+
+```bash
+openssl ecparam \
+    -name secp384r1 \
+    -genkey \
+    -noout \
+    -out ansibug-ca.key
+
+openssl req \
+    -new \
+    -x509 \
+    -out ansibug-ca.pem \
+    -key ansibug-ca.key \
+    -days 365 \
+    -subj "/CN=Ansibug CA"
+
+openssl ecparam \
+    -name secp384r1 \
+    -genkey \
+    -noout \
+    -out ansibug.key
+
+openssl req \
+    -new \
+    -x509 \
+    -out ansibug.pem \
+    -key ansibug.key \
+    -days 365 \
+    -subj "/CN=ansibug" \
+    -addext "subjectAltName = DNS:localhost,IP:127.0.0.1"  \
+    -CA ansibug-ca.pem \
+    -CAkey ansibug-ca.key
+
+rm ansibug-ca.key
+cat ansibug.key >> ansibug.pem
+rm ansibug.key
+```
+
+_Note: This not a secure way to store these keys and should only be used for testing purposes._
+
+When starting the DAP server (in the VSCode extension) it should now be started with:
+
+```bash
+python -m ansibug \
+    dap \
+    --tls-cert ansibug.pem
+```
+
+Then when the client runs the `launch` configuration it must set the `useTLS` launch property/argument to `True`.
+It should also set `tlsVerification` property/argument to `ansibug-ca.pem` unless the host already trusts the signer of the server certificate.
+
 # Debugging Details
 
 When debugging a playbook the debugger treats each host as a separate thread and a breakpoint on a task will break on all the hosts that run that task.

@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import abc
 import dataclasses
 import enum
 import json
@@ -11,23 +12,39 @@ import typing as t
 
 from ._types import Message
 
-_REGISTRY_REQUEST: t.Dict[str, t.Callable[[t.Dict[str, t.Any]], Request]] = {}
-_REGISTRY_RESPONSE: t.Dict[str, t.Callable[[int, t.Dict[str, t.Any]], Response]] = {}
-_REGISTRY_EVENT: t.Dict[str, t.Callable[[t.Dict[str, t.Any]], Event]] = {}
+
+class RequestUnpack(t.Protocol):
+    def __call__(self, arguments: dict[str, t.Any]) -> Request:
+        ...
 
 
-def register_request(cls: t.Type[Request]) -> t.Type[Request]:
-    _REGISTRY_REQUEST[cls.command.value] = cls.unpack  # type: ignore[attr-defined]  # Is defined
+class ResponseUnpack(t.Protocol):
+    def __call__(self, request_seq: int, body: dict[str, t.Any]) -> Response:
+        ...
+
+
+class EventUnpack(t.Protocol):
+    def __call__(self, arguments: dict[str, t.Any]) -> Event:
+        ...
+
+
+_REGISTRY_REQUEST: dict[str, RequestUnpack] = {}
+_REGISTRY_RESPONSE: dict[str, ResponseUnpack] = {}
+_REGISTRY_EVENT: dict[str, EventUnpack] = {}
+
+
+def register_request(cls: type[Request]) -> type[Request]:
+    _REGISTRY_REQUEST[cls.command.value] = cls.unpack
     return cls
 
 
-def register_response(cls: t.Type[Response]) -> t.Type[Response]:
-    _REGISTRY_RESPONSE[cls.command.value] = cls.unpack  # type: ignore[attr-defined]  # Is defined
+def register_response(cls: type[Response]) -> type[Response]:
+    _REGISTRY_RESPONSE[cls.command.value] = cls.unpack
     return cls
 
 
-def register_event(cls: t.Type[Event]) -> t.Type[Event]:
-    _REGISTRY_EVENT[cls.event.value] = cls.unpack  # type: ignore[attr-defined]  # Is defined
+def register_event(cls: type[Event]) -> type[Event]:
+    _REGISTRY_EVENT[cls.event.value] = cls.unpack
     return cls
 
 
@@ -48,15 +65,15 @@ def unpack_message(
     obj = json.loads(data)
     obj_type = obj["type"]
 
-    msg_type: t.Optional[t.Callable[..., ProtocolMessage]]
+    msg: ProtocolMessage
     if obj_type == MessageType.REQUEST.value:
         cmd = obj["command"]
 
-        msg_type = _REGISTRY_REQUEST.get(cmd, None)
-        if not msg_type:
+        request_unpack = _REGISTRY_REQUEST.get(cmd, None)
+        if not request_unpack:
             raise ValueError(f"Unknown DAP request command {cmd}")
 
-        msg = msg_type(arguments=obj.get("arguments", {}))
+        msg = request_unpack(arguments=obj.get("arguments", {}))
 
     elif obj_type == MessageType.RESPONSE.value:
         cmd = obj["command"]
@@ -65,30 +82,29 @@ def unpack_message(
         body = obj.get("body", {})
 
         if success:
-            msg_type = _REGISTRY_RESPONSE.get(cmd, None)
-            if not msg_type:
+            response_unpack = _REGISTRY_RESPONSE.get(cmd, None)
+            if not response_unpack:
                 raise ValueError(f"Unknown DAP response command {cmd}")
 
-            msg = msg_type(request_seq=request_seq, body=body)
+            msg = response_unpack(request_seq=request_seq, body=body)
 
         else:
             message = obj.get("message", None)
-            error = body.get("error", None)
-            msg = ErrorResponse(
-                command=Command(cmd),
+            msg = ErrorResponse.unpack(
                 request_seq=request_seq,
+                body=body,
+                cmd=cmd,
                 message=message,
-                error=Message.unpack(error) if error else None,
             )
 
     elif obj_type == MessageType.EVENT.value:
         event = obj["event"]
 
-        msg_type = _REGISTRY_EVENT.get(event, None)
-        if not msg_type:
+        event_unpack = _REGISTRY_EVENT.get(event, None)
+        if not event_unpack:
             raise ValueError(f"Unknown DAP event type {event}")
 
-        msg = msg_type(arguments=obj.get("arguments", {}))
+        msg = event_unpack(arguments=obj.get("arguments", {}))
 
     else:
         raise ValueError(f"Unknown DAP message type {obj_type}")
@@ -151,7 +167,7 @@ class ProtocolMessage:
     seq: int = dataclasses.field(init=False, default=0)
     message_type: MessageType = dataclasses.field(init=False)
 
-    def pack(self) -> t.Dict[str, t.Any]:
+    def pack(self) -> dict[str, t.Any]:
         return {
             "seq": self.seq,
             "type": self.message_type.value,
@@ -166,11 +182,16 @@ class Request(ProtocolMessage):
 
     command: Command = dataclasses.field(init=False)
 
-    def pack(self) -> t.Dict[str, t.Any]:
+    def pack(self) -> dict[str, t.Any]:
         obj = super().pack()
         obj["command"] = self.command.value
 
         return obj
+
+    @classmethod
+    @abc.abstractmethod
+    def unpack(cls, arguments: dict[str, t.Any]) -> Request:
+        ...
 
 
 @dataclasses.dataclass()
@@ -181,11 +202,16 @@ class Event(ProtocolMessage):
 
     event: EventType = dataclasses.field(init=False)
 
-    def pack(self) -> t.Dict[str, t.Any]:
+    def pack(self) -> dict[str, t.Any]:
         obj = super().pack()
         obj["event"] = self.event.value
 
         return obj
+
+    @classmethod
+    @abc.abstractmethod
+    def unpack(cls, arguments: dict[str, t.Any]) -> Event:
+        ...
 
 
 @dataclasses.dataclass()
@@ -197,7 +223,7 @@ class Response(ProtocolMessage):
     command: Command = dataclasses.field(init=False)
     request_seq: int
 
-    def pack(self) -> t.Dict[str, t.Any]:
+    def pack(self) -> dict[str, t.Any]:
         obj = super().pack()
         obj.update(
             {
@@ -208,6 +234,11 @@ class Response(ProtocolMessage):
         )
 
         return obj
+
+    @classmethod
+    @abc.abstractmethod
+    def unpack(cls, request_seq: int, body: dict[str, t.Any]) -> Response:
+        ...
 
 
 @dataclasses.dataclass()
@@ -227,10 +258,27 @@ class ErrorResponse(Response):
     message: t.Optional[str] = None
     error: t.Optional[Message] = None
 
-    def pack(self) -> t.Dict[str, t.Any]:
+    def pack(self) -> dict[str, t.Any]:
         obj = super().pack()
         obj["success"] = False
         obj["message"] = self.message
         obj["body"] = {"error": self.error.pack() if self.error else None}
 
         return obj
+
+    @classmethod
+    def unpack(
+        cls,
+        request_seq: int,
+        body: dict[str, t.Any],
+        *,
+        cmd: str = "",
+        message: str | None = None,
+    ) -> ErrorResponse:
+        error = body.get("error", None)
+        return ErrorResponse(
+            command=Command(cmd),
+            request_seq=request_seq,
+            message=message,
+            error=Message.unpack(error) if error else None,
+        )

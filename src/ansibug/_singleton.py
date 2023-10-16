@@ -8,7 +8,7 @@ import typing as t
 class Singleton(type):
     """Singleton used to ensure only instance of a class exists."""
 
-    __instances: t.Dict[t.Type, object] = {}
+    __instances: dict[type, object] = {}
 
     def __call__(
         cls,

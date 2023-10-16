@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import abc
 import multiprocessing
 import queue
 import typing as t
@@ -20,13 +21,14 @@ class DAPManager(BaseManager):
     used a proxied queue to exchange messages.
     """
 
-    @property
-    def _role(self) -> str:
-        """Used internally to denote the manager role."""
+    _role: str
+    """Used internally to denote the manager role."""
 
+    @abc.abstractmethod
     def _get_ansible_queue(self) -> queue.Queue[t.Any]:
         """Used internally to store the queue used in Ansible."""
 
+    @abc.abstractmethod
     def _get_da_queue(self) -> queue.Queue[t.Any]:
         """Used internally to store the queue used in the DA."""
 
@@ -66,9 +68,9 @@ class DAPManager(BaseManager):
 
 
 def server_manager(
-    address: t.Tuple[str, int],
-    authkey: t.Optional[bytes] = None,
-) -> t.Tuple[DAPManager, Server]:
+    address: tuple[str, int],
+    authkey: bytes | None = None,
+) -> tuple[DAPManager, Server]:
     """Create a server side manager.
 
     Creates a server side manager that is used to proxy objects between the DA
@@ -79,14 +81,14 @@ def server_manager(
         authkey: The byte string used for initial authentication.
 
     Returns:
-        Tuple[DAPManager, Server]: The server manager and server instance. The
+        tuple[DAPManager, Server]: The server manager and server instance. The
         caller should call server.server_forever() in a separate thread to
         allow it to process incoming data.
     """
     da_queue: queue.Queue[t.Any] = queue.Queue()
     ansible_queue: queue.Queue[t.Any] = queue.Queue()
 
-    m = t.cast(t.Type[DAPManager], type("ServerDAPManager", (DAPManager,), {"_role": "server"}))
+    m = t.cast(type[DAPManager], type("ServerDAPManager", (DAPManager,), {"_role": "server"}))
     m.register("_get_da_queue", lambda: da_queue)
     m.register("_get_ansible_queue", lambda: ansible_queue)
 
@@ -100,8 +102,8 @@ def server_manager(
 
 
 def client_manager(
-    address: t.Tuple[str, int],
-    authkey: t.Optional[bytes] = None,
+    address: tuple[str, int],
+    authkey: bytes | None = None,
 ) -> DAPManager:
     """Create a client side manager.
 
@@ -116,7 +118,7 @@ def client_manager(
         DAPManager: The client DAP manager that is connected to the addr
         specified.
     """
-    m = t.cast(t.Type[DAPManager], type("ClientDAPManager", (DAPManager,), {"_role": "client"}))
+    m = t.cast(type[DAPManager], type("ClientDAPManager", (DAPManager,), {"_role": "client"}))
     m.register("_get_da_queue")
     m.register("_get_ansible_queue")
 

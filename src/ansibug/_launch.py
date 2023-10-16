@@ -12,11 +12,14 @@ import typing as t
 
 
 def launch(
-    playbook_args: t.List[str],
+    playbook_args: list[str],
     mode: t.Literal["connect", "listen"],
     addr: str,
     wait_for_client: bool = True,
-    log_file: t.Optional[pathlib.Path] = None,
+    *,
+    use_tls: bool = False,
+    tls_cert_ca: bool | str | None = None,
+    log_file: pathlib.Path | None = None,
     log_level: t.Literal["info", "debug", "warning", "error"] = "info",
 ) -> int:
     """Launch a new debuggable ansible-playbook process.
@@ -26,6 +29,13 @@ def launch(
     act as a simple stub that wraps the invocation with the env vars needed
     for ansibug to communicate with it.
 
+    If use_tls is set to True the client will wrap the socket connection in a
+    TLS tunnel to encrypt the data exchanged. By default it will attempt to
+    verify the server's identity through its certificate. The kwarg tls_cert_ca
+    can be set to a boolean that turns the verification process on or off. It
+    can also be set to a string value that is the path to a CA file or CA
+    directory of PEM files to use as the CA trust store(s).
+
     Args:
         playbook_args: Arguments to invoke ansible-playbook with.
         mode: The debugee connection mode; connect will connect to the addr
@@ -34,6 +44,9 @@ def launch(
         wait_for_client: Wait until the client has communicated with the
             ansible-playbook process and sent the configurationDone request
             before starting the playbook.
+        use_tls: Specify the client to wrap the socket connection through a TLS
+            tunnel.
+        tls_cert_ca: The TLS certificate verifcation settings.
         log_file: Set ansibug debuggee logger to log to the absolute path of
             this file if set.
         log_level: Set ansibug debuggee logger filter to use this level when
@@ -48,6 +61,13 @@ def launch(
     new_environ["ANSIBUG_SOCKET_ADDR"] = addr
     new_environ["ANSIBUG_WAIT_FOR_CLIENT"] = str(wait_for_client).lower()
 
+    new_environ["ANSIBUG_USE_TLS"] = str(use_tls)
+    if tls_cert_ca is not None:
+        if isinstance(tls_cert_ca, bool):
+            new_environ["ANSIBUG_TLS_CERT_VALIDATION"] = "validate" if tls_cert_ca else "ignore"
+        else:
+            new_environ["ANSIBUG_TLS_CERT_CA"] = tls_cert_ca
+
     if log_file:
         new_environ["ANSIBUG_LOG_FILE"] = str(log_file.absolute())
         new_environ["ANSIBUG_LOG_LEVEL"] = log_level
@@ -58,9 +78,9 @@ def launch(
 
     # Env vars override settings in the ansible.cfg, figure out a better way
     # to inject our collection, callback, and strategy plugin
-    collections_path = [e for e in new_environ.get("ANSIBLE_COLLECTIONS_PATHS", "").split(os.pathsep) if e]
+    collections_path = [e for e in new_environ.get("ANSIBLE_COLLECTIONS_PATH", "").split(os.pathsep) if e]
     collections_path.insert(0, str(ansibug_path))
-    new_environ["ANSIBLE_COLLECTIONS_PATHS"] = os.pathsep.join(collections_path)
+    new_environ["ANSIBLE_COLLECTIONS_PATH"] = os.pathsep.join(collections_path)
 
     enabled_callbacks = [e for e in new_environ.get("ANSIBLE_CALLBACKS_ENABLED", "").split(",") if e]
     enabled_callbacks.insert(0, "ansibug.dap.debug")
@@ -69,7 +89,7 @@ def launch(
     new_environ["ANSIBLE_STRATEGY"] = "ansibug.dap.debug"
 
     return subprocess.Popen(
-        ["ansible-playbook"] + playbook_args,
+        ["python", "-m" "ansible", "playbook"] + playbook_args,
         stdin=sys.stdin,
         stdout=sys.stdout,
         stderr=sys.stderr,

@@ -36,7 +36,7 @@
             "env": {
                 "ANSIBUG_LOG_FILE": "debug.log",
                 "ANSIBUG_LOG_LEVEL": "debug",
-                "ANSIBLE_COLLECTIONS_PATHS": "${workspaceFolder}/src/ansibug:~/dev",
+                "ANSIBLE_COLLECTIONS_PATH": "${workspaceFolder}/src/ansibug:~/dev",
                 "ANSIBLE_CALLBACKS_ENABLED": "ansibug.dap.debug",
                 "ANSIBLE_STRATEGY": "ansibug.dap.debug"
             },

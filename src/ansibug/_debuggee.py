@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import collections.abc
 import contextlib
 import dataclasses
 import functools
@@ -11,6 +12,7 @@ import logging
 import os
 import pathlib
 import queue
+import ssl
 import threading
 import typing as t
 
@@ -29,10 +31,12 @@ def get_pid_info_path(pid: int) -> str:
 
 
 def wait_for_dap_server(
-    addr: t.Tuple[str, int],
+    addr: tuple[str, int],
     proto_factory: t.Callable[[], MPProtocol],
     mode: t.Literal["connect", "listen"],
     cancel_token: SocketCancellationToken,
+    *,
+    ssl_context: ssl.SSLContext | None = None,
 ) -> MPQueue:
     """Wait for DAP Server.
 
@@ -46,6 +50,8 @@ def wait_for_dap_server(
         mode: The socket mode to use, connect will connect to the addr while
             listen will bind to the addr and wait for a connection.
         cancel_token: The cancellation token to cancel the socket operations.
+        ssl_context: Optional client SSLContext to wrap the socket connection
+            with.
 
     Returns:
         MPQueue: The multiprocessing queue handler that can exchange DAP
@@ -53,7 +59,12 @@ def wait_for_dap_server(
     """
     log.info("Setting up ansible-playbook debug %s socket at '%s'", mode, addr)
 
-    mp_queue = (ClientMPQueue if mode == "connect" else ServerMPQueue)(addr, proto_factory, cancel_token=cancel_token)
+    mp_queue = (ClientMPQueue if mode == "connect" else ServerMPQueue)(
+        addr,
+        proto_factory,
+        ssl_context=ssl_context,
+        cancel_token=cancel_token,
+    )
     if isinstance(mp_queue, ServerMPQueue):
         bound_addr = mp_queue.address
 
@@ -91,7 +102,7 @@ class DAProtocol(MPProtocol):
 
     def connection_closed(
         self,
-        exp: t.Optional[Exception],
+        exp: Exception | None,
     ) -> None:
         # FIXME: log exception
         self._debugger.send(None)
@@ -164,7 +175,6 @@ class DebugState(t.Protocol):
 
 @dataclasses.dataclass
 class AnsibleLineBreakpoint:
-
     id: int
     source: dap.Source
     source_breakpoint: dap.SourceBreakpoint
@@ -179,20 +189,20 @@ class AnsibleDebugger(metaclass=Singleton):
     def __init__(self) -> None:
         self._connected = False
         self._cancel_token = SocketCancellationToken()
-        self._recv_thread: t.Optional[threading.Thread] = None
-        self._send_queue: queue.Queue[t.Optional[dap.ProtocolMessage]] = queue.Queue()
+        self._recv_thread: threading.Thread | None = None
+        self._send_queue: queue.Queue[dap.ProtocolMessage | None] = queue.Queue()
         self._da_connected = threading.Event()
         self._configuration_done = threading.Event()
         self._proto = DAProtocol(self)
         self._strategy_connected = threading.Condition()
-        self._strategy: t.Optional[DebugState] = None
+        self._strategy: DebugState | None = None
 
         self._thread_counter = 2  # 1 is always the main thread
         self._stackframe_counter = 1
         self._variable_counter = 1
 
         # Stores all the client breakpoints, key is the breakpoint number/id
-        self._breakpoints: t.Dict[int, AnsibleLineBreakpoint] = {}
+        self._breakpoints: dict[int, AnsibleLineBreakpoint] = {}
         self._breakpoint_counter = 1
 
         # Key is the path, the value is a list of the lines in that file where:
@@ -220,13 +230,13 @@ class AnsibleDebugger(metaclass=Singleton):
         #   - Won't contain the remaining lines of the file - bp checks will
         #     just have to use the last entry
         # FIXME: Somehow detect import entries to invalidate them.
-        self._source_info: t.Dict[str, t.List[t.Optional[int]]] = {}
+        self._source_info: dict[str, list[int | None]] = {}
 
     @contextlib.contextmanager
     def with_strategy(
         self,
         strategy: DebugState,
-    ) -> t.Generator[None, None, None]:
+    ) -> collections.abc.Generator[None, None, None]:
         with self._strategy_connected:
             if self._strategy:
                 raise Exception("Strategy has already been registered")
@@ -265,7 +275,7 @@ class AnsibleDebugger(metaclass=Singleton):
 
     def wait_for_config_done(
         self,
-        timeout: t.Optional[float] = 10.0,
+        timeout: float | None = 10.0,
     ) -> None:
         """Waits until the debug config is done.
 
@@ -284,7 +294,7 @@ class AnsibleDebugger(metaclass=Singleton):
         self,
         path: str,
         line: int,
-    ) -> t.Optional[AnsibleLineBreakpoint]:
+    ) -> AnsibleLineBreakpoint | None:
         # FIXME: This could cause a deadlock
         if not self._connected:
             return None
@@ -301,8 +311,10 @@ class AnsibleDebugger(metaclass=Singleton):
 
     def start(
         self,
-        addr: t.Tuple[str, int],
+        addr: tuple[str, int],
         mode: t.Literal["connect", "listen"],
+        *,
+        ssl_context: ssl.SSLContext | None = None,
     ) -> None:
         """Start the background server thread.
 
@@ -314,10 +326,12 @@ class AnsibleDebugger(metaclass=Singleton):
             addr: The addr of the socket.
             mode: The socket mode to use, connect will connect to the addr
                 while listen will bind to the addr and wait for a connection.
+            ssl_context: Optional client SSLContext to wrap the socket
+                connection with.
         """
         self._recv_thread = threading.Thread(
             target=self._recv_task,
-            args=(addr, mode),
+            args=(addr, mode, ssl_context),
             name="ansibug-debugger",
         )
         self._recv_thread.start()
@@ -337,7 +351,7 @@ class AnsibleDebugger(metaclass=Singleton):
 
     def send(
         self,
-        msg: t.Optional[dap.ProtocolMessage],
+        msg: dap.ProtocolMessage | None,
     ) -> None:
         log.info("Sending to DA adapter %r", msg)
         self._send_queue.put(msg)
@@ -419,8 +433,9 @@ class AnsibleDebugger(metaclass=Singleton):
 
     def _recv_task(
         self,
-        addr: t.Tuple[str, int],
+        addr: tuple[str, int],
         mode: t.Literal["connect", "listen"],
+        ssl_context: ssl.SSLContext | None,
     ) -> None:
         """Background server recv task.
 
@@ -437,12 +452,20 @@ class AnsibleDebugger(metaclass=Singleton):
             addr: The addr of the socket.
             mode: The socket mode to use, connect will connect to the addr
                 while listen will bind to the addr and wait for a connection.
+            ssl_context: Optional client SSLContext to wrap the socket
+                connection with.
         """
         log.debug("Starting DAP server thread")
 
         try:
             while True:
-                with wait_for_dap_server(addr, lambda: self._proto, mode, self._cancel_token) as mp_queue:
+                with wait_for_dap_server(
+                    addr,
+                    lambda: self._proto,
+                    mode,
+                    self._cancel_token,
+                    ssl_context=ssl_context,
+                ) as mp_queue:
                     mp_queue.start()
                     self._da_connected.set()
                     self._connected = True
@@ -540,7 +563,7 @@ class AnsibleDebugger(metaclass=Singleton):
         # Clear out existing breakpoints for the source as each request should send the latest list for a source.
         self._breakpoints = {bpid: b for bpid, b in self._breakpoints.items() if b.path != source_path}
 
-        breakpoint_info: t.List[dap.Breakpoint] = []
+        breakpoint_info: list[dap.Breakpoint] = []
         for source_breakpoint in msg.breakpoints:
             bp_id = self._breakpoint_counter
             self._breakpoint_counter += 1

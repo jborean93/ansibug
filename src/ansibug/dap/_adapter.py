@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import json
-import typing as t
 
 from ._messages import ProtocolMessage, unpack_message
 
@@ -44,11 +43,11 @@ class DebugAdapterConnection:
 
     def receive_data(
         self,
-        data: t.Union[bytes, bytearray, memoryview],
+        data: bytes | bytearray | memoryview,
     ) -> None:
         self._in_buffer += data
 
-    def next_message(self) -> t.Optional[ProtocolMessage]:
+    def next_message(self) -> ProtocolMessage | None:
         length = 0
         buffer_cursor = 0
 

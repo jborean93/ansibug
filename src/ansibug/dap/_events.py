@@ -43,7 +43,7 @@ class BreakpointEvent(Event):
     reason: t.Union[str, t.Literal["changed", "new", "removed"]]
     breakpoint: Breakpoint
 
-    def pack(self) -> t.Dict[str, t.Any]:
+    def pack(self) -> dict[str, t.Any]:
         obj = super().pack()
         obj["body"] = {
             "reason": self.reason,
@@ -55,7 +55,7 @@ class BreakpointEvent(Event):
     @classmethod
     def unpack(
         cls,
-        body: t.Dict[str, t.Any],
+        body: dict[str, t.Any],
     ) -> BreakpointEvent:
         return BreakpointEvent(
             reason=body["reason"],
@@ -77,7 +77,7 @@ class InitializedEvent(Event):
     @classmethod
     def unpack(
         cls,
-        body: t.Dict[str, t.Any],
+        body: dict[str, t.Any],
     ) -> InitializedEvent:
         return InitializedEvent()
 
@@ -108,9 +108,9 @@ class StoppedEvent(Event):
     preserve_focus_hint: bool = False
     text: t.Optional[str] = None
     all_threads_stopped: bool = False
-    hit_breakpoint_ids: t.List[int] = dataclasses.field(default_factory=list)
+    hit_breakpoint_ids: list[int] = dataclasses.field(default_factory=list)
 
-    def pack(self) -> t.Dict[str, t.Any]:
+    def pack(self) -> dict[str, t.Any]:
         obj = super().pack()
         obj["body"] = {
             "reason": self.reason.value,
@@ -127,7 +127,7 @@ class StoppedEvent(Event):
     @classmethod
     def unpack(
         cls,
-        body: t.Dict[str, t.Any],
+        body: dict[str, t.Any],
     ) -> StoppedEvent:
         return StoppedEvent(
             reason=StoppedReason(body["reason"]),
@@ -157,7 +157,7 @@ class TerminatedEvent(Event):
 
     restart: t.Any = None
 
-    def pack(self) -> t.Dict[str, t.Any]:
+    def pack(self) -> dict[str, t.Any]:
         obj = super().pack()
         obj["body"] = {
             "restart": self.restart,
@@ -168,7 +168,7 @@ class TerminatedEvent(Event):
     @classmethod
     def unpack(
         cls,
-        body: t.Dict[str, t.Any],
+        body: dict[str, t.Any],
     ) -> TerminatedEvent:
         return TerminatedEvent(restart=body.get("restart", None))
 
@@ -190,7 +190,7 @@ class ThreadEvent(Event):
     reason: t.Literal["started", "exited"]
     thread_id: int
 
-    def pack(self) -> t.Dict[str, t.Any]:
+    def pack(self) -> dict[str, t.Any]:
         obj = super().pack()
         obj["body"] = {
             "reason": self.reason,
@@ -202,7 +202,7 @@ class ThreadEvent(Event):
     @classmethod
     def unpack(
         cls,
-        body: t.Dict[str, t.Any],
+        body: dict[str, t.Any],
     ) -> ThreadEvent:
         return ThreadEvent(reason=body["reason"], thread_id=body["threadId"])
 
@@ -210,12 +210,11 @@ class ThreadEvent(Event):
 @register_event
 @dataclasses.dataclass()
 class ExitedEvent(Event):
-
     event = EventType.EXITED
 
     exit_code: int
 
-    def pack(self) -> t.Dict[str, t.Any]:
+    def pack(self) -> dict[str, t.Any]:
         obj = super().pack()
         obj["body"] = {
             "exitCode": self.exit_code,
@@ -226,6 +225,6 @@ class ExitedEvent(Event):
     @classmethod
     def unpack(
         cls,
-        body: t.Dict[str, t.Any],
+        body: dict[str, t.Any],
     ) -> ExitedEvent:
         return ExitedEvent(exit_code=body["exitCode"])

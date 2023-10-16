@@ -37,7 +37,7 @@ class CancelRequest(Request):
     request_id: t.Optional[int] = None
     progress_id: t.Optional[int] = None
 
-    def pack(self) -> t.Dict[str, t.Any]:
+    def pack(self) -> dict[str, t.Any]:
         obj = super().pack()
         obj["arguments"] = {
             "requestId": self.request_id,
@@ -49,7 +49,7 @@ class CancelRequest(Request):
     @classmethod
     def unpack(
         cls,
-        arguments: t.Dict[str, t.Any],
+        arguments: dict[str, t.Any],
     ) -> CancelRequest:
         return CancelRequest(
             request_id=arguments.get("requestId", None),
@@ -71,7 +71,7 @@ class ConfigurationDoneRequest(Request):
     @classmethod
     def unpack(
         cls,
-        arguments: t.Dict[str, t.Any],
+        arguments: dict[str, t.Any],
     ) -> ConfigurationDoneRequest:
         return ConfigurationDoneRequest()
 
@@ -94,7 +94,7 @@ class ContinueRequest(Request):
     thread_id: int
     single_thread: bool = True
 
-    def pack(self) -> t.Dict[str, t.Any]:
+    def pack(self) -> dict[str, t.Any]:
         obj = super().pack()
         obj["arguments"] = {
             "threadId": self.thread_id,
@@ -106,7 +106,7 @@ class ContinueRequest(Request):
     @classmethod
     def unpack(
         cls,
-        arguments: t.Dict[str, t.Any],
+        arguments: dict[str, t.Any],
     ) -> ContinueRequest:
         return ContinueRequest(
             thread_id=arguments["threadId"],
@@ -137,7 +137,7 @@ class DisconnectRequest(Request):
     terminate_debuggee: t.Optional[bool] = None
     suspend_debuggee: bool = False
 
-    def pack(self) -> t.Dict[str, t.Any]:
+    def pack(self) -> dict[str, t.Any]:
         obj = super().pack()
         obj["arguments"] = {
             "restart": self.restart,
@@ -150,7 +150,7 @@ class DisconnectRequest(Request):
     @classmethod
     def unpack(
         cls,
-        arguments: t.Dict[str, t.Any],
+        arguments: dict[str, t.Any],
     ) -> DisconnectRequest:
         return DisconnectRequest(
             restart=arguments.get("restart", False),
@@ -181,7 +181,7 @@ class EvaluateRequest(Request):
     context: t.Optional[t.Union[str, t.Literal["variables", "watch", "repl", "hover", "clipboard"]]] = None
     format: t.Optional[ValueFormat] = None
 
-    def pack(self) -> t.Dict[str, t.Any]:
+    def pack(self) -> dict[str, t.Any]:
         obj = super().pack()
         obj["arguments"] = {
             "expression": self.expression,
@@ -195,7 +195,7 @@ class EvaluateRequest(Request):
     @classmethod
     def unpack(
         cls,
-        arguments: t.Dict[str, t.Any],
+        arguments: dict[str, t.Any],
     ) -> EvaluateRequest:
         return EvaluateRequest(
             expression=arguments["expression"],
@@ -250,7 +250,7 @@ class InitializeRequest(Request):
     supports_invalidated_event: bool = False
     supports_memory_event: bool = False
 
-    def pack(self) -> t.Dict[str, t.Any]:
+    def pack(self) -> dict[str, t.Any]:
         obj = super().pack()
         obj["arguments"] = {
             "clientID": self.client_id,
@@ -274,7 +274,7 @@ class InitializeRequest(Request):
     @classmethod
     def unpack(
         cls,
-        arguments: t.Dict[str, t.Any],
+        arguments: dict[str, t.Any],
     ) -> InitializeRequest:
         return InitializeRequest(
             adapter_id=arguments["adapterID"],
@@ -315,7 +315,7 @@ class LaunchRequest(Request):
     no_debug: bool = False
     restart: t.Any = None
 
-    def pack(self) -> t.Dict[str, t.Any]:
+    def pack(self) -> dict[str, t.Any]:
         obj = super().pack()
         args = self.arguments.copy()
         args["noDebug"] = self.no_debug
@@ -328,7 +328,7 @@ class LaunchRequest(Request):
     @classmethod
     def unpack(
         cls,
-        arguments: t.Dict[str, t.Any],
+        arguments: dict[str, t.Any],
     ) -> LaunchRequest:
         args = arguments.copy()
         no_debug = args.pop("noDebug", False)
@@ -360,7 +360,7 @@ class NextRequest(Request):
     single_thread: bool = False
     granularity: t.Literal["statement", "line", "instruction"] = "statement"
 
-    def pack(self) -> t.Dict[str, t.Any]:
+    def pack(self) -> dict[str, t.Any]:
         obj = super().pack()
         obj["arguments"] = {
             "threadId": self.thread_id,
@@ -373,7 +373,7 @@ class NextRequest(Request):
     @classmethod
     def unpack(
         cls,
-        arguments: t.Dict[str, t.Any],
+        arguments: dict[str, t.Any],
     ) -> NextRequest:
         return NextRequest(
             thread_id=arguments["threadId"],
@@ -409,7 +409,7 @@ class RunInTerminalRequest(Request):
     env: t.Dict[str, t.Optional[str]] = dataclasses.field(default_factory=dict)
     title: t.Optional[str] = None
 
-    def pack(self) -> t.Dict[str, t.Any]:
+    def pack(self) -> dict[str, t.Any]:
         obj = super().pack()
         obj["arguments"] = {
             "kind": self.kind,
@@ -424,7 +424,7 @@ class RunInTerminalRequest(Request):
     @classmethod
     def unpack(
         cls,
-        arguments: t.Dict[str, t.Any],
+        arguments: dict[str, t.Any],
     ) -> RunInTerminalRequest:
         return RunInTerminalRequest(
             kind=arguments.get("kind", "integrated"),
@@ -450,7 +450,7 @@ class ScopesRequest(Request):
 
     frame_id: int
 
-    def pack(self) -> t.Dict[str, t.Any]:
+    def pack(self) -> dict[str, t.Any]:
         obj = super().pack()
         obj["arguments"] = {
             "frameId": self.frame_id,
@@ -461,7 +461,7 @@ class ScopesRequest(Request):
     @classmethod
     def unpack(
         cls,
-        arguments: t.Dict[str, t.Any],
+        arguments: dict[str, t.Any],
     ) -> ScopesRequest:
         return ScopesRequest(
             frame_id=arguments["frameId"],
@@ -491,7 +491,7 @@ class SetBreakpointsRequest(Request):
     lines: t.List[int] = dataclasses.field(default_factory=list)
     source_modified: bool = False
 
-    def pack(self) -> t.Dict[str, t.Any]:
+    def pack(self) -> dict[str, t.Any]:
         obj = super().pack()
         obj["arguments"] = {
             "source": self.source.pack(),
@@ -505,7 +505,7 @@ class SetBreakpointsRequest(Request):
     @classmethod
     def unpack(
         cls,
-        arguments: t.Dict[str, t.Any],
+        arguments: dict[str, t.Any],
     ) -> SetBreakpointsRequest:
         return SetBreakpointsRequest(
             source=Source.unpack(arguments["source"]),
@@ -537,7 +537,7 @@ class SetExceptionBreakpointsRequest(Request):
     filter_options: t.List[ExceptionFilterOptions] = dataclasses.field(default_factory=list)
     exception_options: t.List[ExceptionOptions] = dataclasses.field(default_factory=list)
 
-    def pack(self) -> t.Dict[str, t.Any]:
+    def pack(self) -> dict[str, t.Any]:
         obj = super().pack()
         obj["arguments"] = {
             "filters": self.filters,
@@ -550,7 +550,7 @@ class SetExceptionBreakpointsRequest(Request):
     @classmethod
     def unpack(
         cls,
-        arguments: t.Dict[str, t.Any],
+        arguments: dict[str, t.Any],
     ) -> SetExceptionBreakpointsRequest:
         return SetExceptionBreakpointsRequest(
             filters=arguments.get("filters", []),
@@ -580,7 +580,7 @@ class SetVariableRequest(Request):
     value: str
     format: t.Optional[ValueFormat] = None
 
-    def pack(self) -> t.Dict[str, t.Any]:
+    def pack(self) -> dict[str, t.Any]:
         obj = super().pack()
         obj["arguments"] = {
             "variablesReference": self.variables_reference,
@@ -594,7 +594,7 @@ class SetVariableRequest(Request):
     @classmethod
     def unpack(
         cls,
-        arguments: t.Dict[str, t.Any],
+        arguments: dict[str, t.Any],
     ) -> SetVariableRequest:
         return SetVariableRequest(
             variables_reference=arguments["variablesReference"],
@@ -626,7 +626,7 @@ class StackTraceRequest(Request):
     levels: t.Optional[int] = None
     format: t.Optional[StackFrameFormat] = None
 
-    def pack(self) -> t.Dict[str, t.Any]:
+    def pack(self) -> dict[str, t.Any]:
         obj = super().pack()
         obj["arguments"] = {
             "threadId": self.thread_id,
@@ -640,7 +640,7 @@ class StackTraceRequest(Request):
     @classmethod
     def unpack(
         cls,
-        arguments: t.Dict[str, t.Any],
+        arguments: dict[str, t.Any],
     ) -> StackTraceRequest:
         return StackTraceRequest(
             thread_id=arguments["threadId"],
@@ -672,7 +672,7 @@ class StepInRequest(Request):
     target_id: t.Optional[int] = None
     granularity: t.Literal["statement", "line", "instruction"] = "statement"
 
-    def pack(self) -> t.Dict[str, t.Any]:
+    def pack(self) -> dict[str, t.Any]:
         obj = super().pack()
         obj["arguments"] = {
             "threadId": self.thread_id,
@@ -686,7 +686,7 @@ class StepInRequest(Request):
     @classmethod
     def unpack(
         cls,
-        arguments: t.Dict[str, t.Any],
+        arguments: dict[str, t.Any],
     ) -> StepInRequest:
         return StepInRequest(
             thread_id=arguments["threadId"],
@@ -716,7 +716,7 @@ class StepOutRequest(Request):
     single_thread: bool = False
     granularity: t.Literal["statement", "line", "instruction"] = "statement"
 
-    def pack(self) -> t.Dict[str, t.Any]:
+    def pack(self) -> dict[str, t.Any]:
         obj = super().pack()
         obj["arguments"] = {
             "threadId": self.thread_id,
@@ -729,7 +729,7 @@ class StepOutRequest(Request):
     @classmethod
     def unpack(
         cls,
-        arguments: t.Dict[str, t.Any],
+        arguments: dict[str, t.Any],
     ) -> StepOutRequest:
         return StepOutRequest(
             thread_id=arguments["threadId"],
@@ -751,7 +751,7 @@ class ThreadsRequest(Request):
     @classmethod
     def unpack(
         cls,
-        arguments: t.Dict[str, t.Any],
+        arguments: dict[str, t.Any],
     ) -> ThreadsRequest:
         return ThreadsRequest()
 
@@ -781,7 +781,7 @@ class VariablesRequest(Request):
     count: t.Optional[int] = None
     format: t.Optional[ValueFormat] = None
 
-    def pack(self) -> t.Dict[str, t.Any]:
+    def pack(self) -> dict[str, t.Any]:
         obj = super().pack()
         obj["arguments"] = {
             "variablesReference": self.variables_reference,
@@ -796,7 +796,7 @@ class VariablesRequest(Request):
     @classmethod
     def unpack(
         cls,
-        arguments: t.Dict[str, t.Any],
+        arguments: dict[str, t.Any],
     ) -> VariablesRequest:
         return VariablesRequest(
             variables_reference=arguments["variablesReference"],

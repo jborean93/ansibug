@@ -1,0 +1,10 @@
+{
+    "configurations": [
+        {
+            "name": "Ansible: Launch ansible-playbook Process",
+            "type": "ansibug",
+            "request": "launch",
+            "playbook": "main.yml",
+        }
+    ]
+}

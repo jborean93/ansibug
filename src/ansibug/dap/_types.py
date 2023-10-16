@@ -43,7 +43,7 @@ class Breakpoint:
     instruction_reference: t.Optional[str] = None
     offset: t.Optional[int] = None
 
-    def pack(self) -> t.Dict[str, t.Any]:
+    def pack(self) -> dict[str, t.Any]:
         return {
             "id": self.id,
             "verified": self.verified,
@@ -60,7 +60,7 @@ class Breakpoint:
     @classmethod
     def unpack(
         cls,
-        obj: t.Dict[str, t.Any],
+        obj: dict[str, t.Any],
     ) -> Breakpoint:
         return Breakpoint(
             id=obj.get("id", None),
@@ -146,7 +146,7 @@ class Capabilities:
     # supports_exception_filter_options
     # supports_single_thread_execution_requests
 
-    def pack(self) -> t.Dict[str, t.Any]:
+    def pack(self) -> dict[str, t.Any]:
         return {
             "supportsConfigurationDoneRequest": self.supports_configuration_done_request,
             "supportsFunctionBreakpoints": self.supports_function_breakpoints,
@@ -164,7 +164,7 @@ class Capabilities:
     @classmethod
     def unpack(
         cls,
-        obj: t.Dict[str, t.Any],
+        obj: dict[str, t.Any],
     ) -> Capabilities:
         return Capabilities(
             supports_configuration_done_request=obj.get("supportsConfigurationDoneRequest", False),
@@ -196,7 +196,7 @@ class Checksum:
     algorithm: t.Literal["MD5", "SHA1", "SHA256", "timestamp"]
     checksum: str
 
-    def pack(self) -> t.Dict[str, t.Any]:
+    def pack(self) -> dict[str, t.Any]:
         return {
             "algorithm": self.algorithm,
             "checksum": self.checksum,
@@ -205,7 +205,7 @@ class Checksum:
     @classmethod
     def unpack(
         cls,
-        body: t.Dict[str, t.Any],
+        body: dict[str, t.Any],
     ) -> Checksum:
         return Checksum(
             algorithm=body["algorithm"],
@@ -228,7 +228,7 @@ class ExceptionFilterOptions:
     filter_id: str
     condition: t.Optional[str] = None
 
-    def pack(self) -> t.Dict[str, t.Any]:
+    def pack(self) -> dict[str, t.Any]:
         return {
             "filterId": self.filter_id,
             "condition": self.condition,
@@ -237,7 +237,7 @@ class ExceptionFilterOptions:
     @classmethod
     def unpack(
         cls,
-        body: t.Dict[str, t.Any],
+        body: dict[str, t.Any],
     ) -> ExceptionFilterOptions:
         return ExceptionFilterOptions(
             filter_id=body["filterId"],
@@ -261,7 +261,7 @@ class ExceptionOptions:
     path: t.List[ExceptionPathSegment]
     break_mode: t.Literal["never", "always", "unhandled", "userUnhandled"]
 
-    def pack(self) -> t.Dict[str, t.Any]:
+    def pack(self) -> dict[str, t.Any]:
         return {
             "path": [p.pack() for p in self.path],
             "breakMode": self.break_mode,
@@ -270,7 +270,7 @@ class ExceptionOptions:
     @classmethod
     def unpack(
         cls,
-        body: t.Dict[str, t.Any],
+        body: dict[str, t.Any],
     ) -> ExceptionOptions:
         path: t.List[ExceptionPathSegment] = []
         for p in body.get("path", []):
@@ -297,7 +297,7 @@ class ExceptionPathSegment:
     negate: bool = False
     names: t.List[str] = dataclasses.field(default_factory=list)
 
-    def pack(self) -> t.Dict[str, t.Any]:
+    def pack(self) -> dict[str, t.Any]:
         return {
             "negate": self.negate,
             "names": self.names,
@@ -306,7 +306,7 @@ class ExceptionPathSegment:
     @classmethod
     def unpack(
         cls,
-        body: t.Dict[str, t.Any],
+        body: dict[str, t.Any],
     ) -> ExceptionPathSegment:
         return ExceptionPathSegment(
             negate=body.get("negate", False),
@@ -329,7 +329,7 @@ class Message:
     url: t.Optional[str] = None
     url_label: t.Optional[str] = None
 
-    def pack(self) -> t.Dict[str, t.Any]:
+    def pack(self) -> dict[str, t.Any]:
         return {
             "id": self.id,
             "format": self.format,
@@ -343,7 +343,7 @@ class Message:
     @classmethod
     def unpack(
         cls,
-        body: t.Dict[str, t.Any],
+        body: dict[str, t.Any],
     ) -> Message:
         return Message(
             id=body["id"],
@@ -389,7 +389,7 @@ class Scope:
     end_line: t.Optional[int] = None
     end_column: t.Optional[int] = None
 
-    def pack(self) -> t.Dict[str, t.Any]:
+    def pack(self) -> dict[str, t.Any]:
         return {
             "name": self.name,
             "presentationHint": self.presentation_hint,
@@ -407,7 +407,7 @@ class Scope:
     @classmethod
     def unpack(
         cls,
-        body: t.Dict[str, t.Any],
+        body: dict[str, t.Any],
     ) -> Scope:
         return Scope(
             name=body["name"],
@@ -458,7 +458,7 @@ class Source:
     adapter_data: t.Any = None
     checksums: t.List[Checksum] = dataclasses.field(default_factory=list)
 
-    def pack(self) -> t.Dict[str, t.Any]:
+    def pack(self) -> dict[str, t.Any]:
         return {
             "name": self.name,
             "path": self.path,
@@ -473,7 +473,7 @@ class Source:
     @classmethod
     def unpack(
         cls,
-        body: t.Dict[str, t.Any],
+        body: dict[str, t.Any],
     ) -> Source:
         return Source(
             name=body.get("name", None),
@@ -509,7 +509,7 @@ class SourceBreakpoint:
     hit_condition: t.Optional[str] = None
     log_message: t.Optional[str] = None
 
-    def pack(self) -> t.Dict[str, t.Any]:
+    def pack(self) -> dict[str, t.Any]:
         return {
             "line": self.line,
             "column": self.column,
@@ -521,7 +521,7 @@ class SourceBreakpoint:
     @classmethod
     def unpack(
         cls,
-        body: t.Dict[str, t.Any],
+        body: dict[str, t.Any],
     ) -> SourceBreakpoint:
         return SourceBreakpoint(
             line=body["line"],
@@ -567,7 +567,7 @@ class StackFrame:
     module_id: t.Optional[t.Union[int, str]] = None
     presentation_hint: t.Literal["normal", "label", "subtle"] = "normal"
 
-    def pack(self) -> t.Dict[str, t.Any]:
+    def pack(self) -> dict[str, t.Any]:
         return {
             "id": self.id,
             "name": self.name,
@@ -585,7 +585,7 @@ class StackFrame:
     @classmethod
     def unpack(
         cls,
-        body: t.Dict[str, t.Any],
+        body: dict[str, t.Any],
     ) -> StackFrame:
         return StackFrame(
             id=body["id"],
@@ -627,7 +627,7 @@ class StackFrameFormat:
     module: bool = False
     include_all: bool = False
 
-    def pack(self) -> t.Dict[str, t.Any]:
+    def pack(self) -> dict[str, t.Any]:
         return {
             "parameters": self.parameters,
             "parameterTypes": self.parameter_types,
@@ -641,7 +641,7 @@ class StackFrameFormat:
     @classmethod
     def unpack(
         cls,
-        body: t.Dict[str, t.Any],
+        body: dict[str, t.Any],
     ) -> StackFrameFormat:
         return StackFrameFormat(
             parameters=body.get("parameters", False),
@@ -668,7 +668,7 @@ class Thread:
     id: int
     name: str
 
-    def pack(self) -> t.Dict[str, t.Any]:
+    def pack(self) -> dict[str, t.Any]:
         return {
             "id": self.id,
             "name": self.name,
@@ -677,7 +677,7 @@ class Thread:
     @classmethod
     def unpack(
         cls,
-        body: t.Dict[str, t.Any],
+        body: dict[str, t.Any],
     ) -> Thread:
         return Thread(
             id=body["id"],
@@ -695,7 +695,7 @@ class ValueFormat:
 
     hex: bool = False
 
-    def pack(self) -> t.Dict[str, t.Any]:
+    def pack(self) -> dict[str, t.Any]:
         return {
             "hex": self.hex,
         }
@@ -703,7 +703,7 @@ class ValueFormat:
     @classmethod
     def unpack(
         cls,
-        body: t.Dict[str, t.Any],
+        body: dict[str, t.Any],
     ) -> ValueFormat:
         return ValueFormat(
             hex=body.get("hex", False),
@@ -743,7 +743,7 @@ class Variable:
     indexed_variables: t.Optional[int] = None
     memory_reference: t.Optional[str] = None
 
-    def pack(self) -> t.Dict[str, t.Any]:
+    def pack(self) -> dict[str, t.Any]:
         return {
             "name": self.name,
             "value": self.value,
@@ -759,7 +759,7 @@ class Variable:
     @classmethod
     def unpack(
         cls,
-        body: t.Dict[str, t.Any],
+        body: dict[str, t.Any],
     ) -> Variable:
         return Variable(
             name=body["name"],
@@ -826,7 +826,7 @@ class VariablePresentationHint:
     visibility: t.Optional[t.Union[str, t.Literal["public", "private", "protected", "internal"]]] = None
     lazy: bool = False
 
-    def pack(self) -> t.Dict[str, t.Any]:
+    def pack(self) -> dict[str, t.Any]:
         return {
             "kind": self.kind,
             "attributes": self.attributes,
@@ -837,7 +837,7 @@ class VariablePresentationHint:
     @classmethod
     def unpack(
         cls,
-        body: t.Dict[str, t.Any],
+        body: dict[str, t.Any],
     ) -> VariablePresentationHint:
         return VariablePresentationHint(
             kind=body.get("kind", None),

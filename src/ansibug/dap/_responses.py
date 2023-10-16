@@ -30,7 +30,7 @@ class CancelResponse(Response):
     def unpack(
         cls,
         request_seq: int,
-        body: t.Dict[str, t.Any],
+        body: dict[str, t.Any],
     ) -> CancelResponse:
         return CancelResponse(request_seq=request_seq)
 
@@ -46,7 +46,7 @@ class ConfigurationDoneResponse(Response):
     def unpack(
         cls,
         request_seq: int,
-        body: t.Dict[str, t.Any],
+        body: dict[str, t.Any],
     ) -> ConfigurationDoneResponse:
         return ConfigurationDoneResponse(request_seq=request_seq)
 
@@ -60,7 +60,7 @@ class ContinueResponse(Response):
 
     all_threads_continued: bool = True
 
-    def pack(self) -> t.Dict[str, t.Any]:
+    def pack(self) -> dict[str, t.Any]:
         obj = super().pack()
         obj["body"] = {
             "allThreadsContinued": self.all_threads_continued,
@@ -72,7 +72,7 @@ class ContinueResponse(Response):
     def unpack(
         cls,
         request_seq: int,
-        body: t.Dict[str, t.Any],
+        body: dict[str, t.Any],
     ) -> ContinueResponse:
         return ContinueResponse(
             request_seq=request_seq,
@@ -91,7 +91,7 @@ class DisconnectResponse(Response):
     def unpack(
         cls,
         request_seq: int,
-        body: t.Dict[str, t.Any],
+        body: dict[str, t.Any],
     ) -> DisconnectResponse:
         return DisconnectResponse(request_seq=request_seq)
 
@@ -111,7 +111,7 @@ class EvaluateResponse(Response):
     indexed_variables: t.Optional[int] = None
     memory_reference: t.Optional[str] = None
 
-    def pack(self) -> t.Dict[str, t.Any]:
+    def pack(self) -> dict[str, t.Any]:
         obj = super().pack()
         obj["body"] = {
             "result": self.result,
@@ -129,7 +129,7 @@ class EvaluateResponse(Response):
     def unpack(
         cls,
         request_seq: int,
-        body: t.Dict[str, t.Any],
+        body: dict[str, t.Any],
     ) -> EvaluateResponse:
         return EvaluateResponse(
             request_seq=request_seq,
@@ -160,7 +160,7 @@ class InitializeResponse(Response):
 
     capabilities: Capabilities
 
-    def pack(self) -> t.Dict[str, t.Any]:
+    def pack(self) -> dict[str, t.Any]:
         obj = super().pack()
         obj["body"] = self.capabilities.pack()
 
@@ -170,7 +170,7 @@ class InitializeResponse(Response):
     def unpack(
         cls,
         request_seq: int,
-        body: t.Dict[str, t.Any],
+        body: dict[str, t.Any],
     ) -> InitializeResponse:
         return InitializeResponse(
             request_seq=request_seq,
@@ -189,7 +189,7 @@ class LaunchResponse(Response):
     def unpack(
         cls,
         request_seq: int,
-        body: t.Dict[str, t.Any],
+        body: dict[str, t.Any],
     ) -> LaunchResponse:
         return LaunchResponse(request_seq=request_seq)
 
@@ -205,7 +205,7 @@ class NextResponse(Response):
     def unpack(
         cls,
         request_seq: int,
-        body: t.Dict[str, t.Any],
+        body: dict[str, t.Any],
     ) -> NextResponse:
         return NextResponse(request_seq=request_seq)
 
@@ -228,7 +228,7 @@ class RunInTerminalResponse(Response):
     process_id: t.Optional[int]
     shell_process_id: t.Optional[int]
 
-    def pack(self) -> t.Dict[str, t.Any]:
+    def pack(self) -> dict[str, t.Any]:
         obj = super().pack()
         obj["body"] = {
             "processId": self.process_id,
@@ -241,7 +241,7 @@ class RunInTerminalResponse(Response):
     def unpack(
         cls,
         request_seq: int,
-        body: t.Dict[str, t.Any],
+        body: dict[str, t.Any],
     ) -> RunInTerminalResponse:
         return RunInTerminalResponse(
             request_seq=request_seq,
@@ -266,7 +266,7 @@ class ScopesResponse(Response):
 
     scopes: t.List[Scope] = dataclasses.field(default_factory=list)
 
-    def pack(self) -> t.Dict[str, t.Any]:
+    def pack(self) -> dict[str, t.Any]:
         obj = super().pack()
         obj["body"] = {
             "scopes": [s.pack() for s in self.scopes],
@@ -278,7 +278,7 @@ class ScopesResponse(Response):
     def unpack(
         cls,
         request_seq: int,
-        body: t.Dict[str, t.Any],
+        body: dict[str, t.Any],
     ) -> ScopesResponse:
         return ScopesResponse(
             request_seq=request_seq,
@@ -303,7 +303,7 @@ class SetBreakpointsResponse(Response):
 
     breakpoints: t.List[Breakpoint] = dataclasses.field(default_factory=list)
 
-    def pack(self) -> t.Dict[str, t.Any]:
+    def pack(self) -> dict[str, t.Any]:
         obj = super().pack()
         obj["body"] = {
             "breakpoints": [b.pack() for b in self.breakpoints],
@@ -315,7 +315,7 @@ class SetBreakpointsResponse(Response):
     def unpack(
         cls,
         request_seq: int,
-        body: t.Dict[str, t.Any],
+        body: dict[str, t.Any],
     ) -> SetBreakpointsResponse:
         return SetBreakpointsResponse(
             request_seq=request_seq,
@@ -340,7 +340,7 @@ class SetExceptionBreakpointsResponse(Response):
 
     breakpoints: t.List[Breakpoint] = dataclasses.field(default_factory=list)
 
-    def pack(self) -> t.Dict[str, t.Any]:
+    def pack(self) -> dict[str, t.Any]:
         obj = super().pack()
         obj["body"] = {"breakpoints": [b.pack() for b in self.breakpoints]}
 
@@ -350,7 +350,7 @@ class SetExceptionBreakpointsResponse(Response):
     def unpack(
         cls,
         request_seq: int,
-        body: t.Dict[str, t.Any],
+        body: dict[str, t.Any],
     ) -> SetExceptionBreakpointsResponse:
         return SetExceptionBreakpointsResponse(
             request_seq=request_seq,
@@ -371,7 +371,7 @@ class SetVariableResponse(Response):
     named_variables: t.Optional[int] = None
     indexed_variables: t.Optional[int] = None
 
-    def pack(self) -> t.Dict[str, t.Any]:
+    def pack(self) -> dict[str, t.Any]:
         obj = super().pack()
         obj["body"] = {
             "value": self.value,
@@ -387,7 +387,7 @@ class SetVariableResponse(Response):
     def unpack(
         cls,
         request_seq: int,
-        body: t.Dict[str, t.Any],
+        body: dict[str, t.Any],
     ) -> SetVariableResponse:
         return SetVariableResponse(
             request_seq=request_seq,
@@ -417,7 +417,7 @@ class StackTraceResponse(Response):
     stack_frames: t.List[StackFrame] = dataclasses.field(default_factory=list)
     total_frames: t.Optional[int] = None
 
-    def pack(self) -> t.Dict[str, t.Any]:
+    def pack(self) -> dict[str, t.Any]:
         obj = super().pack()
         obj["body"] = {
             "stackFrames": [f.pack() for f in self.stack_frames],
@@ -430,7 +430,7 @@ class StackTraceResponse(Response):
     def unpack(
         cls,
         request_seq: int,
-        body: t.Dict[str, t.Any],
+        body: dict[str, t.Any],
     ) -> StackTraceResponse:
         return StackTraceResponse(
             request_seq=request_seq,
@@ -450,7 +450,7 @@ class StepInResponse(Response):
     def unpack(
         cls,
         request_seq: int,
-        body: t.Dict[str, t.Any],
+        body: dict[str, t.Any],
     ) -> StepInResponse:
         return StepInResponse(request_seq=request_seq)
 
@@ -466,7 +466,7 @@ class StepOutResponse(Response):
     def unpack(
         cls,
         request_seq: int,
-        body: t.Dict[str, t.Any],
+        body: dict[str, t.Any],
     ) -> StepOutResponse:
         return StepOutResponse(request_seq=request_seq)
 
@@ -486,7 +486,7 @@ class ThreadsResponse(Response):
 
     threads: t.List[Thread] = dataclasses.field(default_factory=list)
 
-    def pack(self) -> t.Dict[str, t.Any]:
+    def pack(self) -> dict[str, t.Any]:
         obj = super().pack()
         obj["body"] = {
             "threads": [t.pack() for t in self.threads],
@@ -498,7 +498,7 @@ class ThreadsResponse(Response):
     def unpack(
         cls,
         request_seq: int,
-        body: t.Dict[str, t.Any],
+        body: dict[str, t.Any],
     ) -> ThreadsResponse:
         return ThreadsResponse(
             request_seq=request_seq,
@@ -521,7 +521,7 @@ class VariablesResponse(Response):
 
     variables: t.List[Variable] = dataclasses.field(default_factory=list)
 
-    def pack(self) -> t.Dict[str, t.Any]:
+    def pack(self) -> dict[str, t.Any]:
         obj = super().pack()
         obj["body"] = {
             "variables": [v.pack() for v in self.variables],
@@ -533,7 +533,7 @@ class VariablesResponse(Response):
     def unpack(
         cls,
         request_seq: int,
-        body: t.Dict[str, t.Any],
+        body: dict[str, t.Any],
     ) -> VariablesResponse:
         return VariablesResponse(
             request_seq=request_seq,

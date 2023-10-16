@@ -7,7 +7,6 @@ from __future__ import annotations
 import pickle
 import socket
 import ssl
-import struct
 import threading
 import types
 import typing as t
@@ -19,12 +18,15 @@ from .dap import ProtocolMessage
 class MPProtocol(t.Protocol):
     def on_msg_received(self, msg: ProtocolMessage) -> None:
         """Called when a message has been received from the peer."""
+        return
 
-    def connection_closed(self, exp: t.Optional[Exception]) -> None:
+    def connection_closed(self, exp: Exception | None) -> None:
         """Called when the connection is closed, exp will contain an exception if an error occurred."""
+        return
 
     def connection_made(self) -> None:
         """Called when the connection has been made with the peer."""
+        return
 
 
 class MPQueue:
@@ -32,13 +34,13 @@ class MPQueue:
         self,
         role: t.Literal["client", "server"],
         proto: t.Callable[[], MPProtocol],
-        cancel_token: t.Optional[SocketCancellationToken] = None,
+        cancel_token: SocketCancellationToken | None = None,
     ) -> None:
         self._socket = SocketHelper(f"{role} MPQueue", socket.AF_INET, socket.SOCK_STREAM)
         self._role = role
         self._proto = proto()
         self._cancel_token = cancel_token or SocketCancellationToken()
-        self._recv_thread: t.Optional[threading.Thread] = None
+        self._recv_thread: threading.Thread | None = None
 
     def __enter__(self) -> MPQueue:
         self._socket.__enter__()
@@ -46,9 +48,9 @@ class MPQueue:
 
     def __exit__(
         self,
-        exception_type: t.Optional[t.Type[BaseException]] = None,
-        exception_value: t.Optional[BaseException] = None,
-        traceback: t.Optional[types.TracebackType] = None,
+        exception_type: type[BaseException] | None = None,
+        exception_value: BaseException | None = None,
+        traceback: types.TracebackType | None = None,
         **kwargs: t.Any,
     ) -> None:
         self.stop()
@@ -89,7 +91,7 @@ class MPQueue:
                 if not b_data_len:
                     break
 
-                data_len = struct.unpack("<I", b_data_len)[0]
+                data_len = int.from_bytes(b_data_len, byteorder="little", signed=False)
                 b_data = self._socket.recv(data_len, self._cancel_token)
 
                 # FIXME: Have some way for the client to notify on an exception
@@ -109,11 +111,11 @@ class MPQueue:
 class ClientMPQueue(MPQueue):
     def __init__(
         self,
-        address: t.Tuple[str, int],
+        address: tuple[str, int],
         proto: t.Callable[[], MPProtocol],
         *,
-        ssl_context: t.Optional[ssl.SSLContext] = None,
-        cancel_token: t.Optional[SocketCancellationToken] = None,
+        ssl_context: ssl.SSLContext | None = None,
+        cancel_token: SocketCancellationToken | None = None,
     ) -> None:
         super().__init__("client", proto, cancel_token=cancel_token)
         self._address = address
@@ -129,7 +131,11 @@ class ClientMPQueue(MPQueue):
     ) -> None:
         self._socket.connect(self._address, self._cancel_token, timeout=timeout)
         if self._ssl_context:
-            raise NotImplementedError()
+            self._socket.wrap_tls(
+                self._ssl_context,
+                server_side=False,
+                server_hostname=self._address[0],
+            )
 
         super().start()
 
@@ -137,11 +143,11 @@ class ClientMPQueue(MPQueue):
 class ServerMPQueue(MPQueue):
     def __init__(
         self,
-        address: t.Tuple[str, int],
+        address: tuple[str, int],
         proto: t.Callable[[], MPProtocol],
         *,
-        ssl_context: t.Optional[ssl.SSLContext] = None,
-        cancel_token: t.Optional[SocketCancellationToken] = None,
+        ssl_context: ssl.SSLContext | None = None,
+        cancel_token: SocketCancellationToken | None = None,
     ) -> None:
         super().__init__("server", proto, cancel_token=cancel_token)
         self._ssl_context = ssl_context
@@ -149,7 +155,7 @@ class ServerMPQueue(MPQueue):
         self._socket.bind(address)
 
     @property
-    def address(self) -> t.Tuple[str, int]:
+    def address(self) -> tuple[str, int]:
         return self._socket.getsockname()
 
     def __enter__(self) -> ServerMPQueue:
@@ -160,8 +166,15 @@ class ServerMPQueue(MPQueue):
         self,
         timeout: float = 0,
     ) -> None:
+        print("accept")
         self._socket.accept(self._cancel_token, timeout=timeout)
+        print("accept done")
         if self._ssl_context:
-            raise NotImplementedError()
+            print("wrapping tls")
+            self._socket.wrap_tls(
+                self._ssl_context,
+                server_side=True,
+            )
+            print("wrap tls done")
 
         super().start()
