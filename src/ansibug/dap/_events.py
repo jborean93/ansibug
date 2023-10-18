@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # Copyright (c) 2022 Jordan Borean
 # GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
 
@@ -8,7 +7,7 @@ import dataclasses
 import enum
 import typing as t
 
-from ._messages import Event, EventType, register_event
+from ._messages import Event, EventType
 from ._types import Breakpoint
 
 
@@ -24,9 +23,8 @@ class StoppedReason(enum.Enum):
     INSTRUCTION_BREAKPOINT = "instruction breakpoint"
 
 
-@register_event
 @dataclasses.dataclass()
-class BreakpointEvent(Event):
+class BreakpointEvent(Event, dap={"body": {"reason": "reason", "breakpoint": "breakpoint"}}):
     """Indicate information about a breakpoint has changed.
 
     Event sent by the debuggee that indicates that some information about a
@@ -43,27 +41,23 @@ class BreakpointEvent(Event):
     reason: t.Union[str, t.Literal["changed", "new", "removed"]]
     breakpoint: Breakpoint
 
-    def pack(self) -> dict[str, t.Any]:
-        obj = super().pack()
-        obj["body"] = {
-            "reason": self.reason,
-            "breakpoint": self.breakpoint.pack(),
-        }
 
-        return obj
+@dataclasses.dataclass()
+class ExitedEvent(Event, dap={"body": {"exitCode": "exit_code"}}):
+    """Indicate the debuggee has existed.
 
-    @classmethod
-    def unpack(
-        cls,
-        body: dict[str, t.Any],
-    ) -> BreakpointEvent:
-        return BreakpointEvent(
-            reason=body["reason"],
-            breakpoint=Breakpoint.unpack(body["breakpoint"]),
-        )
+    Event sent by the debuggee that indicates it has exited with the provided
+    exit code.
+
+    Args:
+        exit_code: The exit code returned from the debuggee.
+    """
+
+    event = EventType.EXITED
+
+    exit_code: int
 
 
-@register_event
 @dataclasses.dataclass()
 class InitializedEvent(Event):
     """Indicate the DA is ready to accept configuration requests.
@@ -74,17 +68,22 @@ class InitializedEvent(Event):
 
     event = EventType.INITIALIZED
 
-    @classmethod
-    def unpack(
-        cls,
-        body: dict[str, t.Any],
-    ) -> InitializedEvent:
-        return InitializedEvent()
 
-
-@register_event
 @dataclasses.dataclass()
-class StoppedEvent(Event):
+class StoppedEvent(
+    Event,
+    dap={
+        "body": {
+            "reason": "reason",
+            "description": "description",
+            "threadId": "thread_id",
+            "preserveFocusHint": "preserve_focus_hint",
+            "text": "text",
+            "allThreadsStopped": "all_threads_stopped",
+            "hitBreakpointIds": "hit_breakpoint_ids",
+        },
+    },
+):
     """Indicates debuggee has stopped due to some condition.
 
     Event sent by the debuggee that indicates it has stopped due to some
@@ -92,7 +91,7 @@ class StoppedEvent(Event):
 
     Args:
         reason: The reason for the event.
-        description: Full reason, dispayed in the UI as is.
+        description: Full reason, displayed in the UI as is.
         thread_id: The thread which was stopped.
         preserve_focus_hint: The client should not change the focus.
         text: Additional information.
@@ -110,39 +109,9 @@ class StoppedEvent(Event):
     all_threads_stopped: bool = False
     hit_breakpoint_ids: list[int] = dataclasses.field(default_factory=list)
 
-    def pack(self) -> dict[str, t.Any]:
-        obj = super().pack()
-        obj["body"] = {
-            "reason": self.reason.value,
-            "description": self.description,
-            "threadId": self.thread_id,
-            "preserveFocusHint": self.preserve_focus_hint,
-            "text": self.text,
-            "allThreadsStopped": self.all_threads_stopped,
-            "hitBreakpointIds": self.hit_breakpoint_ids,
-        }
 
-        return obj
-
-    @classmethod
-    def unpack(
-        cls,
-        body: dict[str, t.Any],
-    ) -> StoppedEvent:
-        return StoppedEvent(
-            reason=StoppedReason(body["reason"]),
-            description=body.get("description", None),
-            thread_id=body.get("threadId", None),
-            preserve_focus_hint=body.get("preseveFocusHint", False),
-            text=body.get("text", None),
-            all_threads_stopped=body.get("allThreadStopped", False),
-            hit_breakpoint_ids=body.get("hitBreakpointIds", []),
-        )
-
-
-@register_event
 @dataclasses.dataclass()
-class TerminatedEvent(Event):
+class TerminatedEvent(Event, dap={"body": {"restart": "restart"}}):
     """Indicate the debuggee has terminated.
 
     Event sent by the DA that debugging of the debuggee has terminated. This
@@ -157,25 +126,9 @@ class TerminatedEvent(Event):
 
     restart: t.Any = None
 
-    def pack(self) -> dict[str, t.Any]:
-        obj = super().pack()
-        obj["body"] = {
-            "restart": self.restart,
-        }
 
-        return obj
-
-    @classmethod
-    def unpack(
-        cls,
-        body: dict[str, t.Any],
-    ) -> TerminatedEvent:
-        return TerminatedEvent(restart=body.get("restart", None))
-
-
-@register_event
 @dataclasses.dataclass()
-class ThreadEvent(Event):
+class ThreadEvent(Event, dap={"body": {"reason": "reason", "threadId": "thread_id"}}):
     """Indicate a thread has started or exited.
 
     Event sent by the debuggee that indicates the status of a thread.
@@ -189,42 +142,3 @@ class ThreadEvent(Event):
 
     reason: t.Literal["started", "exited"]
     thread_id: int
-
-    def pack(self) -> dict[str, t.Any]:
-        obj = super().pack()
-        obj["body"] = {
-            "reason": self.reason,
-            "threadId": self.thread_id,
-        }
-
-        return obj
-
-    @classmethod
-    def unpack(
-        cls,
-        body: dict[str, t.Any],
-    ) -> ThreadEvent:
-        return ThreadEvent(reason=body["reason"], thread_id=body["threadId"])
-
-
-@register_event
-@dataclasses.dataclass()
-class ExitedEvent(Event):
-    event = EventType.EXITED
-
-    exit_code: int
-
-    def pack(self) -> dict[str, t.Any]:
-        obj = super().pack()
-        obj["body"] = {
-            "exitCode": self.exit_code,
-        }
-
-        return obj
-
-    @classmethod
-    def unpack(
-        cls,
-        body: dict[str, t.Any],
-    ) -> ExitedEvent:
-        return ExitedEvent(exit_code=body["exitCode"])

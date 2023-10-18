@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # Copyright (c) 2022 Jordan Borean
 # GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
 
@@ -176,6 +175,7 @@ class AnsibleDebugState(ansibug.DebugState):
 
         self._waiting_condition = threading.Condition()
         self._waiting_threads: dict[int, t.Literal["in", "out", "over"] | None] = {}
+        self._waiting_ended = False
 
     def process_task(
         self,
@@ -190,13 +190,14 @@ class AnsibleDebugState(ansibug.DebugState):
         if not thread:
             thread = self.add_thread(host, advertise=True)
 
-        # FIXME: This doesn't seem to remove the include_tasks SF.
         last_frame_id = thread.stack_frames[0] if thread.stack_frames else None
         if last_frame_id is not None:
             # The parent is the implicit block and we want the parent of that.
             parent_task = task._parent._parent
             last_frame = self.stackframes[last_frame_id]
-            if parent_task and last_frame.task and last_frame.task._uuid != parent_task._uuid:
+            if (not parent_task and thread.stack_frames) or (
+                last_frame.task and last_frame.task._uuid != parent_task._uuid
+            ):
                 thread.stack_frames.pop(0)
                 self.stackframes.pop(last_frame_id)
                 for variable_id in last_frame.variables:
@@ -260,6 +261,7 @@ class AnsibleDebugState(ansibug.DebugState):
                 stopped_kwargs = {
                     "reason": ansibug.dap.StoppedReason.BREAKPOINT,
                     "description": "Breakpoint hit",
+                    "hit_breakpoint_ids": [line_breakpoint.id],
                 }
 
             if stopped_kwargs:
@@ -268,7 +270,11 @@ class AnsibleDebugState(ansibug.DebugState):
                     **stopped_kwargs,
                 )
                 self._debugger.send(stopped_event)
-                self._waiting_condition.wait_for(lambda: tid in self._waiting_threads)
+                self._waiting_condition.wait_for(lambda: self._waiting_ended or tid in self._waiting_threads)
+                if self._waiting_ended:
+                    # ended() was called and the connection has been closed, do
+                    # not try and process the result.
+                    return sf
 
                 stepping_type = self._waiting_threads.pop(tid)
                 if stepping_type == "in" and task.action not in C._ACTION_ALL_INCLUDES:
@@ -396,6 +402,7 @@ class AnsibleDebugState(ansibug.DebugState):
 
     def ended(self) -> None:
         with self._waiting_condition:
+            self._waiting_ended = True
             self._waiting_threads = {}
             self._waiting_condition.notify_all()
 

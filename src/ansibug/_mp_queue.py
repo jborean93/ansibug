@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # Copyright (c) 2022 Jordan Borean
 # GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
 
@@ -32,18 +31,16 @@ class MPProtocol(t.Protocol):
 class MPQueue:
     def __init__(
         self,
-        role: t.Literal["client", "server"],
+        sock: SocketHelper,
         proto: t.Callable[[], MPProtocol],
         cancel_token: SocketCancellationToken | None = None,
     ) -> None:
-        self._socket = SocketHelper(f"{role} MPQueue", socket.AF_INET, socket.SOCK_STREAM)
-        self._role = role
+        self._socket = sock
         self._proto = proto()
         self._cancel_token = cancel_token or SocketCancellationToken()
         self._recv_thread: threading.Thread | None = None
 
     def __enter__(self) -> MPQueue:
-        self._socket.__enter__()
         return self
 
     def __exit__(
@@ -54,6 +51,17 @@ class MPQueue:
         **kwargs: t.Any,
     ) -> None:
         self.stop()
+
+    @property
+    def address(self) -> tuple[str, int, bool]:
+        if self._socket.family == socket.AddressFamily.AF_INET6:
+            host, port, flowinfo, scope_id = self._socket.getsockname()
+            ipv6 = True
+        else:
+            host, port = self._socket.getsockname()
+            ipv6 = False
+
+        return host, port, ipv6
 
     def send(
         self,
@@ -70,7 +78,7 @@ class MPQueue:
     ) -> None:
         self._recv_thread = threading.Thread(
             target=self._recv_handler,
-            name=f"{self._role} MPQueue Recv",
+            name=f"{type(self).__name__} Recv",
         )
         self._recv_thread.start()
         self._proto.connection_made()
@@ -95,7 +103,8 @@ class MPQueue:
                 b_data = self._socket.recv(data_len, self._cancel_token)
 
                 # FIXME: Have some way for the client to notify on an exception
-                obj = t.cast(ProtocolMessage, pickle.loads(b_data))
+                py_obj = pickle.loads(b_data)
+                obj = t.cast(ProtocolMessage, py_obj)
                 self._proto.on_msg_received(obj)
 
         except CancelledError:
@@ -117,8 +126,9 @@ class ClientMPQueue(MPQueue):
         ssl_context: ssl.SSLContext | None = None,
         cancel_token: SocketCancellationToken | None = None,
     ) -> None:
-        super().__init__("client", proto, cancel_token=cancel_token)
-        self._address = address
+        # Use a blank socket, the real one is created in start()
+        super().__init__(SocketHelper("client", socket.socket()), proto, cancel_token=cancel_token)
+        self._host, self._port = address
         self._ssl_context = ssl_context
 
     def __enter__(self) -> ClientMPQueue:
@@ -129,12 +139,31 @@ class ClientMPQueue(MPQueue):
         self,
         timeout: float = 0,
     ) -> None:
-        self._socket.connect(self._address, self._cancel_token, timeout=timeout)
+        sock = None
+        error = OSError(f"Found no results for getaddrinfo for {self._host}:{self._port}")
+
+        for family, socktype, proto, _, addr in socket.getaddrinfo(self._host, self._port, 0, socket.SOCK_STREAM):
+            try:
+                sock = socket.socket(family, socktype, proto)
+                self._cancel_token.connect(sock, addr, timeout=timeout)
+                break
+
+            except OSError as e:
+                error = e
+                if sock:
+                    sock.close()
+                sock = None
+
+        if sock:
+            self._socket = SocketHelper("client", sock)
+        else:
+            raise error
+
         if self._ssl_context:
             self._socket.wrap_tls(
                 self._ssl_context,
                 server_side=False,
-                server_hostname=self._address[0],
+                server_hostname=self._host,
             )
 
         super().start()
@@ -149,14 +178,22 @@ class ServerMPQueue(MPQueue):
         ssl_context: ssl.SSLContext | None = None,
         cancel_token: SocketCancellationToken | None = None,
     ) -> None:
-        super().__init__("server", proto, cancel_token=cancel_token)
-        self._ssl_context = ssl_context
-        self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self._socket.bind(address)
+        sock_kwargs: dict[str, t.Any] = {}
+        if address[0] == "" and socket.has_dualstack_ipv6():
+            # Allows the server to bind on both IPv4 and IPv6.
+            sock_kwargs |= {
+                "family": socket.AF_INET6,
+                "dualstack_ipv6": True,
+            }
 
-    @property
-    def address(self) -> tuple[str, int]:
-        return self._socket.getsockname()
+        sock = socket.create_server(
+            address,
+            reuse_port=True,
+            **sock_kwargs,
+        )
+
+        super().__init__(SocketHelper("server", sock), proto, cancel_token=cancel_token)
+        self._ssl_context = ssl_context
 
     def __enter__(self) -> ServerMPQueue:
         super().__enter__()
@@ -166,15 +203,11 @@ class ServerMPQueue(MPQueue):
         self,
         timeout: float = 0,
     ) -> None:
-        print("accept")
         self._socket.accept(self._cancel_token, timeout=timeout)
-        print("accept done")
         if self._ssl_context:
-            print("wrapping tls")
             self._socket.wrap_tls(
                 self._ssl_context,
                 server_side=True,
             )
-            print("wrap tls done")
 
         super().start()

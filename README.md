@@ -11,7 +11,7 @@ It expects the following messages as defined in DAP:
 + [InitializeRequest](https://microsoft.github.io/debug-adapter-protocol/specification#Requests_Initialize)
   + Contains the capabilities of the VSCode client
   + Responds with the `InitializeResponse` that contains the capabilities of `ansibug`
-+ [LaunchRequest](https://microsoft.github.io/debug-adapter-protocol/specification#Requests_Launch)
++ [LaunchRequest](https://microsoft.github.io/debug-adapter-protocol/specification#Requests_Launch) or [AttachRequest](https://microsoft.github.io/debug-adapter-protocol/specification#Requests_Attach)
   + Contains the VSCode launch.json configuration that is being run
   + The structure is dependent on the VSCode plugin but the following launch modes are defined
     + `Launch`

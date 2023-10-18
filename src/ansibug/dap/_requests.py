@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # Copyright (c) 2022 Jordan Borean
 # GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
 
@@ -7,7 +6,7 @@ from __future__ import annotations
 import dataclasses
 import typing as t
 
-from ._messages import Command, Request, register_request
+from ._messages import Command, Request
 from ._types import (
     ExceptionFilterOptions,
     ExceptionOptions,
@@ -18,9 +17,45 @@ from ._types import (
 )
 
 
-@register_request
 @dataclasses.dataclass()
-class CancelRequest(Request):
+class AttachRequest(Request, dap={"arguments": {"__restart": "restart"}}):
+    """Attach DA to a debuggee that is already running.
+
+    Sent from the client to the debug adapter to attach itself to a debuggee
+    that is already running.
+
+    Args:
+        arguments: The arguments from the client, the structure of this is
+            dependent on the client and what was requested.
+        restart: Arbitrary data from the previous, restarted session.
+    """
+
+    command = Command.ATTACH
+
+    arguments: t.Dict[str, t.Any]
+    restart: t.Any = None
+
+    def pack(self) -> dict[str, t.Any]:
+        value = super().pack()
+        value["arguments"].update(self.arguments)
+
+        return value
+
+    @classmethod
+    def unpack(cls, data: dict[str, t.Any]) -> AttachRequest:
+        arguments = data["arguments"]
+        restart = arguments.pop("__restart", None)
+        obj = AttachRequest(
+            arguments=arguments,
+            restart=restart,
+        )
+        object.__setattr__(obj, "seq", data["seq"])
+
+        return obj
+
+
+@dataclasses.dataclass()
+class CancelRequest(Request, dap={"arguments": {"requestId": "request_id", "progressId": "progress_id"}}):
     """Cancel a request made by the client.
 
     Sent from the client to the debug adapter to cancel a request that it is
@@ -37,30 +72,10 @@ class CancelRequest(Request):
     request_id: t.Optional[int] = None
     progress_id: t.Optional[int] = None
 
-    def pack(self) -> dict[str, t.Any]:
-        obj = super().pack()
-        obj["arguments"] = {
-            "requestId": self.request_id,
-            "progressId": self.progress_id,
-        }
 
-        return obj
-
-    @classmethod
-    def unpack(
-        cls,
-        arguments: dict[str, t.Any],
-    ) -> CancelRequest:
-        return CancelRequest(
-            request_id=arguments.get("requestId", None),
-            progress_id=arguments.get("progressId", None),
-        )
-
-
-@register_request
 @dataclasses.dataclass()
 class ConfigurationDoneRequest(Request):
-    """Client has finished initialization of the debug adpater.
+    """Client has finished initialization of the debug adapter.
 
     Sent by the client to signal it is done with the initial configuration of
     the debug adapter.
@@ -68,17 +83,9 @@ class ConfigurationDoneRequest(Request):
 
     command = Command.CONFIGURATION_DONE
 
-    @classmethod
-    def unpack(
-        cls,
-        arguments: dict[str, t.Any],
-    ) -> ConfigurationDoneRequest:
-        return ConfigurationDoneRequest()
 
-
-@register_request
 @dataclasses.dataclass()
-class ContinueRequest(Request):
+class ContinueRequest(Request, dap={"arguments": {"threadId": "thread_id", "singleThread": "single_thread"}}):
     """Request execution to resume.
 
     Sent by the client to request the thread execution to resume.
@@ -94,29 +101,18 @@ class ContinueRequest(Request):
     thread_id: int
     single_thread: bool = True
 
-    def pack(self) -> dict[str, t.Any]:
-        obj = super().pack()
-        obj["arguments"] = {
-            "threadId": self.thread_id,
-            "singleThread": self.single_thread,
-        }
 
-        return obj
-
-    @classmethod
-    def unpack(
-        cls,
-        arguments: dict[str, t.Any],
-    ) -> ContinueRequest:
-        return ContinueRequest(
-            thread_id=arguments["threadId"],
-            single_thread=arguments.get("singleThread", True),
-        )
-
-
-@register_request
 @dataclasses.dataclass()
-class DisconnectRequest(Request):
+class DisconnectRequest(
+    Request,
+    dap={
+        "arguments": {
+            "restart": "restart",
+            "terminateDebuggee": "terminate_debuggee",
+            "suspendDebuggee": "suspend_debuggee",
+        }
+    },
+):
     """Asks the DA to disconnect from the debuggee.
 
     Sent by the client to ask the DA to disconnect from the debuggee and
@@ -137,31 +133,19 @@ class DisconnectRequest(Request):
     terminate_debuggee: t.Optional[bool] = None
     suspend_debuggee: bool = False
 
-    def pack(self) -> dict[str, t.Any]:
-        obj = super().pack()
-        obj["arguments"] = {
-            "restart": self.restart,
-            "terminateDebuggee": self.terminate_debuggee,
-            "suspendDebuggee": self.suspend_debuggee,
-        }
 
-        return obj
-
-    @classmethod
-    def unpack(
-        cls,
-        arguments: dict[str, t.Any],
-    ) -> DisconnectRequest:
-        return DisconnectRequest(
-            restart=arguments.get("restart", False),
-            terminate_debuggee=arguments.get("terminateDebuggee", None),
-            suspend_debuggee=arguments.get("suspendDebuggee", False),
-        )
-
-
-@register_request
 @dataclasses.dataclass()
-class EvaluateRequest(Request):
+class EvaluateRequest(
+    Request,
+    dap={
+        "arguments": {
+            "expression": "expression",
+            "frameId": "frame_id",
+            "context": "context",
+            "format": "format",
+        }
+    },
+):
     """Evaluate given expression.
 
     Sent by the client to evaluate a given expression.
@@ -170,7 +154,7 @@ class EvaluateRequest(Request):
         expression: THe expression to evaluate.
         frame_id: The expression in the scope of this stack frame. If not
             specified, the expression is evaluated in the global scope.
-        context: The context in which the evluate request is used.
+        context: The context in which the evaluate request is used.
         format: Details on how to format the result.
     """
 
@@ -181,34 +165,30 @@ class EvaluateRequest(Request):
     context: t.Optional[t.Union[str, t.Literal["variables", "watch", "repl", "hover", "clipboard"]]] = None
     format: t.Optional[ValueFormat] = None
 
-    def pack(self) -> dict[str, t.Any]:
-        obj = super().pack()
-        obj["arguments"] = {
-            "expression": self.expression,
-            "frameId": self.frame_id,
-            "context": self.context,
-            "format": self.format.pack() if self.format else None,
-        }
 
-        return obj
-
-    @classmethod
-    def unpack(
-        cls,
-        arguments: dict[str, t.Any],
-    ) -> EvaluateRequest:
-        return EvaluateRequest(
-            expression=arguments["expression"],
-            frame_id=arguments.get("frameId", None),
-            context=arguments.get("context", None),
-            format=ValueFormat.unpack(arguments["format"]) if "format" in arguments else None,
-        )
-
-
-@register_request
 @dataclasses.dataclass()
-class InitializeRequest(Request):
-    """Initialize DA with client capabailities.
+class InitializeRequest(
+    Request,
+    dap={
+        "arguments": {
+            "clientID": "client_id",
+            "clientName": "client_name",
+            "adapterID": "adapter_id",
+            "locale": "locale",
+            "linesStartAt1": "lines_start_at_1",
+            "columnsStartAt1": "columns_start_at_1",
+            "pathFormat": "path_format",
+            "supportsVariableType": "supports_variable_type",
+            "supportsVariablePaging": "supports_variable_paging",
+            "supportsRunInTerminalRequest": "supports_run_in_terminal_request",
+            "supportsMemoryReferences": "supports_memory_references",
+            "supportsProgressReporting": "supports_progress_reporting",
+            "supportsInvalidatedEvent": "supports_invalidated_event",
+            "supportsMemoryEvent": "supports_memory_event",
+        }
+    },
+):
+    """Initialize DA with client capabilities.
 
     Send by the client to the debug adapter as the first message. It contains
     the capabilities of the client and expects the DA capabilities in the
@@ -250,57 +230,13 @@ class InitializeRequest(Request):
     supports_invalidated_event: bool = False
     supports_memory_event: bool = False
 
-    def pack(self) -> dict[str, t.Any]:
-        obj = super().pack()
-        obj["arguments"] = {
-            "clientID": self.client_id,
-            "clientName": self.client_name,
-            "adapterID": self.adapter_id,
-            "locale": self.locale,
-            "linesStartAt1": self.lines_start_at_1,
-            "columnsStartAt1": self.columns_start_at_1,
-            "pathFormat": self.path_format,
-            "supportsVariableType": self.supports_variable_type,
-            "supportsVariablePaging": self.supports_variable_paging,
-            "supportsRunInTerminalRequest": self.supports_run_in_terminal_request,
-            "supportsMemoryReferences": self.supports_memory_references,
-            "supportsProgressReporting": self.supports_progress_reporting,
-            "supportsInvalidatedEvent": self.supports_invalidated_event,
-            "supportsMemoryEvent": self.supports_memory_event,
-        }
 
-        return obj
-
-    @classmethod
-    def unpack(
-        cls,
-        arguments: dict[str, t.Any],
-    ) -> InitializeRequest:
-        return InitializeRequest(
-            adapter_id=arguments["adapterID"],
-            client_id=arguments.get("clientID", None),
-            client_name=arguments.get("clientName", None),
-            locale=arguments.get("locale", None),
-            lines_start_at_1=arguments.get("linesStartAt1", True),
-            columns_start_at_1=arguments.get("columnsStartAt1", True),
-            path_format=arguments.get("pathFormat", "path"),
-            supports_variable_type=arguments.get("supportsVariableType", False),
-            supports_variable_paging=arguments.get("supportsVariablePaging", False),
-            supports_run_in_terminal_request=arguments.get("supportsRunInTerminalRequest", False),
-            supports_memory_references=arguments.get("supportsMemoryReferences", False),
-            supports_progress_reporting=arguments.get("supportsProgressReporting", False),
-            supports_invalidated_event=arguments.get("supportsInvalidatedEvent", False),
-            supports_memory_event=arguments.get("supportsMemoryEvent", False),
-        )
-
-
-@register_request
 @dataclasses.dataclass()
-class LaunchRequest(Request):
-    """Request to start the debugee with or without debugging.
+class LaunchRequest(Request, dap={"arguments": {"noDebug": "no_debug", "__restart": "restart"}}):
+    """Request to start the debuggee with or without debugging.
 
     This is a request sent from the client to the debug adapter to start the
-    debugee with or without debugging.
+    debuggee with or without debugging.
 
     Args:
         arguments: The arguments from the client, the structure of this is
@@ -316,33 +252,37 @@ class LaunchRequest(Request):
     restart: t.Any = None
 
     def pack(self) -> dict[str, t.Any]:
-        obj = super().pack()
-        args = self.arguments.copy()
-        args["noDebug"] = self.no_debug
-        args["__restart"] = self.restart
+        value = super().pack()
+        value["arguments"].update(self.arguments)
 
-        obj["arguments"] = args
-
-        return obj
+        return value
 
     @classmethod
-    def unpack(
-        cls,
-        arguments: dict[str, t.Any],
-    ) -> LaunchRequest:
-        args = arguments.copy()
-        no_debug = args.pop("noDebug", False)
-        restart = args.pop("__restart", None)
-        return LaunchRequest(
-            arguments=args,
+    def unpack(cls, data: dict[str, t.Any]) -> LaunchRequest:
+        arguments = data["arguments"]
+        no_debug = arguments.pop("noDebug", False)
+        restart = arguments.pop("__restart", None)
+        obj = LaunchRequest(
+            arguments=arguments,
             no_debug=no_debug,
             restart=restart,
         )
+        object.__setattr__(obj, "seq", data["seq"])
+
+        return obj
 
 
-@register_request
 @dataclasses.dataclass()
-class NextRequest(Request):
+class NextRequest(
+    Request,
+    dap={
+        "arguments": {
+            "threadId": "thread_id",
+            "singleThread": "single_thread",
+            "granularity": "granularity",
+        }
+    },
+):
     """Request to execute one step.
 
     This is a request sent from the client to the debug adapter to execute the
@@ -360,84 +300,47 @@ class NextRequest(Request):
     single_thread: bool = False
     granularity: t.Literal["statement", "line", "instruction"] = "statement"
 
-    def pack(self) -> dict[str, t.Any]:
-        obj = super().pack()
-        obj["arguments"] = {
-            "threadId": self.thread_id,
-            "singleThread": self.single_thread,
-            "granularity": self.granularity,
-        }
 
-        return obj
-
-    @classmethod
-    def unpack(
-        cls,
-        arguments: dict[str, t.Any],
-    ) -> NextRequest:
-        return NextRequest(
-            thread_id=arguments["threadId"],
-            single_thread=arguments.get("singleThread", False),
-            granularity=arguments.get("granularity", "statement"),
-        )
-
-
-@register_request
 @dataclasses.dataclass()
-class RunInTerminalRequest(Request):
+class RunInTerminalRequest(
+    Request,
+    dap={
+        "arguments": {
+            "kind": "kind",
+            "title": "title",
+            "cwd": "cwd",
+            "args": "args",
+            "env": "env",
+        }
+    },
+):
     """Request from the debug adapter to run a command.
 
     This is a request from the debug adapter to the client to run a command in
-    the client's terminal. This is typically used to launch the debugee in a
+    the client's terminal. This is typically used to launch the debuggee in a
     terminal provided by the client.
 
     Args:
         kind: The type of terminal to launch with.
+        title: The title of the terminal.
         cwd: The working directory of the command.
         args: List of arguments, including the executable, to run the command
             with.
         env: Optional environment key-value pairs that are added to or removed
             from the default environment.
-        title: The title of the terminal.
     """
 
     command = Command.RUN_IN_TERMINAL
 
     kind: t.Literal["integrated", "external"] = "integrated"
+    title: t.Optional[str] = None
     cwd: str = ""
     args: t.List[str] = dataclasses.field(default_factory=list)
     env: t.Dict[str, t.Optional[str]] = dataclasses.field(default_factory=dict)
-    title: t.Optional[str] = None
-
-    def pack(self) -> dict[str, t.Any]:
-        obj = super().pack()
-        obj["arguments"] = {
-            "kind": self.kind,
-            "title": self.title,
-            "cwd": self.cwd,
-            "args": self.args,
-            "env": self.env,
-        }
-
-        return obj
-
-    @classmethod
-    def unpack(
-        cls,
-        arguments: dict[str, t.Any],
-    ) -> RunInTerminalRequest:
-        return RunInTerminalRequest(
-            kind=arguments.get("kind", "integrated"),
-            cwd=arguments["cwd"],
-            args=arguments["args"],
-            env=arguments.get("env", {}),
-            title=arguments.get("title", None),
-        )
 
 
-@register_request
 @dataclasses.dataclass
-class ScopesRequest(Request):
+class ScopesRequest(Request, dap={"arguments": {"frameId": "frame_id"}}):
     """Request variables scopes.
 
     Requests variable scopes for a given stackframe ID.
@@ -450,27 +353,19 @@ class ScopesRequest(Request):
 
     frame_id: int
 
-    def pack(self) -> dict[str, t.Any]:
-        obj = super().pack()
-        obj["arguments"] = {
-            "frameId": self.frame_id,
-        }
 
-        return obj
-
-    @classmethod
-    def unpack(
-        cls,
-        arguments: dict[str, t.Any],
-    ) -> ScopesRequest:
-        return ScopesRequest(
-            frame_id=arguments["frameId"],
-        )
-
-
-@register_request
 @dataclasses.dataclass
-class SetBreakpointsRequest(Request):
+class SetBreakpointsRequest(
+    Request,
+    dap={
+        "arguments": {
+            "source": "source",
+            "breakpoints": "breakpoints",
+            "lines": "lines",
+            "sourceModified": "source_modified",
+        }
+    },
+):
     """Set breakpoint for a source.
 
     Used by the client to set breakpoints and clear any previous breakpoints
@@ -491,34 +386,19 @@ class SetBreakpointsRequest(Request):
     lines: t.List[int] = dataclasses.field(default_factory=list)
     source_modified: bool = False
 
-    def pack(self) -> dict[str, t.Any]:
-        obj = super().pack()
-        obj["arguments"] = {
-            "source": self.source.pack(),
-            "breakpoints": [b.pack() for b in self.breakpoints],
-            "lines": self.lines,
-            "sourceModified": self.source_modified,
-        }
 
-        return obj
-
-    @classmethod
-    def unpack(
-        cls,
-        arguments: dict[str, t.Any],
-    ) -> SetBreakpointsRequest:
-        return SetBreakpointsRequest(
-            source=Source.unpack(arguments["source"]),
-            breakpoints=[SourceBreakpoint.unpack(b) for b in arguments.get("breakpoints", [])],
-            lines=arguments.get("lines", []),
-            source_modified=arguments.get("sourceModified", False),
-        )
-
-
-@register_request
 @dataclasses.dataclass()
-class SetExceptionBreakpointsRequest(Request):
-    """Configure exception breakpoint behaviour.
+class SetExceptionBreakpointsRequest(
+    Request,
+    dap={
+        "arguments": {
+            "filters": "filters",
+            "filterOptions": "filter_options",
+            "exceptionOptions": "exception_options",
+        }
+    },
+):
+    """Configure exception breakpoint behavior.
 
     Sent by the client to configure the debugger's response to thrown
     exceptions.
@@ -537,31 +417,19 @@ class SetExceptionBreakpointsRequest(Request):
     filter_options: t.List[ExceptionFilterOptions] = dataclasses.field(default_factory=list)
     exception_options: t.List[ExceptionOptions] = dataclasses.field(default_factory=list)
 
-    def pack(self) -> dict[str, t.Any]:
-        obj = super().pack()
-        obj["arguments"] = {
-            "filters": self.filters,
-            "filterOptions": [fo.pack() for fo in self.filter_options],
-            "exceptionOptions": [eo.pack() for eo in self.exception_options],
-        }
 
-        return obj
-
-    @classmethod
-    def unpack(
-        cls,
-        arguments: dict[str, t.Any],
-    ) -> SetExceptionBreakpointsRequest:
-        return SetExceptionBreakpointsRequest(
-            filters=arguments.get("filters", []),
-            filter_options=[ExceptionFilterOptions.unpack(e) for e in arguments.get("filterOptions", [])],
-            exception_options=[ExceptionOptions.unpack(e) for e in arguments.get("exceptionOptions", [])],
-        )
-
-
-@register_request
 @dataclasses.dataclass()
-class SetVariableRequest(Request):
+class SetVariableRequest(
+    Request,
+    dap={
+        "arguments": {
+            "variablesReference": "variables_reference",
+            "name": "name",
+            "value": "value",
+            "format": "format",
+        }
+    },
+):
     """Set the variable with a new value.
 
     Sets a variable in a given context with a new value.
@@ -580,33 +448,19 @@ class SetVariableRequest(Request):
     value: str
     format: t.Optional[ValueFormat] = None
 
-    def pack(self) -> dict[str, t.Any]:
-        obj = super().pack()
-        obj["arguments"] = {
-            "variablesReference": self.variables_reference,
-            "name": self.name,
-            "value": self.value,
-            "format": self.format.pack() if self.format else None,
-        }
 
-        return obj
-
-    @classmethod
-    def unpack(
-        cls,
-        arguments: dict[str, t.Any],
-    ) -> SetVariableRequest:
-        return SetVariableRequest(
-            variables_reference=arguments["variablesReference"],
-            name=arguments["name"],
-            value=arguments["value"],
-            format=ValueFormat.unpack(arguments["format"]) if "format" in arguments else None,
-        )
-
-
-@register_request
 @dataclasses.dataclass()
-class StackTraceRequest(Request):
+class StackTraceRequest(
+    Request,
+    dap={
+        "arguments": {
+            "threadId": "thread_id",
+            "startFrame": "start_frame",
+            "levels": "levels",
+            "format": "format",
+        }
+    },
+):
     """Request a stacktrace.
 
     Sent by the client to request a stacktrace from the current execution
@@ -626,40 +480,26 @@ class StackTraceRequest(Request):
     levels: t.Optional[int] = None
     format: t.Optional[StackFrameFormat] = None
 
-    def pack(self) -> dict[str, t.Any]:
-        obj = super().pack()
-        obj["arguments"] = {
-            "threadId": self.thread_id,
-            "startFrame": self.start_frame,
-            "levels": self.levels,
-            "format": self.format.pack() if self.format else None,
-        }
 
-        return obj
-
-    @classmethod
-    def unpack(
-        cls,
-        arguments: dict[str, t.Any],
-    ) -> StackTraceRequest:
-        return StackTraceRequest(
-            thread_id=arguments["threadId"],
-            start_frame=arguments.get("startFrame", None),
-            levels=arguments.get("levels", None),
-            format=StackFrameFormat.unpack(arguments["format"]) if "format" in arguments else None,
-        )
-
-
-@register_request
 @dataclasses.dataclass()
-class StepInRequest(Request):
+class StepInRequest(
+    Request,
+    dap={
+        "arguments": {
+            "threadId": "thread_id",
+            "singleThread": "single_thread",
+            "targetId": "thread_id",
+            "granularity": "granularity",
+        }
+    },
+):
     """Request to step into a function/method.
 
     Sent by the client to request the given thread to step into a function
     and allows all other threads to run freely by resuming them.
 
     Args:
-        thread_id: The thread for which to resume exeuction for on step into.
+        thread_id: The thread for which to resume execution for on step into.
         single_thread: If True, all other suspended threads are not resumed.
         target_id: The id of the target to step into.
         granularity: Granularity level to step.
@@ -672,40 +512,25 @@ class StepInRequest(Request):
     target_id: t.Optional[int] = None
     granularity: t.Literal["statement", "line", "instruction"] = "statement"
 
-    def pack(self) -> dict[str, t.Any]:
-        obj = super().pack()
-        obj["arguments"] = {
-            "threadId": self.thread_id,
-            "singleThread": self.single_thread,
-            "targetId": self.thread_id,
-            "granularity": self.granularity,
-        }
 
-        return obj
-
-    @classmethod
-    def unpack(
-        cls,
-        arguments: dict[str, t.Any],
-    ) -> StepInRequest:
-        return StepInRequest(
-            thread_id=arguments["threadId"],
-            single_thread=arguments.get("singleThread", False),
-            target_id=arguments.get("targetId", None),
-            granularity=arguments.get("granularity", "statement"),
-        )
-
-
-@register_request
 @dataclasses.dataclass()
-class StepOutRequest(Request):
+class StepOutRequest(
+    Request,
+    dap={
+        "arguments": {
+            "threadId": "thread_id",
+            "singleThread": "single_thread",
+            "granularity": "granularity",
+        }
+    },
+):
     """Request to ste out from a function/method.
 
     Sent by the client to request the given thread to step out of a function
     and allows all the other threads to run freely by resuming them.
 
     Args:
-        thread_id: The thread for whcih to resume exeuction for one step out.
+        thread_id: The thread for which to resume execution for one step out.
         single_thread: If True, all other suspended threads are not resumed.
         granularity: Granularity level to step.
     """
@@ -716,29 +541,7 @@ class StepOutRequest(Request):
     single_thread: bool = False
     granularity: t.Literal["statement", "line", "instruction"] = "statement"
 
-    def pack(self) -> dict[str, t.Any]:
-        obj = super().pack()
-        obj["arguments"] = {
-            "threadId": self.thread_id,
-            "singleThread": self.single_thread,
-            "granularity": self.granularity,
-        }
 
-        return obj
-
-    @classmethod
-    def unpack(
-        cls,
-        arguments: dict[str, t.Any],
-    ) -> StepOutRequest:
-        return StepOutRequest(
-            thread_id=arguments["threadId"],
-            single_thread=arguments.get("singleThread", False),
-            granularity=arguments.get("granularity", "statement"),
-        )
-
-
-@register_request
 @dataclasses.dataclass()
 class ThreadsRequest(Request):
     """Request to retrieve a list of all thread.
@@ -748,17 +551,20 @@ class ThreadsRequest(Request):
 
     command = Command.THREADS
 
-    @classmethod
-    def unpack(
-        cls,
-        arguments: dict[str, t.Any],
-    ) -> ThreadsRequest:
-        return ThreadsRequest()
 
-
-@register_request
 @dataclasses.dataclass()
-class VariablesRequest(Request):
+class VariablesRequest(
+    Request,
+    dap={
+        "arguments": {
+            "variablesReference": "variables_reference",
+            "filter": "filter",
+            "start": "start",
+            "count": "count",
+            "format": "format",
+        }
+    },
+):
     """Retrieves variables.
 
     Request sent by the client to retrieve all child variables for the given
@@ -780,28 +586,3 @@ class VariablesRequest(Request):
     start: t.Optional[int] = None
     count: t.Optional[int] = None
     format: t.Optional[ValueFormat] = None
-
-    def pack(self) -> dict[str, t.Any]:
-        obj = super().pack()
-        obj["arguments"] = {
-            "variablesReference": self.variables_reference,
-            "filter": self.filter,
-            "start": self.start,
-            "count": self.count,
-            "format": self.format.pack() if self.format else None,
-        }
-
-        return obj
-
-    @classmethod
-    def unpack(
-        cls,
-        arguments: dict[str, t.Any],
-    ) -> VariablesRequest:
-        return VariablesRequest(
-            variables_reference=arguments["variablesReference"],
-            filter=arguments.get("filter", None),
-            start=arguments.get("start", None),
-            count=arguments.get("count", None),
-            format=ValueFormat.unpack(arguments["format"]) if "format" in arguments else None,
-        )

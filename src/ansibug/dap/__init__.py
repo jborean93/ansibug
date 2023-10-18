@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # Copyright (c) 2022 Jordan Borean
 # GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
 
@@ -12,8 +11,17 @@ from ._events import (
     TerminatedEvent,
     ThreadEvent,
 )
-from ._messages import ErrorResponse, Event, ProtocolMessage, Request, Response
+from ._messages import (
+    Command,
+    Event,
+    EventType,
+    MessageType,
+    ProtocolMessage,
+    Request,
+    Response,
+)
 from ._requests import (
+    AttachRequest,
     CancelRequest,
     ConfigurationDoneRequest,
     ContinueRequest,
@@ -34,10 +42,12 @@ from ._requests import (
     VariablesRequest,
 )
 from ._responses import (
+    AttachResponse,
     CancelResponse,
     ConfigurationDoneResponse,
     ContinueResponse,
     DisconnectResponse,
+    ErrorResponse,
     EvaluateResponse,
     InitializeResponse,
     LaunchResponse,
@@ -73,12 +83,15 @@ from ._types import (
 )
 
 __all__ = [
+    "AttachRequest",
+    "AttachResponse",
     "Breakpoint",
     "BreakpointEvent",
     "CancelRequest",
     "CancelResponse",
     "Capabilities",
     "Checksum",
+    "Command",
     "ConfigurationDoneRequest",
     "ConfigurationDoneResponse",
     "ContinueRequest",
@@ -90,6 +103,7 @@ __all__ = [
     "EvaluateRequest",
     "EvaluateResponse",
     "Event",
+    "EventType",
     "ExceptionFilterOptions",
     "ExceptionOptions",
     "ExceptionPathSegment",
@@ -100,6 +114,7 @@ __all__ = [
     "LaunchRequest",
     "LaunchResponse",
     "Message",
+    "MessageType",
     "NextRequest",
     "NextResponse",
     "ProtocolMessage",

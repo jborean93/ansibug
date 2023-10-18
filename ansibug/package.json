@@ -44,6 +44,25 @@
 								],
 								"description": "The process id of the ansible-playbook process to attach to.",
 								"default": "${command:PickAnsibleProcess}"
+							},
+							"address": {
+								"type": "string",
+								"description": "The host that is running the ansible-playbook process.",
+								"default": "localhost"
+							},
+							"port": {
+								"type": "int",
+								"description": "The host port to connect to."
+							},
+							"useTLS": {
+								"type": "boolean",
+								"description": "Wrap the communication socket with TLS to add server verification and encryption to the connection.",
+								"default": false
+							},
+							"tlsVerification": {
+								"type": "string",
+								"description": "The TLS verification settings, defaults to verify but can be set to ignore to ignore the verification checks. Can also be set to the path of a file or directory to use as the CA trust store.",
+								"default": "verify"
 							}
 						}
 					},
@@ -85,16 +104,6 @@
 									"warning",
 									"error"
 								]
-							},
-							"useTLS": {
-								"type": "boolean",
-								"description": "Wrap the communication socket with TLS to add server verification and encryption to the connection.",
-								"default": false
-							},
-							"tlsVerification": {
-								"type": "string",
-								"description": "The TLS verification settings, defaults to verify but can be set to ignore to ignore the verification checks. Can also be set to the path of a file or directory to use as the CA trust store.",
-								"default": "verify"
 							},
 							"playbook": {
 								"type": "string",
