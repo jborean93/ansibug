@@ -7,7 +7,6 @@ import io
 import os
 import pathlib
 import queue
-import re
 import subprocess
 import sys
 import threading
@@ -18,13 +17,11 @@ import typing as t
 import ansibug.dap as dap
 from ansibug._debuggee import get_pid_info_path
 
-DEVPY_DISABLE_WARNING = {"PYDEVD_DISABLE_FILE_VALIDATION": "1"}
-
 ResponseMessage = t.TypeVar("ResponseMessage", bound=dap.ProtocolMessage)
 
 
 def get_test_env() -> dict[str, str]:
-    env = os.environ | DEVPY_DISABLE_WARNING
+    env = os.environ | {"PYDEVD_DISABLE_FILE_VALIDATION": "1"}
 
     # We don't want this var from the outside to interfer with our test
     env.pop("ANSIBLE_CALLBACKS_ENABLED", None)
@@ -38,13 +35,14 @@ class DAPClient:
     def __init__(self) -> None:
         self._client = dap.DebugAdapterConnection()
 
+        proc_env = get_test_env()
         self._dap_proc = subprocess.Popen(
             [sys.executable, "-m", "ansibug", "dap"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             bufsize=0,
-            env=os.environ | DEVPY_DISABLE_WARNING,
+            env=proc_env,
         )
         self._stdin = t.cast(io.BytesIO, self._dap_proc.stdin)
         self._stderr: bytes | None = None
@@ -155,7 +153,7 @@ class DAPClient:
         )
 
         pid_path = get_pid_info_path(proc.pid)
-        for _ in range(5):
+        for _ in range(10):
             if pid_path.exists():
                 break
             elif (rc := proc.poll()) is not None:

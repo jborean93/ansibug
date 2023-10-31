@@ -12,7 +12,10 @@
             "request": "launch",
             "playbook": "main.yml",
             "logFile": "/tmp/ansibug.log",
-            "logLevel": "debug"
+            "logLevel": "debug",
+            "args": [
+                "-vvv"
+            ]
         }
     ]
 }

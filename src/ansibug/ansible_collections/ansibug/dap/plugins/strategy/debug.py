@@ -32,7 +32,7 @@ from ansible.playbook.play import Play
 from ansible.playbook.play_context import PlayContext
 from ansible.playbook.task import Task
 from ansible.plugins.strategy.linear import StrategyModule as LinearStrategy
-from ansible.template import Templar
+from ansible.template import AnsibleNativeEnvironment, Templar
 from ansible.utils.display import Display
 from ansible.vars.manager import VariableManager
 
@@ -142,7 +142,7 @@ class AnsibleVariable:
         id: int,
         stackframe: AnsibleStackFrame,
         getter: t.Callable[[], collections.abc.Iterable[tuple[str, t.Any]]],
-        setter: t.Callable[[ansibug.dap.SetVariableRequest], tuple[t.Any, AnsibleVariable | None]] | None = None,
+        setter: t.Callable[[ansibug.dap.SetVariableRequest, t.Any], None] | None = None,
         named_variables: int = 0,
         indexed_variables: int = 0,
     ) -> None:
@@ -335,7 +335,7 @@ class AnsibleDebugState(ansibug.DebugState):
         self,
         stackframe: AnsibleStackFrame,
         getter: t.Callable[[], collections.abc.Iterable[tuple[str, t.Any]]],
-        setter: t.Callable[[ansibug.dap.SetVariableRequest], tuple[t.Any, AnsibleVariable | None]] | None = None,
+        setter: t.Callable[[ansibug.dap.SetVariableRequest, t.Any], None] | None = None,
         named_variables: int = 0,
         indexed_variables: int = 0,
     ) -> AnsibleVariable:
@@ -360,9 +360,11 @@ class AnsibleDebugState(ansibug.DebugState):
     ) -> AnsibleVariable:
         if isinstance(value, collections.abc.Mapping):
 
-            def setter(request: ansibug.dap.SetVariableRequest) -> tuple[t.Any, AnsibleVariable | None]:
-                value[request.name] = request.value  # type: ignore[index] # Not checking isinstance
-                return request.value, None
+            def setter(
+                request: ansibug.dap.SetVariableRequest,
+                new_value: t.Any,
+            ) -> None:
+                value[request.name] = new_value  # type: ignore[index] # Not checking isinstance
 
             return self.add_variable(
                 stackframe,
@@ -373,9 +375,11 @@ class AnsibleDebugState(ansibug.DebugState):
 
         else:
 
-            def setter(request: ansibug.dap.SetVariableRequest) -> tuple[t.Any, AnsibleVariable | None]:
-                value[int(request.name)] = request.value  # type: ignore[index] # Not checking isinstance
-                return request.value, None
+            def setter(
+                request: ansibug.dap.SetVariableRequest,
+                new_value: t.Any,
+            ) -> None:
+                value[int(request.name)] = new_value  # type: ignore[index] # Not checking isinstance
 
             return self.add_variable(
                 stackframe,
@@ -457,9 +461,11 @@ class AnsibleDebugState(ansibug.DebugState):
             if task_value == omit_value:
                 del task_args[task_key]
 
-        def module_opts_setter(request: ansibug.dap.SetVariableRequest) -> tuple[t.Any, AnsibleVariable | None]:
-            sf.task.args[request.name] = request.value
-            return request.value, None
+        def module_opts_setter(
+            request: ansibug.dap.SetVariableRequest,
+            new_value: t.Any,
+        ) -> None:
+            sf.task.args[request.name] = new_value
 
         module_opts = self.add_variable(
             sf,
@@ -573,19 +579,27 @@ class AnsibleDebugState(ansibug.DebugState):
     ) -> ansibug.dap.SetVariableResponse:
         variable = self.variables[request.variables_reference]
         if not variable.setter:
-            raise Exception(f"Cannot set {request.name}")
+            raise Exception(f"Cannot set {request.name}, no known setter available")
 
-        new_value, new_container = variable.setter(request)
-        if (
-            not new_container
-            and isinstance(new_value, (collections.abc.Mapping, collections.abc.Sequence))
-            and not isinstance(new_value, str)
+        # Run the new variable through a template, always use native types even
+        # if the config has not been enabled as this allows users to set things
+        # like ints and other native types.
+        templar = Templar(loader=self._loader, variables=variable.stackframe.task_vars)
+        if not C.DEFAULT_JINJA2_NATIVE:
+            templar = templar.copy_with_new_env(environment_class=AnsibleNativeEnvironment)
+
+        new_value = templar.template("{{ %s }}" % request.value)
+
+        variable.setter(request, new_value)
+        new_container = None
+        if isinstance(new_value, (collections.abc.Mapping, collections.abc.Sequence)) and not isinstance(
+            new_value, str
         ):
             new_container = self.add_collection_variable(variable.stackframe, new_value)
 
         return ansibug.dap.SetVariableResponse(
             request_seq=request.seq,
-            value=new_value,
+            value=repr(new_value),
             type=type(new_value).__name__,
             variables_reference=new_container.id if new_container else 0,
             named_variables=new_container.named_variables if new_container else 0,
