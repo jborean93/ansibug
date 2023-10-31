@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # Copyright (c) 2022 Jordan Borean
 # GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
 
@@ -7,10 +6,11 @@ from __future__ import annotations
 import dataclasses
 import typing as t
 
-from ._messages import Command, Response, register_response
+from ._messages import Command, Response
 from ._types import (
     Breakpoint,
     Capabilities,
+    Message,
     Scope,
     StackFrame,
     Thread,
@@ -19,86 +19,58 @@ from ._types import (
 )
 
 
-@register_response
+@dataclasses.dataclass()
+class AttachResponse(Response):
+    """Response to the AttachRequest."""
+
+    command = Command.ATTACH
+
+
 @dataclasses.dataclass()
 class CancelResponse(Response):
     """Response to the CancelRequest."""
 
     command = Command.CANCEL
 
-    @classmethod
-    def unpack(
-        cls,
-        request_seq: int,
-        body: dict[str, t.Any],
-    ) -> CancelResponse:
-        return CancelResponse(request_seq=request_seq)
 
-
-@register_response
 @dataclasses.dataclass()
 class ConfigurationDoneResponse(Response):
     """Response to the ConfigurationDoneRequest."""
 
-    command = Command.LAUNCH
-
-    @classmethod
-    def unpack(
-        cls,
-        request_seq: int,
-        body: dict[str, t.Any],
-    ) -> ConfigurationDoneResponse:
-        return ConfigurationDoneResponse(request_seq=request_seq)
+    command = Command.CONFIGURATION_DONE
 
 
-@register_response
 @dataclasses.dataclass()
-class ContinueResponse(Response):
+class ContinueResponse(Response, dap={"body": {"allThreadsContinued": "all_threads_continued"}}):
     """Response to the ContinueRequest."""
 
     command = Command.CONTINUE
 
     all_threads_continued: bool = True
 
-    def pack(self) -> dict[str, t.Any]:
-        obj = super().pack()
-        obj["body"] = {
-            "allThreadsContinued": self.all_threads_continued,
-        }
 
-        return obj
-
-    @classmethod
-    def unpack(
-        cls,
-        request_seq: int,
-        body: dict[str, t.Any],
-    ) -> ContinueResponse:
-        return ContinueResponse(
-            request_seq=request_seq,
-            all_threads_continued=body.get("allThreadsContinued", True),
-        )
-
-
-@register_response
 @dataclasses.dataclass()
 class DisconnectResponse(Response):
     """Response to the DisconnectRequest."""
 
     command = Command.DISCONNECT
 
-    @classmethod
-    def unpack(
-        cls,
-        request_seq: int,
-        body: dict[str, t.Any],
-    ) -> DisconnectResponse:
-        return DisconnectResponse(request_seq=request_seq)
 
-
-@register_response
 @dataclasses.dataclass()
-class EvaluateResponse(Response):
+class EvaluateResponse(
+    Response,
+    dap={
+        "body": {
+            "result": "result",
+            "type": "type",
+            "presentationHint": "presentation_hint",
+            "variablesReference": "variables_reference",
+            "namedVariables": "named_variables",
+            "indexedVariables": "indexed_variables",
+            "memoryReference": "memory_reference",
+        }
+    },
+):
     """Response to the EvaluateRequest."""
 
     command = Command.EVALUATE
@@ -111,46 +83,12 @@ class EvaluateResponse(Response):
     indexed_variables: t.Optional[int] = None
     memory_reference: t.Optional[str] = None
 
-    def pack(self) -> dict[str, t.Any]:
-        obj = super().pack()
-        obj["body"] = {
-            "result": self.result,
-            "type": self.type,
-            "presentationHint": self.presentation_hint.pack() if self.presentation_hint else None,
-            "variablesReference": self.variables_reference,
-            "namedVariables": self.named_variables,
-            "indexedVariables": self.indexed_variables,
-            "memoryReference": self.memory_reference,
-        }
 
-        return obj
-
-    @classmethod
-    def unpack(
-        cls,
-        request_seq: int,
-        body: dict[str, t.Any],
-    ) -> EvaluateResponse:
-        return EvaluateResponse(
-            request_seq=request_seq,
-            result=body["result"],
-            type=body.get("type", None),
-            presentation_hint=VariablePresentationHint.unpack(body["presentationHint"])
-            if "presentationHint" in body
-            else None,
-            variables_reference=body["variablesReference"],
-            named_variables=body.get("namedVariables", None),
-            indexed_variables=body.get("indexedVariables", None),
-            memory_reference=body.get("memoryReference", None),
-        )
-
-
-@register_response
 @dataclasses.dataclass()
-class InitializeResponse(Response):
+class InitializeResponse(Response, dap={"body": "capabilities"}):
     """Response to InitializeRequest
 
-    The reponse sent to the client of the InitializeRequest message.
+    The response sent to the client of the InitializeRequest message.
 
     Args:
         capabilities: The DA capabilities.
@@ -160,59 +98,23 @@ class InitializeResponse(Response):
 
     capabilities: Capabilities
 
-    def pack(self) -> dict[str, t.Any]:
-        obj = super().pack()
-        obj["body"] = self.capabilities.pack()
 
-        return obj
-
-    @classmethod
-    def unpack(
-        cls,
-        request_seq: int,
-        body: dict[str, t.Any],
-    ) -> InitializeResponse:
-        return InitializeResponse(
-            request_seq=request_seq,
-            capabilities=Capabilities.unpack(body),
-        )
-
-
-@register_response
 @dataclasses.dataclass()
 class LaunchResponse(Response):
     """Response to a LaunchRequest."""
 
     command = Command.LAUNCH
 
-    @classmethod
-    def unpack(
-        cls,
-        request_seq: int,
-        body: dict[str, t.Any],
-    ) -> LaunchResponse:
-        return LaunchResponse(request_seq=request_seq)
 
-
-@register_response
 @dataclasses.dataclass()
 class NextResponse(Response):
     """Response to a NextRequest."""
 
     command = Command.NEXT
 
-    @classmethod
-    def unpack(
-        cls,
-        request_seq: int,
-        body: dict[str, t.Any],
-    ) -> NextResponse:
-        return NextResponse(request_seq=request_seq)
 
-
-@register_response
 @dataclasses.dataclass()
-class RunInTerminalResponse(Response):
+class RunInTerminalResponse(Response, dap={"body": {"processId": "process_id", "shellProcessId": "shell_process_id"}}):
     """Response to RunInTerminalRequest.
 
     The response to a RunInTerminalRequest. It is expected either process_id or
@@ -225,34 +127,12 @@ class RunInTerminalResponse(Response):
 
     command = Command.RUN_IN_TERMINAL
 
-    process_id: t.Optional[int]
-    shell_process_id: t.Optional[int]
-
-    def pack(self) -> dict[str, t.Any]:
-        obj = super().pack()
-        obj["body"] = {
-            "processId": self.process_id,
-            "shellProcessId": self.shell_process_id,
-        }
-
-        return obj
-
-    @classmethod
-    def unpack(
-        cls,
-        request_seq: int,
-        body: dict[str, t.Any],
-    ) -> RunInTerminalResponse:
-        return RunInTerminalResponse(
-            request_seq=request_seq,
-            process_id=body.get("processId", None),
-            shell_process_id=body.get("shellProcessId", None),
-        )
+    process_id: t.Optional[int] = None
+    shell_process_id: t.Optional[int] = None
 
 
-@register_response
 @dataclasses.dataclass()
-class ScopesResponse(Response):
+class ScopesResponse(Response, dap={"body": {"scopes": "scopes"}}):
     """Response to ScopesRequest.
 
     The response to ScopesRequest that requests the variable scopes for a given
@@ -266,29 +146,9 @@ class ScopesResponse(Response):
 
     scopes: t.List[Scope] = dataclasses.field(default_factory=list)
 
-    def pack(self) -> dict[str, t.Any]:
-        obj = super().pack()
-        obj["body"] = {
-            "scopes": [s.pack() for s in self.scopes],
-        }
 
-        return obj
-
-    @classmethod
-    def unpack(
-        cls,
-        request_seq: int,
-        body: dict[str, t.Any],
-    ) -> ScopesResponse:
-        return ScopesResponse(
-            request_seq=request_seq,
-            scopes=[Scope.unpack(s) for s in body["scopes"]],
-        )
-
-
-@register_response
 @dataclasses.dataclass()
-class SetBreakpointsResponse(Response):
+class SetBreakpointsResponse(Response, dap={"body": {"breakpoints": "breakpoints"}}):
     """Response to SetBreakpointsRequest.
 
     The response to SetBreakpointRequest that returns the information about
@@ -303,29 +163,9 @@ class SetBreakpointsResponse(Response):
 
     breakpoints: t.List[Breakpoint] = dataclasses.field(default_factory=list)
 
-    def pack(self) -> dict[str, t.Any]:
-        obj = super().pack()
-        obj["body"] = {
-            "breakpoints": [b.pack() for b in self.breakpoints],
-        }
 
-        return obj
-
-    @classmethod
-    def unpack(
-        cls,
-        request_seq: int,
-        body: dict[str, t.Any],
-    ) -> SetBreakpointsResponse:
-        return SetBreakpointsResponse(
-            request_seq=request_seq,
-            breakpoints=[Breakpoint.unpack(b) for b in body["breakpoints"]],
-        )
-
-
-@register_response
 @dataclasses.dataclass()
-class SetExceptionBreakpointsResponse(Response):
+class SetExceptionBreakpointsResponse(Response, dap={"body": {"breakpoints": "breakpoints"}}):
     """Response to SetExceptionBreakpointsRequest.
 
     This is the response to the SetExceptionBreakpointsRequest that contains
@@ -340,27 +180,20 @@ class SetExceptionBreakpointsResponse(Response):
 
     breakpoints: t.List[Breakpoint] = dataclasses.field(default_factory=list)
 
-    def pack(self) -> dict[str, t.Any]:
-        obj = super().pack()
-        obj["body"] = {"breakpoints": [b.pack() for b in self.breakpoints]}
 
-        return obj
-
-    @classmethod
-    def unpack(
-        cls,
-        request_seq: int,
-        body: dict[str, t.Any],
-    ) -> SetExceptionBreakpointsResponse:
-        return SetExceptionBreakpointsResponse(
-            request_seq=request_seq,
-            breakpoints=[Breakpoint.unpack(b) for b in body.get("breakpoints", [])],
-        )
-
-
-@register_response
 @dataclasses.dataclass()
-class SetVariableResponse(Response):
+class SetVariableResponse(
+    Response,
+    dap={
+        "body": {
+            "value": "value",
+            "type": "type",
+            "variablesReference": "variables_reference",
+            "namedVariables": "named_variables",
+            "indexedVariables": "indexed_variables",
+        }
+    },
+):
     """Response to SetVariableRequest."""
 
     command = Command.SET_VARIABLE
@@ -371,37 +204,9 @@ class SetVariableResponse(Response):
     named_variables: t.Optional[int] = None
     indexed_variables: t.Optional[int] = None
 
-    def pack(self) -> dict[str, t.Any]:
-        obj = super().pack()
-        obj["body"] = {
-            "value": self.value,
-            "type": self.type,
-            "variablesReference": self.variables_reference,
-            "namedVariables": self.named_variables,
-            "indexedVariables": self.indexed_variables,
-        }
 
-        return obj
-
-    @classmethod
-    def unpack(
-        cls,
-        request_seq: int,
-        body: dict[str, t.Any],
-    ) -> SetVariableResponse:
-        return SetVariableResponse(
-            request_seq=request_seq,
-            value=body["value"],
-            type=body.get("type", None),
-            variables_reference=body.get("variablesReference", None),
-            named_variables=body.get("namedVariables", None),
-            indexed_variables=body.get("indexedVariables", None),
-        )
-
-
-@register_response
 @dataclasses.dataclass()
-class StackTraceResponse(Response):
+class StackTraceResponse(Response, dap={"body": {"stackFrames": "stack_frames", "totalFrames": "total_frames"}}):
     """Response to a StackTraceRequest.
 
     A response to a StackTraceRequest that returns the stack frames for the
@@ -417,63 +222,23 @@ class StackTraceResponse(Response):
     stack_frames: t.List[StackFrame] = dataclasses.field(default_factory=list)
     total_frames: t.Optional[int] = None
 
-    def pack(self) -> dict[str, t.Any]:
-        obj = super().pack()
-        obj["body"] = {
-            "stackFrames": [f.pack() for f in self.stack_frames],
-            "totalFrames": self.total_frames,
-        }
 
-        return obj
-
-    @classmethod
-    def unpack(
-        cls,
-        request_seq: int,
-        body: dict[str, t.Any],
-    ) -> StackTraceResponse:
-        return StackTraceResponse(
-            request_seq=request_seq,
-            stack_frames=[StackFrame.unpack(s) for s in body["stackFrames"]],
-            total_frames=body.get("totalFrames", None),
-        )
-
-
-@register_response
 @dataclasses.dataclass()
 class StepInResponse(Response):
     """Response to a StepInRequest."""
 
     command = Command.STEP_IN
 
-    @classmethod
-    def unpack(
-        cls,
-        request_seq: int,
-        body: dict[str, t.Any],
-    ) -> StepInResponse:
-        return StepInResponse(request_seq=request_seq)
 
-
-@register_response
 @dataclasses.dataclass()
 class StepOutResponse(Response):
     """Response to a StepOutRequest."""
 
     command = Command.STEP_OUT
 
-    @classmethod
-    def unpack(
-        cls,
-        request_seq: int,
-        body: dict[str, t.Any],
-    ) -> StepOutResponse:
-        return StepOutResponse(request_seq=request_seq)
 
-
-@register_response
 @dataclasses.dataclass()
-class ThreadsResponse(Response):
+class ThreadsResponse(Response, dap={"body": {"threads": "threads"}}):
     """Response to a ThreadsRequest.
 
     A response to a ThreadRequest that is sent to the client.
@@ -486,29 +251,9 @@ class ThreadsResponse(Response):
 
     threads: t.List[Thread] = dataclasses.field(default_factory=list)
 
-    def pack(self) -> dict[str, t.Any]:
-        obj = super().pack()
-        obj["body"] = {
-            "threads": [t.pack() for t in self.threads],
-        }
 
-        return obj
-
-    @classmethod
-    def unpack(
-        cls,
-        request_seq: int,
-        body: dict[str, t.Any],
-    ) -> ThreadsResponse:
-        return ThreadsResponse(
-            request_seq=request_seq,
-            threads=[Thread.unpack(b) for b in body.get("threads", [])],
-        )
-
-
-@register_response
 @dataclasses.dataclass()
-class VariablesResponse(Response):
+class VariablesResponse(Response, dap={"body": {"variables": "variables"}}):
     """Response to a VariablesRequest.
 
     A response to a VariablesRequest that is sent to the client.
@@ -521,21 +266,21 @@ class VariablesResponse(Response):
 
     variables: t.List[Variable] = dataclasses.field(default_factory=list)
 
-    def pack(self) -> dict[str, t.Any]:
-        obj = super().pack()
-        obj["body"] = {
-            "variables": [v.pack() for v in self.variables],
-        }
 
-        return obj
+@dataclasses.dataclass()
+class ErrorResponse(Response, dap={"message": "message", "body": {"error": "error"}}):
+    """Error response to client.
 
-    @classmethod
-    def unpack(
-        cls,
-        request_seq: int,
-        body: dict[str, t.Any],
-    ) -> VariablesResponse:
-        return VariablesResponse(
-            request_seq=request_seq,
-            variables=[Variable.unpack(v) for v in body["variables"]],
-        )
+    Sent by the debug adapter to the client to provide more error details.
+
+    Args:
+        request_seq: The seq of the request this is responding to.
+        command: The command of the request this is an error for.
+        message: Error message in short form.
+        error: Optional structured error message.
+    """
+
+    success: bool = dataclasses.field(init=False, default=False)
+    command: Command = dataclasses.field(init=True)
+    message: t.Optional[str] = None
+    error: t.Optional[Message] = None

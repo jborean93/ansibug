@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # Copyright (c) 2022 Jordan Borean
 # GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
 
@@ -6,7 +5,7 @@ from __future__ import annotations
 
 import json
 
-from ._messages import ProtocolMessage, unpack_message
+from ._messages import DAPEncoder, ProtocolMessage
 
 
 class DebugAdapterConnection:
@@ -48,35 +47,26 @@ class DebugAdapterConnection:
         self._in_buffer += data
 
     def next_message(self) -> ProtocolMessage | None:
-        length = 0
-        buffer_cursor = 0
-
-        while True:
-            newline_idx = self._in_buffer[buffer_cursor:].find(b"\r\n")
-            if newline_idx == -1:
-                break
-
-            line = self._in_buffer[buffer_cursor : buffer_cursor + newline_idx]
-            if line == b"":
-                if length == 0:
-                    raise ValueError("Expected Content-Length header before message payload but none found")
-
-                buffer_cursor += newline_idx + 2
-                break
-
-            header, value = line.split(b": ", 1)
-            if header == b"Content-Length":
-                length = int(value)
-
-            buffer_cursor += newline_idx + 2
-
-        if length == 0 or (len(self._in_buffer) - buffer_cursor) < length:
+        header_idx = self._in_buffer.find(b"\r\n\r\n")
+        if header_idx == -1:
             return None
 
-        raw_msg = self._in_buffer[buffer_cursor : buffer_cursor + length]
-        self._in_buffer = self._in_buffer[buffer_cursor + length :]
+        raw_headers = bytes(self._in_buffer[:header_idx])
+        headers = dict(h.split(b": ", 2) for h in raw_headers.split(b"\r\n"))
+        if b"Content-Length" not in headers:
+            raise ValueError("Expected Content-Length header before message payload but none found")
 
-        msg = unpack_message(raw_msg.decode())
+        length = int(headers[b"Content-Length"])
+        header_idx += 4
+
+        if (len(self._in_buffer) - header_idx) < length:
+            return None
+
+        raw_msg = self._in_buffer[header_idx : header_idx + length]
+        self._in_buffer = self._in_buffer[header_idx + length :]
+
+        msg_data = json.loads(raw_msg.decode())
+        msg = ProtocolMessage.unpack(msg_data)
         expected_seq_no_in = self._seq_no_in
         if expected_seq_no_in != msg.seq:
             raise ValueError(f"Expected seq {expected_seq_no_in} but received {msg.seq}")
@@ -90,7 +80,7 @@ class DebugAdapterConnection:
         seq_no = self._seq_no_out
         msg.seq = seq_no
         data = msg.pack()
-        serialized_msg = json.dumps(data)
+        serialized_msg = json.dumps(data, cls=DAPEncoder)
 
         self._out_buffer += f"Content-Length: {len(serialized_msg)}\r\n\r\n{serialized_msg}".encode()
 

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # Copyright (c) 2022 Jordan Borean
 # GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
 
@@ -8,6 +7,7 @@ import collections.abc
 import contextlib
 import dataclasses
 import functools
+import json
 import logging
 import os
 import pathlib
@@ -24,14 +24,43 @@ from ._socket_helper import CancelledError, SocketCancellationToken
 log = logging.getLogger(__name__)
 
 
-def get_pid_info_path(pid: int) -> str:
+@dataclasses.dataclass(frozen=True)
+class PlaybookProcessInfo:
+    host: str
+    port: int
+    is_ipv6: bool
+    use_tls: bool
+
+    @classmethod
+    def from_json(
+        self,
+        data: dict[str, t.Any],
+    ) -> PlaybookProcessInfo:
+        return PlaybookProcessInfo(
+            host=data["host"],
+            port=int(data["port"]),
+            is_ipv6=data["is_ipv6"],
+            use_tls=data["use_tls"],
+        )
+
+    def to_json(self) -> dict[str, t.Any]:
+        return {
+            "host": self.host,
+            "port": self.port,
+            "is_ipv6": self.is_ipv6,
+            "use_tls": self.use_tls,
+        }
+
+
+def get_pid_info_path(pid: int) -> pathlib.Path:
     """Get the path used to store info about the ansible-playbook debug proc."""
     tmpdir = os.environ.get("TMPDIR", "/tmp")
-    return str(pathlib.Path(tmpdir) / f"ANSIBUG-{pid}")
+    return pathlib.Path(tmpdir) / f"ANSIBUG-{pid}"
 
 
 def wait_for_dap_server(
-    addr: tuple[str, int],
+    host: str,
+    port: int,
     proto_factory: t.Callable[[], MPProtocol],
     mode: t.Literal["connect", "listen"],
     cancel_token: SocketCancellationToken,
@@ -45,8 +74,10 @@ def wait_for_dap_server(
     receive DAP messages to and from the DAP server.
 
     Args:
-        addr: The addr of the socket.
-        proto_factory:
+        host: The socket hostname portion to connect/bind.
+        port: The socket port portion to connect/bind.
+        proto_factory: Callable that returns the protocol associated with the
+            socket.
         mode: The socket mode to use, connect will connect to the addr while
             listen will bind to the addr and wait for a connection.
         cancel_token: The cancellation token to cancel the socket operations.
@@ -57,19 +88,25 @@ def wait_for_dap_server(
         MPQueue: The multiprocessing queue handler that can exchange DAP
         messages with the peer.
     """
-    log.info("Setting up ansible-playbook debug %s socket at '%s'", mode, addr)
+    log.info("Setting up ansible-playbook debug %s socket at '%s:%d'", mode, host, port)
 
     mp_queue = (ClientMPQueue if mode == "connect" else ServerMPQueue)(
-        addr,
+        (host, port),
         proto_factory,
         ssl_context=ssl_context,
         cancel_token=cancel_token,
     )
     if isinstance(mp_queue, ServerMPQueue):
-        bound_addr = mp_queue.address
+        bound_host, bound_port, is_ipv6 = mp_queue.address
+        proc_info = PlaybookProcessInfo(
+            host=bound_host,
+            port=bound_port,
+            is_ipv6=is_ipv6,
+            use_tls=ssl_context is not None,
+        )
 
         with open(get_pid_info_path(os.getpid()), mode="w") as fd:
-            fd.write(f"{bound_addr[0]}:{bound_addr[1]}")
+            json.dump(proc_info.to_json(), fd)
 
     return mp_queue
 
@@ -187,6 +224,8 @@ class AnsibleLineBreakpoint:
 
 class AnsibleDebugger(metaclass=Singleton):
     def __init__(self) -> None:
+        self._addr = ""
+        self._addr_event = threading.Event()
         self._connected = False
         self._cancel_token = SocketCancellationToken()
         self._recv_thread: threading.Thread | None = None
@@ -311,11 +350,12 @@ class AnsibleDebugger(metaclass=Singleton):
 
     def start(
         self,
-        addr: tuple[str, int],
+        host: str,
+        port: int,
         mode: t.Literal["connect", "listen"],
         *,
         ssl_context: ssl.SSLContext | None = None,
-    ) -> None:
+    ) -> str:
         """Start the background server thread.
 
         Starts the background server thread which waits for an incoming request
@@ -323,18 +363,26 @@ class AnsibleDebugger(metaclass=Singleton):
         DAP server socket on the request that came in.
 
         Args:
-            addr: The addr of the socket.
+            host: The socket hostname portion to connect/bind.
+            port: The socket port portion to connect/bind.
             mode: The socket mode to use, connect will connect to the addr
                 while listen will bind to the addr and wait for a connection.
             ssl_context: Optional client SSLContext to wrap the socket
                 connection with.
+
+        returns:
+            str: The socket address that is being used, this is only valid when
+            using listen mode.
         """
         self._recv_thread = threading.Thread(
             target=self._recv_task,
-            args=(addr, mode, ssl_context),
+            args=(host, port, mode, ssl_context),
             name="ansibug-debugger",
         )
         self._recv_thread.start()
+
+        self._addr_event.wait()
+        return self._addr
 
     def shutdown(self) -> None:
         """Shutdown the Debug Server.
@@ -343,6 +391,7 @@ class AnsibleDebugger(metaclass=Singleton):
         shutdown.
         """
         log.debug("Shutting down DebugServer")
+        self._send_queue.join()
         self._cancel_token.cancel()
         if self._recv_thread:
             self._recv_thread.join()
@@ -433,7 +482,8 @@ class AnsibleDebugger(metaclass=Singleton):
 
     def _recv_task(
         self,
-        addr: tuple[str, int],
+        host: str,
+        port: int,
         mode: t.Literal["connect", "listen"],
         ssl_context: ssl.SSLContext | None,
     ) -> None:
@@ -449,7 +499,8 @@ class AnsibleDebugger(metaclass=Singleton):
         continues until the playbook is completed.
 
         Args:
-            addr: The addr of the socket.
+            host: The socket hostname portion to connect/bind.
+            port: The socket port portion to connect/bind.
             mode: The socket mode to use, connect will connect to the addr
                 while listen will bind to the addr and wait for a connection.
             ssl_context: Optional client SSLContext to wrap the socket
@@ -460,22 +511,32 @@ class AnsibleDebugger(metaclass=Singleton):
         try:
             while True:
                 with wait_for_dap_server(
-                    addr,
+                    host,
+                    port,
                     lambda: self._proto,
                     mode,
                     self._cancel_token,
                     ssl_context=ssl_context,
                 ) as mp_queue:
+                    sock_host, sock_port, is_ipv6 = mp_queue.address
+                    if is_ipv6:
+                        self._addr = f"[{sock_host}]:{sock_port}"
+                    else:
+                        self._addr = f"{sock_host}:{sock_port}"
+                    self._addr_event.set()
+
                     mp_queue.start()
                     self._da_connected.set()
                     self._connected = True
                     try:
                         while True:
                             resp = self._send_queue.get()
-                            if not resp:
-                                break
-
-                            mp_queue.send(resp)
+                            try:
+                                if not resp:
+                                    break
+                                mp_queue.send(resp)
+                            finally:
+                                self._send_queue.task_done()
 
                     finally:
                         self._da_connected.clear()
@@ -489,6 +550,16 @@ class AnsibleDebugger(metaclass=Singleton):
 
         except Exception as e:
             log.exception(f"Unknown error in DAP thread: %s", e)
+
+        finally:
+            # Ensure the queue is seen as complete so shutdown ends
+            while True:
+                try:
+                    self._send_queue.get(block=False)
+                except queue.Empty:
+                    break
+                else:
+                    self._send_queue.task_done()
 
         # Ensures client isn't stuck waiting for something to never come.
         self._da_connected.set()

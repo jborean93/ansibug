@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # Copyright (c) 2022 Jordan Borean
 # GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
 
@@ -12,7 +11,6 @@ import select
 import socket
 import ssl
 import threading
-import types
 import typing as t
 
 log = logging.getLogger(__name__)
@@ -22,48 +20,18 @@ class SocketHelper:
     def __init__(
         self,
         use: str,
-        family: socket.AddressFamily,
-        kind: socket.SocketKind,
+        sock: socket.socket,
     ) -> None:
         self.use = use
-        self._sock = socket.socket(family, kind)
+        self._sock = sock
 
-    def __enter__(self) -> SocketHelper:
-        log.debug("Entering %s socket", self.use)
-        self._sock.__enter__()
-        return self
-
-    def __exit__(
-        self,
-        exception_type: type[BaseException] | None = None,
-        exception_value: BaseException | None = None,
-        traceback: types.TracebackType | None = None,
-        **kwargs: t.Any,
-    ) -> None:
-        log.debug("Exiting %s socket", self.use)
-        self._sock.__exit__(exception_type, exception_value, traceback, **kwargs)
+    @property
+    def family(self) -> socket.AddressFamily:
+        return self._sock.family
 
     def close(self) -> None:
-        self.__exit__()
-
-    def bind(
-        self,
-        address: t.Any,
-        listen: int = 1,
-    ) -> None:
-        log.debug("Socket %s binding to %s", self.use, address)
-        self._sock.bind(address)
-        self._sock.listen(listen)
-
-    def connect(
-        self,
-        address: t.Any,
-        cancel_token: SocketCancellationToken,
-        timeout: float = 0,
-    ) -> None:
-        log.debug("Socket %s connecting to %s", self.use, address)
-        cancel_token.connect(self._sock, address, timeout=timeout)
-        log.debug("Socket %s connection successful", self.use)
+        log.debug("Closing %s socket", self.use)
+        self._sock.close()
 
     def accept(
         self,
@@ -117,14 +85,6 @@ class SocketHelper:
             log.debug("Socket %s send: %s", self.use, base64.b64encode(data).decode())
         cancel_token.sendall(self._sock, data)
 
-    def setsockopt(
-        self,
-        level: int,
-        name: int,
-        value: int | bytes,
-    ) -> None:
-        self._sock.setsockopt(level, name, value)
-
     def shutdown(
         self,
         how: int,
@@ -168,7 +128,7 @@ class SocketCancellationToken:
                 # sockec was connected to and closed/shutdown between select
                 # and the subsequent recv/send on the socket will act like it's
                 # disconnected
-                rd, _, _ = select.select([sock], [], [], timeout)
+                rd, _, _ = select.select([sock], [], [], timeout or None)
                 if not rd:
                     raise TimeoutError("Timed out waiting for socket.accept()")
 
@@ -182,7 +142,7 @@ class SocketCancellationToken:
     def connect(
         self,
         sock: socket.socket,
-        addr: t.Any,
+        addr: tuple,
         timeout: float = 0,
     ) -> None:
         with self.with_cancel(lambda: sock.shutdown(socket.SHUT_RDWR)):
@@ -236,7 +196,7 @@ class SocketCancellationToken:
             self._cancelled = True
 
             for cancel_id, func in self._cancel_funcs.items():
-                log.debug("Canelling function with id %d", cancel_id)
+                log.debug("Cancelling function with id %d", cancel_id)
                 func()
 
             self._cancel_funcs = {}

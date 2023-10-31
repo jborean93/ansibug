@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # Copyright (c) 2022 Jordan Borean
 # GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
 
@@ -7,9 +6,25 @@ from __future__ import annotations
 import dataclasses
 import typing as t
 
+from ._messages import DAPObjectMeta
+
 
 @dataclasses.dataclass()
-class Breakpoint:
+class Breakpoint(
+    metaclass=DAPObjectMeta,
+    dap={
+        "id": "id",
+        "verified": "verified",
+        "message": "message",
+        "source": "source",
+        "line": "line",
+        "column": "column",
+        "endLine": "end_line",
+        "endColumn": "end_column",
+        "instructionReference": "instruction_reference",
+        "offset": "offset",
+    },
+):
     """Breakpoint information.
 
     Information about a breakpoint created in SetBreakpointsRequest,
@@ -43,41 +58,24 @@ class Breakpoint:
     instruction_reference: t.Optional[str] = None
     offset: t.Optional[int] = None
 
-    def pack(self) -> dict[str, t.Any]:
-        return {
-            "id": self.id,
-            "verified": self.verified,
-            "message": self.message,
-            "source": self.source.pack() if self.source else None,
-            "line": self.line,
-            "column": self.column,
-            "endLine": self.end_line,
-            "endColumn": self.end_column,
-            "instructionReference": self.instruction_reference,
-            "offset": self.offset,
-        }
-
-    @classmethod
-    def unpack(
-        cls,
-        obj: dict[str, t.Any],
-    ) -> Breakpoint:
-        return Breakpoint(
-            id=obj.get("id", None),
-            verified=obj.get("verified", False),
-            message=obj.get("message", None),
-            source=Source.unpack(obj["source"]) if "source" in obj else None,
-            line=obj.get("line", None),
-            column=obj.get("column", None),
-            end_line=obj.get("endLine", None),
-            end_column=obj.get("endColumn", None),
-            instruction_reference=obj.get("instructionReference", None),
-            offset=obj.get("offset", None),
-        )
-
 
 @dataclasses.dataclass()
-class Capabilities:
+class Capabilities(
+    metaclass=DAPObjectMeta,
+    dap={
+        "supportsConfigurationDoneRequest": "supports_configuration_done_request",
+        "supportsFunctionBreakpoints": "supports_function_breakpoints",
+        "supportsConditionalBreakpoints": "supports_conditional_breakpoints",
+        "supportsHitConditionalBreakpoints": "supports_hit_conditional_breakpoints",
+        "supportsEvaluateForHovers": "supports_evaluate_for_hovers",
+        "supportsStepBack": "supports_step_back",
+        "supportsSetVariable": "supports_set_variable",
+        "supportsRestartFrame": "supports_restart_frame",
+        "supportsGotoTargetsRequest": "supports_goto_targets_request",
+        "supportsStepInTargetsRequest": "supports_step_in_targets_request",
+        "supportsCompletionsRequest": "supports_completions_request",
+    },
+):
     """Capabilities of a debug adapter.
 
     Information about the capabilities of a debug adapter.
@@ -146,43 +144,9 @@ class Capabilities:
     # supports_exception_filter_options
     # supports_single_thread_execution_requests
 
-    def pack(self) -> dict[str, t.Any]:
-        return {
-            "supportsConfigurationDoneRequest": self.supports_configuration_done_request,
-            "supportsFunctionBreakpoints": self.supports_function_breakpoints,
-            "supportsConditionalBreakpoints": self.supports_conditional_breakpoints,
-            "supportsHitConditionalBreakpoints": self.supports_hit_conditional_breakpoints,
-            "supportsEvaluateForHovers": self.supports_evaluate_for_hovers,
-            "supportsStepBack": self.supports_step_back,
-            "supportsSetVariable": self.supports_set_variable,
-            "supportsRestartFrame": self.supports_restart_frame,
-            "supportsGotoTargetsRequest": self.supports_goto_targets_request,
-            "supportsStepInTargetsRequest": self.supports_step_in_targets_request,
-            "supportsCompletionsRequest": self.supports_completions_request,
-        }
-
-    @classmethod
-    def unpack(
-        cls,
-        obj: dict[str, t.Any],
-    ) -> Capabilities:
-        return Capabilities(
-            supports_configuration_done_request=obj.get("supportsConfigurationDoneRequest", False),
-            supports_function_breakpoints=obj.get("supportsFunctionBreakpoints", False),
-            supports_conditional_breakpoints=obj.get("supportsConditionalBreakpoints", False),
-            supports_hit_conditional_breakpoints=obj.get("supportsHitConditionalBreakpoints", False),
-            supports_evaluate_for_hovers=obj.get("supportsEvaluateForHovers", False),
-            supports_step_back=obj.get("supportsStepBack", False),
-            supports_set_variable=obj.get("supportsSetVariable", False),
-            supports_restart_frame=obj.get("supportsRestartFrame", False),
-            supports_goto_targets_request=obj.get("supportsGotoTargetsRequest", False),
-            supports_step_in_targets_request=obj.get("supportsStepInTargetsRequest", False),
-            supports_completions_request=obj.get("supportsCompletionsRequest", False),
-        )
-
 
 @dataclasses.dataclass()
-class Checksum:
+class Checksum(metaclass=DAPObjectMeta, dap={"algorithm": "algorithm", "checksum": "checksum"}):
     """The checksum of an item.
 
     Describes the checksum of an item. The known algorithms are "MD5", "SHA1",
@@ -196,25 +160,9 @@ class Checksum:
     algorithm: t.Literal["MD5", "SHA1", "SHA256", "timestamp"]
     checksum: str
 
-    def pack(self) -> dict[str, t.Any]:
-        return {
-            "algorithm": self.algorithm,
-            "checksum": self.checksum,
-        }
-
-    @classmethod
-    def unpack(
-        cls,
-        body: dict[str, t.Any],
-    ) -> Checksum:
-        return Checksum(
-            algorithm=body["algorithm"],
-            checksum=body["checksum"],
-        )
-
 
 @dataclasses.dataclass()
-class ExceptionFilterOptions:
+class ExceptionFilterOptions(metaclass=DAPObjectMeta, dap={"filterId": "filter_id", "condition": "condition"}):
     """Exception filter options.
 
     Used to specify an exception filter together with a condition for the
@@ -228,25 +176,9 @@ class ExceptionFilterOptions:
     filter_id: str
     condition: t.Optional[str] = None
 
-    def pack(self) -> dict[str, t.Any]:
-        return {
-            "filterId": self.filter_id,
-            "condition": self.condition,
-        }
-
-    @classmethod
-    def unpack(
-        cls,
-        body: dict[str, t.Any],
-    ) -> ExceptionFilterOptions:
-        return ExceptionFilterOptions(
-            filter_id=body["filterId"],
-            condition=body.get("condition", None),
-        )
-
 
 @dataclasses.dataclass()
-class ExceptionOptions:
+class ExceptionOptions(metaclass=DAPObjectMeta, dap={"path": "path", "breakMode": "break_mode"}):
     """Configuration options to a set of exceptions.
 
     Assigns configuration options to a set of exceptions.
@@ -261,29 +193,9 @@ class ExceptionOptions:
     path: t.List[ExceptionPathSegment]
     break_mode: t.Literal["never", "always", "unhandled", "userUnhandled"]
 
-    def pack(self) -> dict[str, t.Any]:
-        return {
-            "path": [p.pack() for p in self.path],
-            "breakMode": self.break_mode,
-        }
-
-    @classmethod
-    def unpack(
-        cls,
-        body: dict[str, t.Any],
-    ) -> ExceptionOptions:
-        path: t.List[ExceptionPathSegment] = []
-        for p in body.get("path", []):
-            path.append(ExceptionPathSegment.unpack(p))
-
-        return ExceptionOptions(
-            path=path,
-            break_mode=body["breakMode"],
-        )
-
 
 @dataclasses.dataclass()
-class ExceptionPathSegment:
+class ExceptionPathSegment(metaclass=DAPObjectMeta, dap={"negate": "negate", "names": "names"}):
     """Represents a segment in a path.
 
     Represents a segment in a path that is used to match leafs or nodes in a
@@ -297,25 +209,20 @@ class ExceptionPathSegment:
     negate: bool = False
     names: t.List[str] = dataclasses.field(default_factory=list)
 
-    def pack(self) -> dict[str, t.Any]:
-        return {
-            "negate": self.negate,
-            "names": self.names,
-        }
-
-    @classmethod
-    def unpack(
-        cls,
-        body: dict[str, t.Any],
-    ) -> ExceptionPathSegment:
-        return ExceptionPathSegment(
-            negate=body.get("negate", False),
-            names=body.get("names", []),
-        )
-
 
 @dataclasses.dataclass()
-class Message:
+class Message(
+    metaclass=DAPObjectMeta,
+    dap={
+        "id": "id",
+        "format": "format",
+        "variables": "variables",
+        "sendTelemetry": "send_telemetry",
+        "showUser": "show_user",
+        "url": "url",
+        "urlLabel": "url_label",
+    },
+):
     """A structured message object.
 
     A structured message object used to return errors from requests.
@@ -329,35 +236,24 @@ class Message:
     url: t.Optional[str] = None
     url_label: t.Optional[str] = None
 
-    def pack(self) -> dict[str, t.Any]:
-        return {
-            "id": self.id,
-            "format": self.format,
-            "variables": self.variables,
-            "sendTelemetry": self.send_telemetry,
-            "showUser": self.show_user,
-            "url": self.url,
-            "urlLabel": self.url_label,
-        }
-
-    @classmethod
-    def unpack(
-        cls,
-        body: dict[str, t.Any],
-    ) -> Message:
-        return Message(
-            id=body["id"],
-            format=body["format"],
-            variables=body.get("variables", {}),
-            send_telemetry=body.get("sendTelemetry", False),
-            show_user=body.get("showUser", False),
-            url=body.get("url", None),
-            url_label=body.get("urlLabel", None),
-        )
-
 
 @dataclasses.dataclass()
-class Scope:
+class Scope(
+    metaclass=DAPObjectMeta,
+    dap={
+        "name": "name",
+        "presentationHint": "presentation_hint",
+        "variablesReference": "variables_reference",
+        "namedVariables": "named_variables",
+        "indexedVariables": "indexed_variables",
+        "expensive": "expensive",
+        "source": "source",
+        "line": "line",
+        "column": "column",
+        "endLine": "end_line",
+        "endColumn": "end_column",
+    },
+):
     """Named container for variables.
 
     A scope is a ned container for variables.
@@ -389,43 +285,21 @@ class Scope:
     end_line: t.Optional[int] = None
     end_column: t.Optional[int] = None
 
-    def pack(self) -> dict[str, t.Any]:
-        return {
-            "name": self.name,
-            "presentationHint": self.presentation_hint,
-            "variablesReference": self.variables_reference,
-            "namedVariables": self.named_variables,
-            "indexedVariables": self.indexed_variables,
-            "expensive": self.expensive,
-            "source": self.source.pack() if self.source else None,
-            "line": self.line,
-            "column": self.column,
-            "endLine": self.end_line,
-            "endColumn": self.end_column,
-        }
-
-    @classmethod
-    def unpack(
-        cls,
-        body: dict[str, t.Any],
-    ) -> Scope:
-        return Scope(
-            name=body["name"],
-            variables_reference=body["variablesReference"],
-            presentation_hint=body.get("presentationHint", None),
-            named_variables=body.get("namedVariables", None),
-            indexed_variables=body.get("indexedVariables", None),
-            expensive=body.get("expensive", False),
-            source=Source.unpack(body["source"]) if "source" in body else None,
-            line=body.get("line", None),
-            column=body.get("column", None),
-            end_line=body.get("endLine", None),
-            end_column=body.get("endColumn", None),
-        )
-
 
 @dataclasses.dataclass()
-class Source:
+class Source(
+    metaclass=DAPObjectMeta,
+    dap={
+        "name": "name",
+        "path": "path",
+        "sourceReference": "source_reference",
+        "presentationHint": "presentation_hint",
+        "origin": "origin",
+        "sources": "sources",
+        "adapterData": "adapter_data",
+        "checksums": "checksums",
+    },
+):
     """Descriptor for source code.
 
     A source is used to describe source code. It is returned from the debug
@@ -458,37 +332,18 @@ class Source:
     adapter_data: t.Any = None
     checksums: t.List[Checksum] = dataclasses.field(default_factory=list)
 
-    def pack(self) -> dict[str, t.Any]:
-        return {
-            "name": self.name,
-            "path": self.path,
-            "sourceReference": self.source_reference,
-            "presentationHint": self.presentation_hint,
-            "origin": self.origin,
-            "sources": [s.pack() for s in self.sources],
-            "adapterData": self.adapter_data,
-            "checksums": [c.pack() for c in self.checksums],
-        }
-
-    @classmethod
-    def unpack(
-        cls,
-        body: dict[str, t.Any],
-    ) -> Source:
-        return Source(
-            name=body.get("name", None),
-            path=body.get("path", None),
-            source_reference=body.get("sourceReference", None) or 0,
-            presentation_hint=body.get("presentationHint", "normal"),
-            origin=body.get("origin", None),
-            sources=[Source.unpack(s) for s in body.get("sources", [])],
-            adapter_data=body.get("adapterData", None),
-            checksums=[Checksum.unpack(c) for c in body.get("checksums", [])],
-        )
-
 
 @dataclasses.dataclass()
-class SourceBreakpoint:
+class SourceBreakpoint(
+    metaclass=DAPObjectMeta,
+    dap={
+        "line": "line",
+        "column": "column",
+        "condition": "condition",
+        "hitCondition": "hit_condition",
+        "logMessage": "log_message",
+    },
+):
     """Properties of a breakpoint.
 
     The properties of a breakpoint or logpoint passed to the
@@ -509,31 +364,24 @@ class SourceBreakpoint:
     hit_condition: t.Optional[str] = None
     log_message: t.Optional[str] = None
 
-    def pack(self) -> dict[str, t.Any]:
-        return {
-            "line": self.line,
-            "column": self.column,
-            "condition": self.condition,
-            "hitCondition": self.hit_condition,
-            "logMessage": self.log_message,
-        }
-
-    @classmethod
-    def unpack(
-        cls,
-        body: dict[str, t.Any],
-    ) -> SourceBreakpoint:
-        return SourceBreakpoint(
-            line=body["line"],
-            column=body.get("column", None),
-            condition=body.get("condition", None),
-            hit_condition=body.get("hitCondition", None),
-            log_message=body.get("logMessage", None),
-        )
-
 
 @dataclasses.dataclass()
-class StackFrame:
+class StackFrame(
+    metaclass=DAPObjectMeta,
+    dap={
+        "id": "id",
+        "name": "name",
+        "source": "source",
+        "line": "line",
+        "column": "column",
+        "endLine": "end_line",
+        "endColumn": "end_column",
+        "canRestart": "can_restart",
+        "instructionPointerReference": "instruction_pointer_reference",
+        "moduleId": "module_id",
+        "presentationHint": "presentation_hint",
+    },
+):
     """A stackframe.
 
     A stackframe contains the source location.
@@ -567,43 +415,20 @@ class StackFrame:
     module_id: t.Optional[t.Union[int, str]] = None
     presentation_hint: t.Literal["normal", "label", "subtle"] = "normal"
 
-    def pack(self) -> dict[str, t.Any]:
-        return {
-            "id": self.id,
-            "name": self.name,
-            "source": self.source.pack() if self.source else None,
-            "line": self.line,
-            "column": self.column,
-            "endLine": self.end_line,
-            "endColumn": self.end_column,
-            "canRestart": self.can_restart,
-            "instructionPointerReference": self.instruction_pointer_reference,
-            "moduleId": self.module_id,
-            "presentationHint": self.presentation_hint,
-        }
-
-    @classmethod
-    def unpack(
-        cls,
-        body: dict[str, t.Any],
-    ) -> StackFrame:
-        return StackFrame(
-            id=body["id"],
-            name=body["name"],
-            source=Source.unpack(body["source"]) if "source" in body else None,
-            line=body["line"],
-            column=body["column"],
-            end_line=body.get("endLine", None),
-            end_column=body.get("endColumn", None),
-            can_restart=body.get("canRestart", False),
-            instruction_pointer_reference=body.get("instructionPointerReference", None),
-            module_id=body.get("moduleId", None),
-            presentation_hint=body.get("presentationHint", "normal"),
-        )
-
 
 @dataclasses.dataclass()
-class StackFrameFormat:
+class StackFrameFormat(
+    metaclass=DAPObjectMeta,
+    dap={
+        "parameters": "parameters",
+        "parameterTypes": "parameter_types",
+        "parameterNames": "parameter_names",
+        "parameterValues": "parameter_values",
+        "line": "line",
+        "module": "module",
+        "includeAll": "include_all",
+    },
+):
     """Formatting info for a stack frame.
 
     Provides formatting information for a stack frame.
@@ -627,35 +452,9 @@ class StackFrameFormat:
     module: bool = False
     include_all: bool = False
 
-    def pack(self) -> dict[str, t.Any]:
-        return {
-            "parameters": self.parameters,
-            "parameterTypes": self.parameter_types,
-            "parameterNames": self.parameter_names,
-            "parameterValues": self.parameter_values,
-            "line": self.line,
-            "module": self.module,
-            "includeAll": self.include_all,
-        }
-
-    @classmethod
-    def unpack(
-        cls,
-        body: dict[str, t.Any],
-    ) -> StackFrameFormat:
-        return StackFrameFormat(
-            parameters=body.get("parameters", False),
-            parameter_types=body.get("parameterTypes", False),
-            parameter_names=body.get("parameterNames", False),
-            parameter_values=body.get("parameterValues", False),
-            line=body.get("line", False),
-            module=body.get("module", False),
-            include_all=body.get("includeAll", False),
-        )
-
 
 @dataclasses.dataclass()
-class Thread:
+class Thread(metaclass=DAPObjectMeta, dap={"id": "id", "name": "name"}):
     """A thread.
 
     Represents a thread on the debuggee.
@@ -668,25 +467,9 @@ class Thread:
     id: int
     name: str
 
-    def pack(self) -> dict[str, t.Any]:
-        return {
-            "id": self.id,
-            "name": self.name,
-        }
-
-    @classmethod
-    def unpack(
-        cls,
-        body: dict[str, t.Any],
-    ) -> Thread:
-        return Thread(
-            id=body["id"],
-            name=body["name"],
-        )
-
 
 @dataclasses.dataclass()
-class ValueFormat:
+class ValueFormat(metaclass=DAPObjectMeta, dap={"hex": "hex"}):
     """Provides formatting information for a value.
 
     Args:
@@ -695,23 +478,22 @@ class ValueFormat:
 
     hex: bool = False
 
-    def pack(self) -> dict[str, t.Any]:
-        return {
-            "hex": self.hex,
-        }
-
-    @classmethod
-    def unpack(
-        cls,
-        body: dict[str, t.Any],
-    ) -> ValueFormat:
-        return ValueFormat(
-            hex=body.get("hex", False),
-        )
-
 
 @dataclasses.dataclass()
-class Variable:
+class Variable(
+    metaclass=DAPObjectMeta,
+    dap={
+        "name": "name",
+        "value": "value",
+        "type": "type",
+        "presentationHint": "presentation_hint",
+        "evaluateName": "evaluate_name",
+        "variablesReference": "variables_reference",
+        "namedVariables": "named_variables",
+        "indexedVariables": "indexed_variables",
+        "memoryReference": "memory_reference",
+    },
+):
     """A variable is a name/value pair.
 
     Represents a variable with a name and value as well as other metadata to
@@ -743,41 +525,17 @@ class Variable:
     indexed_variables: t.Optional[int] = None
     memory_reference: t.Optional[str] = None
 
-    def pack(self) -> dict[str, t.Any]:
-        return {
-            "name": self.name,
-            "value": self.value,
-            "type": self.type,
-            "presentationHint": self.presentation_hint.pack() if self.presentation_hint else None,
-            "evaluateName": self.evaluate_name,
-            "variablesReference": self.variables_reference,
-            "namedVariables": self.named_variables,
-            "indexedVariables": self.indexed_variables,
-            "memoryReference": self.memory_reference,
-        }
-
-    @classmethod
-    def unpack(
-        cls,
-        body: dict[str, t.Any],
-    ) -> Variable:
-        return Variable(
-            name=body["name"],
-            value=body["value"],
-            type=body.get("type", None),
-            presentation_hint=VariablePresentationHint.unpack(body["presentationHint"])
-            if "presentationHint" in body
-            else None,
-            evaluate_name=body.get("evaluateName", None),
-            variables_reference=body.get("variablesReference", 0),
-            named_variables=body.get("namedVariables", None),
-            indexed_variables=body.get("indexedVariables", None),
-            memory_reference=body.get("memoryReference", None),
-        )
-
 
 @dataclasses.dataclass
-class VariablePresentationHint:
+class VariablePresentationHint(
+    metaclass=DAPObjectMeta,
+    dap={
+        "kind": "kind",
+        "attributes": "attributes",
+        "visibility": "visibility",
+        "lazy": "lazy",
+    },
+):
     """Optional properties of a variable.
 
     Optional properties of a variable that can be used to determine how to
@@ -825,23 +583,3 @@ class VariablePresentationHint:
     ] = dataclasses.field(default_factory=list)
     visibility: t.Optional[t.Union[str, t.Literal["public", "private", "protected", "internal"]]] = None
     lazy: bool = False
-
-    def pack(self) -> dict[str, t.Any]:
-        return {
-            "kind": self.kind,
-            "attributes": self.attributes,
-            "visibility": self.visibility,
-            "lazy": self.lazy,
-        }
-
-    @classmethod
-    def unpack(
-        cls,
-        body: dict[str, t.Any],
-    ) -> VariablePresentationHint:
-        return VariablePresentationHint(
-            kind=body.get("kind", None),
-            attributes=body.get("attributes", []),
-            visibility=body.get("visibility", None),
-            lazy=body.get("lazy", False),
-        )

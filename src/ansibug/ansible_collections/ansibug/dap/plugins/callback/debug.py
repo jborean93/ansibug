@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # Copyright (c) 2022 Jordan Borean
 # GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
 
@@ -27,48 +26,65 @@ options:
     - listen
     env:
     - name: ANSIBUG_MODE
-  socket_addr:
+  socket_host:
     description:
-    - The socket addr to connect or bind to, depending on C(mode).
+    - The socket hostname to connect or bind to, dependening on C(mode).
+    - When C(mode=listen), the value C(localhost) will bind the socket to all
+      IPv4 and IPv6 addresses on localhost.
+    default: localhost
     type: str
     env:
-    - name: ANSIBUG_SOCKET_ADDR
-  tls_cert_validation:
+    - name: ANSIBUG_SOCKET_HOST
+  socket_port:
     description:
-    - The TLS certificate validation behaviour.
-    - Defaults to C(validate) which will validate the hostname and CA trust
-      with the OS trust store.
-    - Can be set to C(ignore) to ignore both the CA and CN validation of the
-      server.
-    choices:
-    - ignore
-    - validate
-    default: validate
+    - The socket port to connect or bind to, depending on C(mode).
+    - When C(mode=connect), this must be set to a value greater than 0.
+    - When C(mode=listen), the value 0 will bind to a port given to it by the
+      OS. This vaalue will be displayed when the callback has initialised and
+      is ready for the debug adapter to connect to the listening socket.
+    default: 0
+    type: int
+    env:
+    - name: ANSIBUG_SOCKET_PORT
+  tls_server_certfile:
+    description:
+    - The TLS server certificate used when C(mode=listen).
+    - This is the path to a single file in PEM format containing the
+      certificate, as well as any number of CA certificates needed to establish
+      the certificate's authenticity.
+    - This can also contain the PEM encoded certificate key, otherwise use
+      C(tls_server_keyfile).
     type: str
     env:
-    - name: ANSIBUG_TLS_CERT_VALIDATION
-  tls_cert_ca:
+    - name: ANSIBUG_TLS_SERVER_CERTFILE
+  tls_server_keyfile:
     description:
-    - Can be set to a path to a file containing concatenated CA certificates
-      in the PEM format.
-    - Can also be set to a path to a directory containing several CA
-      certificates in the PEM format following an OpenSSL specific layout.
-    - The certificates provided by this path will be used as the CAs used in
-      the validation process.
+    - The TLS server certificate key used when C(mode=listen).
+    - This is the path to a single file in PEM format containing the
+      certificate key.
+    - If the key is encrypted use C(tls_server_key_password) to provide the
+      password needed to decrypt the key.
     type: str
     env:
-    - name: ANSIBUG_TLS_CERT_CA
+    - name: ANSIBUG_TLS_SERVER_KEYFILE
+  tls_server_key_password:
+    description:
+    - The password needed to decrypt the key specified by
+      C(tls_server_certfile) or C(tls_server_keyfile).
+    type: str
+    env:
+    - name: ANSIBUG_TLS_SERVER_KEY_PASSWORD
   use_tls:
     description:
-    - Wrap the socket in a TLS stream.
-    - This will use the Python defaults when creating the TLS stream like
-      validating the server hostname and CA trust status.
-    - Use C(tls_cert_validation) to control the server validation behaviour.
+    - Sets up a TLS protected stream when C(mode=listen).
+    - Use C(tls_server_certfile), C(tls_server_keyfile), and
+      C(tls_server_key_password) to specify the certificate and key used as the
+      current identity.
     default: False
     type: bool
     env:
     - name: ANSIBUG_USE_TLS
-  wait_for_config_done:
+  no_wait_for_config_done:
     description:
     - If true, will wait until the DA server has passed through the
       configurationDone request from the client that indicates all the initial
@@ -79,14 +95,14 @@ options:
     type: bool
     default: false
     env:
-    - name: ANSIBUG_WAIT_FOR_CLIENT
+    - name: ANSIBUG_NO_WAIT_FOR_CONFIG_DONE
   wait_for_config_done_timeout:
     description:
     - The time to wait, in seconds, to wait until the configurationDone request
       has been sent by the client.
     - Set to C(-1) to wait indefinitely.
     type: float
-    default: 10
+    default: -1
     env:
     - name: ANSIBUG_WAIT_FOR_CLIENT_TIMEOUT
   log_file:
@@ -117,9 +133,7 @@ options:
 """
 
 import logging
-import os.path
-import pathlib
-import re
+import os
 import ssl
 import typing as t
 
@@ -130,12 +144,13 @@ from ansible.playbook.block import Block
 from ansible.playbook.play import Play
 from ansible.playbook.task import Task
 from ansible.plugins.callback import CallbackBase
+from ansible.utils.display import Display
 
 import ansibug
 
 log = logging.getLogger("ansibug.callback")
 
-ADDR_PATTERN = re.compile(r"(?:(?P<hostname>.+):)?(?P<port>\d+)")
+display = Display()
 
 
 def configure_logging(
@@ -229,51 +244,36 @@ class CallbackModule(CallbackBase):
             )
 
         mode = self.get_option("mode")
-        addr = self.get_option("socket_addr")
-        if not addr:
-            return
 
-        if m := ADDR_PATTERN.match(addr):
-            hostname = m.group("hostname") or "127.0.0.1"
-            port = int(m.group("port"))
-
-        else:
-            raise AnsibleError("socket_addr must be in the format [host:]port")
-
-        use_tls = self.get_option("use_tls")
-        tls_cert_ca = self.get_option("tls_cert_ca")
-        tls_cert_validation = self.get_option("tls_cert_validation")
+        socket_host = self.get_option("socket_host")
+        socket_port = self.get_option("socket_port")
+        if mode == "connect" and not socket_port:
+            raise AnsibleError("socket_port must be specified when mode=connect")
+        elif mode == "listen" and socket_host == "localhost":
+            socket_host = ""
 
         ssl_context: ssl.SSLContext | None = None
-        if use_tls:
-            ssl_context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
-            if tls_cert_validation == "ignore":
-                ssl_context.check_hostname = False
-                ssl_context.verify_mode = ssl.VerifyMode.CERT_NONE
+        if self.get_option("use_tls") and mode == "listen":
+            ssl_context = ansibug.create_server_tls_context(
+                certfile=self.get_option("tls_server_certfile"),
+                keyfile=self.get_option("tls_server_keyfile"),
+                password=self.get_option("tls_server_key_password"),
+            )
 
-            elif tls_cert_ca:
-                cert_ca_path = pathlib.Path(os.path.expanduser(os.path.expandvars(tls_cert_ca)))
-
-                if cert_ca_path.is_dir():
-                    ssl_context.load_verify_locations(capath=str(cert_ca_path.absolute()))
-
-                elif cert_ca_path.exists():
-                    ssl_context.load_verify_locations(cafile=str(cert_ca_path.absolute()))
-
-                else:
-                    raise AnsibleError(f"tls_cert_ca path '{tls_cert_ca}' does not exist")
-
-        log.info("Staring Ansible Debugger with %s on %s:%d", mode, hostname, port)
-
-        self._debugger.start(
-            (hostname, port),
-            mode,
+        log.info("Staring Ansible Debugger with %s on %s:%d", mode, socket_host, socket_port)
+        socket_addr = self._debugger.start(
+            host=socket_host,
+            port=socket_port,
+            mode=mode,
             ssl_context=ssl_context,
         )
 
-        wait_for_config_done = self.get_option("wait_for_config_done")
+        if mode == "listen":
+            display.display(f"Ansibug listener has been configured for process PID {os.getpid()} on {socket_addr}")
+
+        no_wait_for_config_done = self.get_option("no_wait_for_config_done")
         wait_for_config_done_timeout = self.get_option("wait_for_config_done_timeout")
-        if wait_for_config_done:
+        if not no_wait_for_config_done:
             log.info("Waiting for configuration done request to be received in Ansible")
             if wait_for_config_done_timeout == -1:
                 wait_for_config_done_timeout = None

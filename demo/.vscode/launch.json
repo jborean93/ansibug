@@ -1,10 +1,18 @@
 {
     "configurations": [
         {
+            "name": "Ansible: Attach to ansible-playbook Process",
+            "type": "ansibug",
+            "request": "attach",
+            "processId": "${command:PickAnsibleProcess}"
+        },
+        {
             "name": "Ansible: Launch ansible-playbook Process",
             "type": "ansibug",
             "request": "launch",
             "playbook": "main.yml",
+            "logFile": "/tmp/ansibug.log",
+            "logLevel": "debug"
         }
     ]
 }

@@ -1,0 +1,6 @@
+include LICENSE
+exclude .coverage
+exclude .gitignore
+exclude .pre-commit-config.yaml
+recursive-include tests *
+recursive-exclude tests *.pyc

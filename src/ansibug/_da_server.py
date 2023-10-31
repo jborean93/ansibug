@@ -1,31 +1,31 @@
-# -*- coding: utf-8 -*-
 # Copyright (c) 2022 Jordan Borean
 # GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
 
 from __future__ import annotations
 
 import functools
+import json
 import logging
-import ssl
 import sys
 import threading
 import time
+import traceback
 import types
 import typing as t
 
 from . import dap as dap
-from ._mp_queue import MPProtocol, ServerMPQueue
+from ._debuggee import PlaybookProcessInfo, get_pid_info_path
+from ._mp_queue import ClientMPQueue, MPProtocol, MPQueue, ServerMPQueue
+from ._tls import create_client_tls_context
 
 log = logging.getLogger(__name__)
+logging.basicConfig(filename="/tmp/ansibug-dap.log", level=logging.DEBUG)
 
 
-def start_dap(
-    ssl_context: ssl.SSLContext | None = None,
-) -> None:
+def start_dap() -> None:
     log.info("starting")
-
     try:
-        with DAServer(ssl_context=ssl_context) as da:
+        with DAServer() as da:
             da.start()
     except:
         log.exception("Exception when running DA Server")
@@ -60,28 +60,20 @@ class DAProtocol(MPProtocol):
 
 
 class DAServer:
-    def __init__(
-        self,
-        *,
-        ssl_context: ssl.SSLContext | None = None,
-    ) -> None:
+    def __init__(self) -> None:
         self._adapter = dap.DebugAdapterConnection()
 
         self._proto = DAProtocol(self)
-        self._debuggee = ServerMPQueue(
-            ("127.0.0.1", 0),
-            lambda: self._proto,
-            ssl_context=ssl_context,
-        )
+        self._debuggee: MPQueue | None = None
 
         self._client_connected = True
         self._terminated_sent = False
-        self._connection_exp: Exception | None = None
+        self._connection_exp: BaseException | None = None
+        self._incoming_requests: dict[int, dap.Request] = {}
         self._outgoing_requests: set[int] = set()
         self._outgoing_lock = threading.Condition()
 
     def __enter__(self) -> DAServer:
-        self._debuggee.__enter__()
         return self
 
     def __exit__(
@@ -91,7 +83,7 @@ class DAServer:
         traceback: types.TracebackType | None = None,
         **kwargs: t.Any,
     ) -> None:
-        self.stop()
+        self.stop(exp=exception_value)
         self.send_to_client(dap.ExitedEvent(exit_code=1 if exception_value else 0))
 
     def start(self) -> None:
@@ -106,15 +98,24 @@ class DAServer:
 
         while self._client_connected:
             data = stdin.read(4096)
-            log.debug("STDIN: %s", data.decode())
+            if not data:
+                break
+
+            if log.isEnabledFor(logging.DEBUG):
+                log.debug("STDIN: %s", data.decode())
             adapter.receive_data(data)
 
             while msg := adapter.next_message():
+                # Trace each request from the client so we can return an
+                # ErrorMessage if there was a critical failure.
+                if isinstance(msg, dap.Request):
+                    self._incoming_requests[msg.seq] = msg
+
                 self._process_msg(msg)
 
     def stop(
         self,
-        exp: Exception | None = None,
+        exp: BaseException | None = None,
         close_debuggee: bool = True,
     ) -> None:
         """Stops the debuggee connection.
@@ -132,8 +133,23 @@ class DAServer:
             self._outgoing_requests = set()
             self._outgoing_lock.notify_all()
 
-        if close_debuggee:
+        if close_debuggee and self._debuggee:
             self._debuggee.stop()
+            self._debuggee = None
+
+        # For every incoming request relay the exception back to the client
+        # for it to display to the end user.
+        # FIXME: A DAP exp when the debuggee is connected won't pass through
+        if exp:
+            for req in list(self._incoming_requests.values()):
+                self.send_to_client(
+                    dap.ErrorResponse(
+                        command=req.command,
+                        request_seq=req.seq,
+                        message=f"Critical DAServer exception received:\n{traceback.format_exc()}",
+                    )
+                )
+        self._incoming_requests = {}
 
         if not self._terminated_sent:
             self._terminated_sent = True
@@ -143,16 +159,24 @@ class DAServer:
         self,
         msg: dap.ProtocolMessage,
     ) -> None:
-        stdout = sys.stdout.buffer.raw  # type: ignore[attr-defined]  # This is defined
+        stdout = sys.stdout.buffer
 
         self._adapter.queue_msg(msg)
         if data := self._adapter.data_to_send():
+            if log.isEnabledFor(logging.DEBUG):
+                log.debug("STDOUT: %s", data.decode())
+
             stdout.write(data)
+            stdout.flush()
 
         with self._outgoing_lock:
-            if isinstance(msg, dap.Response) and msg.request_seq in self._outgoing_requests:
-                self._outgoing_requests.remove(msg.request_seq)
-                self._outgoing_lock.notify_all()
+            if isinstance(msg, dap.Response):
+                if msg.request_seq in self._outgoing_requests:
+                    self._outgoing_requests.remove(msg.request_seq)
+                    self._outgoing_lock.notify_all()
+
+                if msg.request_seq in self._incoming_requests:
+                    del self._incoming_requests[msg.request_seq]
 
     @functools.singledispatchmethod
     def _process_msg(self, msg: dap.ProtocolMessage) -> None:
@@ -176,10 +200,11 @@ class DAServer:
             )
             return
 
-        with self._outgoing_lock:
-            self._outgoing_requests.add(msg.seq)
-            self._debuggee.send(msg)
-            self._outgoing_lock.wait_for(lambda: msg.seq not in self._outgoing_requests)
+        if self._debuggee:
+            with self._outgoing_lock:
+                self._outgoing_requests.add(msg.seq)
+                self._debuggee.send(msg)
+                self._outgoing_lock.wait_for(lambda: msg.seq not in self._outgoing_requests)
 
         if self._connection_exp:
             self.send_to_client(
@@ -214,74 +239,106 @@ class DAServer:
         )
 
     @_process_msg.register
+    def _(self, msg: dap.AttachRequest) -> None:
+        try:
+            attach_arguments = msg.arguments
+
+            use_tls = attach_arguments.get("useTLS", False)
+
+            if (playbook_pid := attach_arguments.get("processId", None)) is not None:
+                pid_path = get_pid_info_path(playbook_pid)
+                if not pid_path.exists():
+                    raise Exception(f"Failed to find process pid file at '{pid_path}'")
+
+                proc_json = json.loads(pid_path.read_text())
+                proc_info = PlaybookProcessInfo.from_json(proc_json)
+                use_tls = proc_info.use_tls
+                addr = proc_info.host
+                port = proc_info.port
+
+            else:
+                addr = attach_arguments.get("address", "localhost")
+                if not (port := attach_arguments.get("port", None)):
+                    raise Exception("Expected processId or address and port to be specified for attach")
+
+            ssl_context = None
+            if use_tls:
+                verify = attach_arguments.get("tlsVerification", "verify")
+                ssl_context = create_client_tls_context(verify)
+
+            self._debuggee = ClientMPQueue(
+                (addr, int(port)),
+                proto=lambda: self._proto,
+                ssl_context=ssl_context,
+            )
+            # FIXME: Add timeout to the request args
+            self._debuggee.start(timeout=5.0)
+
+            self.send_to_client(dap.AttachResponse(request_seq=msg.seq))
+            self.send_to_client(dap.InitializedEvent())
+
+        except Exception as e:
+            self.send_to_client(
+                dap.ErrorResponse(
+                    command=msg.command,
+                    request_seq=msg.seq,
+                    message=str(e),
+                )
+            )
+
+    @_process_msg.register
     def _(self, msg: dap.LaunchRequest) -> None:
         try:
             launch_arguments = msg.arguments
-            if (launch_type := launch_arguments.get("type")) != "ansibug":
-                raise Exception(f"Unknown launch type '{launch_type}'")
 
-            launch_request = launch_arguments.get("request", None)
-            if launch_request == "attach":
-                raise NotImplementedError("attach is not implemented yet")
+            self._debuggee = ServerMPQueue(
+                ("", 0),
+                proto=lambda: self._proto,
+            )
+            addr = self._debuggee.address
+            addr_str = f"{addr[0]}:{addr[1]}"
 
-            elif launch_request == "launch":
-                addr = self._debuggee.address
-                addr_str = f"{addr[0]}:{addr[1]}"
-
-                ansibug_args = [
-                    sys.executable,
-                    "-m",
-                    "ansibug",
-                    "launch",
-                    "--wait-for-client",
-                    "--connect",
-                    addr_str,
-                ]
-                if log_file := launch_arguments.get("logFile", None):
-                    ansibug_args.extend(
-                        [
-                            "--log-file",
-                            log_file,
-                            "--log-level",
-                            launch_arguments.get("logLevel", "info"),
-                        ]
-                    )
-
-                if launch_arguments.get("useTLS", False):
-                    ansibug_args.append("--wrap-tls")
-                    if tls_verification := launch_arguments.get("tlsVerification", None):
-                        ansibug_args.extend(
-                            [
-                                "--tls-verification",
-                                tls_verification,
-                            ]
-                        )
-
-                ansibug_args.append(launch_arguments["playbook"])
-                ansibug_args += launch_arguments.get("args", [])
-
-                launch_console = launch_arguments.get("console", "integratedTerminal")
-                console_kind: t.Literal["external", "integrated"]
-                if launch_console == "integratedTerminal":
-                    console_kind = "integrated"
-                elif launch_console == "externalTerminal":
-                    console_kind = "external"
-                else:
-                    raise Exception(
-                        f"Unknown console value '{launch_console}' - expected integratedTerminal or externalTerminal."
-                    )
-
-                self.send_to_client(
-                    dap.RunInTerminalRequest(
-                        cwd=launch_arguments.get("cwd", ""),
-                        kind=console_kind,
-                        args=ansibug_args,
-                        title="Ansible Debug Console",
-                    )
+            ansibug_args = [
+                sys.executable,
+                "-m",
+                "ansibug",
+                "connect",
+                "--addr",
+                addr_str,
+            ]
+            if log_file := launch_arguments.get("logFile", None):
+                ansibug_args.extend(
+                    [
+                        "--log-file",
+                        log_file,
+                        "--log-level",
+                        launch_arguments.get("logLevel", "info"),
+                    ]
                 )
 
+            ansibug_args.append(launch_arguments["playbook"])
+            ansibug_args += launch_arguments.get("args", [])
+
+            launch_console = launch_arguments.get("console", "integratedTerminal")
+            console_kind: t.Literal["external", "integrated"]
+            if launch_console == "integratedTerminal":
+                console_kind = "integrated"
+            elif launch_console == "externalTerminal":
+                console_kind = "external"
             else:
-                raise Exception(f"Unknown launch request '{launch_request}', expecting attach or launch")
+                raise Exception(
+                    f"Unknown console value '{launch_console}' - expected integratedTerminal or externalTerminal."
+                )
+
+            self.send_to_client(
+                dap.RunInTerminalRequest(
+                    cwd=launch_arguments.get("cwd", ""),
+                    kind=console_kind,
+                    args=ansibug_args,
+                    title="Ansible Debug Console",
+                    env=launch_arguments.get("env", {}),
+                )
+            )
 
         except Exception as e:
             self.send_to_client(
@@ -296,12 +353,22 @@ class DAServer:
     def _(self, msg: dap.RunInTerminalResponse) -> None:
         timeout = 5.0  # FIXME: Make configurable
 
+        if not self._debuggee:
+            raise Exception(f"RunInTerminalResponse received but debuggee connection has not been configured.")
+
         start = time.time()
         self._debuggee.start(timeout=timeout)
         timeout = max(1.0, time.time() - start)
 
         if not self._proto.connected.wait(timeout=timeout):
             raise TimeoutError("Timed out waiting for Ansible to connect to DA.")
+
+        launch_seq = next(
+            (seq_no for seq_no, msg in self._incoming_requests.items() if isinstance(msg, dap.LaunchRequest)),
+            -1,
+        )
+        if launch_seq != -1:
+            self.send_to_client(dap.LaunchResponse(request_seq=launch_seq))
 
         # FIXME: Move this into the strategy run() method
         self.send_to_client(dap.InitializedEvent())

@@ -1,5 +1,18 @@
 {
+    "version": "0.2.0",
     "configurations": [
+        {
+            "name": "Python: Debug Tests",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "purpose": [
+                "debug-test"
+            ],
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "subProcess": false // debugpy breaks ansibug through pytest
+        },
         {
             "name": "Python: Server",
             "type": "python",
