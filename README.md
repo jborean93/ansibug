@@ -1,6 +1,7 @@
 # Ansibug
 
 POC for an Ansible Debug Adapter Protocol Runner debugger.
+See the [demo folder](./demo/) for some example DAP clients that have been configured to use `ansibug` for testing.
 
 # Workflow
 
@@ -330,11 +331,6 @@ In the event of a deadlock, the simplest solution is to kill the `ansible-playbo
 
 While this is a POC there are a few outstanding things I am hoping to do before actually releasing this as a plugin.
 
-* Tests - will have to figure out how to test this, will most likely be lots of helper code to have the test act as a client and send the DAP messages to a running Ansible process
 * Cleanup the code and remove the duplication
-* Sort out the expression/evaluation work, currently it is very rudimentary
-* Implement the attach and listen modes, currently only launch works
 * Sort out handler and `meta` task logic
-* Work out how to get the VSCode extension to allow `F5` the current file without defining an entry in `tasks.json`
 * Have the strategy inject itself over the existing `linear`, `free`, something else if possible, currently only `linear` works
-* Expand the set variable requests to support more than just strings and potentially expressions

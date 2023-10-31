@@ -188,8 +188,7 @@ host2 ansible_host=127.0.0.1 ansible_connection=local ansible_python_interpreter
         dap.SetVariableRequest(
             variables_reference=scope_resp.scopes[0].variables_reference,
             name="set_var",
-            # FIXME: Sort out how this is templated
-            value="new value",
+            value="'new value'",
         ),
         dap.SetVariableResponse,
     )
@@ -211,8 +210,7 @@ host2 ansible_host=127.0.0.1 ansible_connection=local ansible_python_interpreter
         dap.SetVariableRequest(
             variables_reference=scope_resp.scopes[0].variables_reference,
             name="set_var",
-            # FIXME: Sort out how this is templated
-            value="new value",
+            value="'new value'",
         ),
         dap.SetVariableResponse,
     )
@@ -275,6 +273,237 @@ host2 ansible_host=127.0.0.1 ansible_connection=local ansible_python_interpreter
     assert thread_event.thread_id == host2_tid
     assert thread_event.reason == "exited"
 
+    dap_client.wait_for_message(dap.TerminatedEvent)
+
+    play_out = proc.communicate()
+    if rc := proc.returncode:
+        raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
+
+
+def test_playbook_set_variable_types(
+    dap_client: DAPClient,
+    tmp_path: pathlib.Path,
+) -> None:
+    playbook = tmp_path / "main.yml"
+    playbook.write_text(
+        r"""
+- hosts: localhost
+  gather_facts: false
+  vars:
+    foo: bar
+  tasks:
+  - name: set fact
+    set_fact:
+      my_bool: abc
+      my_dict: abc
+      my_int: abc
+      my_list: abc
+      my_str: abc
+      my_var: abc
+
+  - debug:
+      msg: Placeholder
+"""
+    )
+
+    proc = dap_client.launch("main.yml", playbook_dir=tmp_path)
+
+    dap_client.send(
+        dap.SetBreakpointsRequest(
+            source=dap.Source(
+                name="main.yml",
+                path=str(playbook.absolute()),
+            ),
+            lines=[7],
+            breakpoints=[dap.SourceBreakpoint(line=7)],
+            source_modified=False,
+        ),
+        dap.SetBreakpointsResponse,
+    )
+
+    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
+
+    thread_event = dap_client.wait_for_message(dap.ThreadEvent)
+    localhost_tid = thread_event.thread_id
+
+    dap_client.wait_for_message(dap.StoppedEvent)
+
+    st_resp = dap_client.send(dap.StackTraceRequest(thread_id=localhost_tid), dap.StackTraceResponse)
+    scope_resp = dap_client.send(dap.ScopesRequest(frame_id=st_resp.stack_frames[0].id), dap.ScopesResponse)
+
+    bool_resp = dap_client.send(
+        dap.SetVariableRequest(
+            variables_reference=scope_resp.scopes[0].variables_reference,
+            name="my_bool",
+            value="True",
+        ),
+        dap.SetVariableResponse,
+    )
+    assert bool_resp.value == "True"
+    assert bool_resp.type == "bool"
+
+    dict_resp = dap_client.send(
+        dap.SetVariableRequest(
+            variables_reference=scope_resp.scopes[0].variables_reference,
+            name="my_dict",
+            value='{"foo": "bar", "int": 1}',
+        ),
+        dap.SetVariableResponse,
+    )
+    assert dict_resp.value == repr({"foo": "bar", "int": 1})
+    assert dict_resp.type == "dict"
+
+    int_resp = dap_client.send(
+        dap.SetVariableRequest(
+            variables_reference=scope_resp.scopes[0].variables_reference,
+            name="my_int",
+            value="1",
+        ),
+        dap.SetVariableResponse,
+    )
+    assert int_resp.value == "1"
+    assert int_resp.type == "int"
+
+    list_resp = dap_client.send(
+        dap.SetVariableRequest(
+            variables_reference=scope_resp.scopes[0].variables_reference,
+            name="my_list",
+            value="[1, '2', true, false]",
+        ),
+        dap.SetVariableResponse,
+    )
+    assert list_resp.value == repr([1, "2", True, False])
+    assert list_resp.type == "list"
+
+    str_resp = dap_client.send(
+        dap.SetVariableRequest(
+            variables_reference=scope_resp.scopes[0].variables_reference,
+            name="my_str",
+            value='"string value"',
+        ),
+        dap.SetVariableResponse,
+    )
+    assert str_resp.value == "'string value'"
+    assert str_resp.type == "str"
+
+    var_resp = dap_client.send(
+        dap.SetVariableRequest(
+            variables_reference=scope_resp.scopes[0].variables_reference,
+            name="my_var",
+            value="foo",
+        ),
+        dap.SetVariableResponse,
+    )
+    assert var_resp.value == "'bar'"
+    assert var_resp.type == "AnsibleUnicode"
+
+    dap_client.send(dap.StepInRequest(thread_id=localhost_tid), dap.StepInResponse)
+    dap_client.wait_for_message(dap.StoppedEvent)
+    st_resp = dap_client.send(dap.StackTraceRequest(thread_id=localhost_tid), dap.StackTraceResponse)
+    scope_resp = dap_client.send(dap.ScopesRequest(frame_id=st_resp.stack_frames[0].id), dap.ScopesResponse)
+    task_vars = dap_client.send(
+        dap.VariablesRequest(variables_reference=scope_resp.scopes[1].variables_reference),
+        dap.VariablesResponse,
+    )
+    to_check = {"my_bool", "my_dict", "my_int", "my_list", "my_str", "my_var"}
+    for v in task_vars.variables:
+        if v.name == "my_bool":
+            to_check.remove("my_bool")
+            assert v.value == "True"
+            assert v.type == "bool"
+
+        elif v.name == "my_dict":
+            to_check.remove("my_dict")
+            assert v.value == repr({"foo": "bar", "int": 1})
+            assert v.type == "dict"
+
+        elif v.name == "my_int":
+            to_check.remove("my_int")
+            assert v.value == "1"
+            assert v.type == "int"
+
+        elif v.name == "my_list":
+            to_check.remove("my_list")
+            assert v.value == repr([1, "2", True, False])
+            assert v.type == "list"
+
+        elif v.name == "my_str":
+            to_check.remove("my_str")
+            assert v.value == "'string value'"
+            assert v.type == "str"
+
+        elif v.name == "my_var":
+            to_check.remove("my_var")
+            assert v.value == "'bar'"
+            assert v.type == "AnsibleUnicode"
+
+        if not to_check:
+            break
+
+    assert not to_check
+
+    dap_client.send(dap.ContinueRequest(thread_id=localhost_tid), dap.ContinueResponse)
+    dap_client.wait_for_message(dap.ThreadEvent)
+    dap_client.wait_for_message(dap.TerminatedEvent)
+
+    play_out = proc.communicate()
+    if rc := proc.returncode:
+        raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
+
+
+def test_playbook_eval_repr(
+    dap_client: DAPClient,
+    tmp_path: pathlib.Path,
+) -> None:
+    playbook = tmp_path / "main.yml"
+    playbook.write_text(
+        r"""
+- hosts: localhost
+  gather_facts: false
+  vars:
+    foo: bar
+  tasks:
+  - debug:
+      msg: Placeholder
+"""
+    )
+
+    proc = dap_client.launch("main.yml", playbook_dir=tmp_path)
+
+    dap_client.send(
+        dap.SetBreakpointsRequest(
+            source=dap.Source(
+                name="main.yml",
+                path=str(playbook.absolute()),
+            ),
+            lines=[7],
+            breakpoints=[dap.SourceBreakpoint(line=7)],
+            source_modified=False,
+        ),
+        dap.SetBreakpointsResponse,
+    )
+
+    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
+
+    thread_event = dap_client.wait_for_message(dap.ThreadEvent)
+    localhost_tid = thread_event.thread_id
+
+    dap_client.wait_for_message(dap.StoppedEvent)
+    st_resp = dap_client.send(dap.StackTraceRequest(thread_id=localhost_tid), dap.StackTraceResponse)
+
+    eval_resp = dap_client.send(
+        dap.EvaluateRequest(
+            "foo",
+            frame_id=st_resp.stack_frames[0].id,
+            context="repl",
+        ),
+        dap.EvaluateResponse,
+    )
+    assert eval_resp.result == "'bar'"
+    assert eval_resp.type == "AnsibleUnicode"
+
+    dap_client.send(dap.ContinueRequest(thread_id=localhost_tid), dap.ContinueResponse)
+    dap_client.wait_for_message(dap.ThreadEvent)
     dap_client.wait_for_message(dap.TerminatedEvent)
 
     play_out = proc.communicate()
