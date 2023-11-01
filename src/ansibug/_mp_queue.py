@@ -75,12 +75,12 @@ class MPQueue:
         self,
         timeout: float = 0,
     ) -> None:
+        self._proto.connection_made()
         self._recv_thread = threading.Thread(
             target=self._recv_handler,
             name=f"{type(self).__name__} Recv",
         )
         self._recv_thread.start()
-        self._proto.connection_made()
 
     def stop(self) -> None:
         self._cancel_token.cancel()

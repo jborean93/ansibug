@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import io
+import json
 import os
 import pathlib
 import queue
@@ -32,12 +33,34 @@ def get_test_env() -> dict[str, str]:
 
 
 class DAPClient:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        test_name: str,
+        enable_logging: bool = False,
+    ) -> None:
         self._client = dap.DebugAdapterConnection()
+        self._enable_logging = enable_logging
+        self._test_name = test_name
 
         proc_env = get_test_env()
+        dap_args = [
+            sys.executable,
+            "-m",
+            "ansibug",
+            "dap",
+        ]
+        if enable_logging:
+            dap_args.extend(
+                [
+                    "--log-file",
+                    f"/tmp/ansibug-{test_name}-dap.log",
+                    "--log-level",
+                    "debug",
+                ]
+            )
+
         self._dap_proc = subprocess.Popen(
-            [sys.executable, "-m", "ansibug", "dap"],
+            dap_args,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -134,10 +157,21 @@ class DAPClient:
         playbook_args: list[str] | None = None,
         ansibug_args: list[str] | None = None,
         attach_options: dict[str, t.Any] | None = None,
+        attach_by_address: bool = False,
     ) -> subprocess.Popen:
         proc_args = [sys.executable, "-m", "ansibug", "listen"]
         if ansibug_args:
             proc_args += ansibug_args
+
+        if self._enable_logging and "--log-file" not in proc_args:
+            proc_args.extend(
+                [
+                    "--log-file",
+                    f"/tmp/ansibug-{self._test_name}-debuggee.log",
+                    "--log-level",
+                    "debug",
+                ]
+            )
 
         proc_args.append(str(playbook))
         if playbook_args:
@@ -167,7 +201,13 @@ class DAPClient:
             proc.kill()
             raise Exception("timed out waiting for proc pid")
 
-        attach_arguments = (attach_options or {}) | {"processId": proc.pid}
+        if attach_by_address:
+            proc_conn_data = json.loads(pid_path.read_text())
+            proc_info = {"address": proc_conn_data["host"], "port": int(proc_conn_data["port"])}
+        else:
+            proc_info = {"processId": proc.pid}
+
+        attach_arguments = (attach_options or {}) | proc_info
         self.send(dap.AttachRequest(arguments=attach_arguments), dap.AttachResponse)
         self.wait_for_message(dap.InitializedEvent)
 
@@ -185,6 +225,10 @@ class DAPClient:
             launch_args["args"] = playbook_args
         if playbook_dir:
             launch_args["cwd"] = str(playbook_dir)
+
+        if self._enable_logging and "logFile" not in launch_args:
+            launch_args["logFile"] = f"/tmp/ansibug-{self._test_name}-debuggee.log"
+            launch_args["logLevel"] = "debug"
 
         self.send(dap.LaunchRequest(arguments=launch_args))
         resp = self.wait_for_message(dap.RunInTerminalRequest)
