@@ -28,7 +28,7 @@ jobs:
         set -ex
 
         python -Im pip install tox
-        python -Im tox -e sanity
+        python -Im tox run -f sanity
 
   build:
     name: build sdist and wheel
@@ -62,11 +62,26 @@ jobs:
       matrix:
         os:
         - ubuntu-latest
+        ansible-version:
+        - '2.14'
+        - '2.15'
+        - '2.16'
+        - devel
         python-version:
-        - 3.9
+        - '3.9'
         - '3.10'
         - '3.11'
         - '3.12'
+
+        exclude:
+        - ansible-version: '2.14'
+          python-version: '3.12'
+        - ansible-version: '2.15'
+          python-version: '3.12'
+        - ansible-version: '2.16'
+          python-version: '3.9'
+        - ansible-version: devel
+          python-version: '3.9'
 
     steps:
     - uses: actions/checkout@v3
@@ -99,7 +114,9 @@ jobs:
         set -ex
 
         python -Im pip install tox
-        python -Im tox run -e ${{ env.TOX_PYTHON }} --installpkg dist/*.whl
+        python -Im tox run \
+            -f ${{ env.TOX_PYTHON }} ansible_${{ matrix.ansible-version }} \
+            --installpkg dist/*.whl
       env:
         PYTEST_ADDOPTS: --color=yes --junitxml junit/test-results.xml
 
@@ -107,14 +124,14 @@ jobs:
       if: always()
       uses: actions/upload-artifact@v3
       with:
-        name: Unit Test Results (${{ matrix.os }} ${{ matrix.python-version }})
+        name: Unit Test Results (${{ matrix.os }} ${{ matrix.python-version }} ansible_${{ matrix.ansible-version }})
         path: ./junit/test-results.xml
 
     - name: Upload Coverage Results
       if: always() && !startsWith(github.ref, 'refs/tags/v')
       uses: actions/upload-artifact@v3
       with:
-        name: Coverage Results (${{ matrix.os }} ${{ matrix.python-version }}
+        name: Coverage Results (${{ matrix.os }} ${{ matrix.python-version }} ansible_${{ matrix.ansible-version }})
         path: ./coverage.xml
 
     - name: Upload Coverage to codecov
@@ -122,4 +139,4 @@ jobs:
       uses: codecov/codecov-action@v3
       with:
         files: ./coverage.xml
-        flags: ${{ env.OS }},py${{ matrix.python-version }}
+        flags: ${{ env.OS }},py${{ matrix.python-version }},ansible_${{ matrix.ansible-version }}
