@@ -69,6 +69,15 @@ host2 ansible_host=127.0.0.1 ansible_connection=local ansible_python_interpreter
     assert stopped_event.thread_id == host2_tid
     assert stopped_event.hit_breakpoint_ids == [bid]
 
+    all_threads = dap_client.send(dap.ThreadsRequest(), dap.ThreadsResponse)
+    assert len(all_threads.threads) == 3
+    assert all_threads.threads[0].id == 1
+    assert all_threads.threads[0].name == "main"
+    assert all_threads.threads[1].id == host1_tid
+    assert all_threads.threads[1].name == "host1"
+    assert all_threads.threads[2].id == host2_tid
+    assert all_threads.threads[2].name == "host2"
+
     dap_client.send(dap.ContinueRequest(thread_id=stopped_event.thread_id), dap.ContinueResponse)
 
     thread_event = dap_client.wait_for_message(dap.ThreadEvent)

@@ -69,8 +69,7 @@ class MPQueue:
     ) -> None:
         b_data = pickle.dumps(data)
         b_len = len(b_data).to_bytes(4, byteorder="little")
-        self._socket.send(b_len, self._cancel_token)
-        self._socket.send(b_data, self._cancel_token)
+        self._socket.send(b_len + b_data, self._cancel_token)
 
     def start(
         self,
@@ -102,7 +101,6 @@ class MPQueue:
                 data_len = int.from_bytes(b_data_len, byteorder="little", signed=False)
                 b_data = self._socket.recv(data_len, self._cancel_token)
 
-                # FIXME: Have some way for the client to notify on an exception
                 py_obj = pickle.loads(b_data)
                 obj = t.cast(ProtocolMessage, py_obj)
                 self._proto.on_msg_received(obj)
@@ -188,7 +186,8 @@ class ServerMPQueue(MPQueue):
 
         sock = socket.create_server(
             address,
-            reuse_port=True,
+            # If port 0 is requested, don't set SO_REUSEPORT
+            reuse_port=address[1] != 0,
             **sock_kwargs,
         )
 

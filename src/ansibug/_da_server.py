@@ -6,6 +6,7 @@ from __future__ import annotations
 import functools
 import json
 import logging
+import pathlib
 import sys
 import threading
 import time
@@ -15,14 +16,20 @@ import typing as t
 
 from . import dap as dap
 from ._debuggee import PlaybookProcessInfo, get_pid_info_path
+from ._logging import LogLevel, configure_file_logging
 from ._mp_queue import ClientMPQueue, MPProtocol, MPQueue, ServerMPQueue
 from ._tls import create_client_tls_context
 
 log = logging.getLogger(__name__)
-logging.basicConfig(filename="/tmp/ansibug-dap.log", level=logging.DEBUG)
 
 
-def start_dap() -> None:
+def start_dap(
+    log_file: pathlib.Path | None = None,
+    log_level: LogLevel = "info",
+) -> None:
+    if log_file:
+        configure_file_logging(str(log_file.absolute()), log_level)
+
     log.info("starting")
     try:
         with DAServer() as da:
@@ -181,7 +188,7 @@ class DAServer:
     @functools.singledispatchmethod
     def _process_msg(self, msg: dap.ProtocolMessage) -> None:
         # This should never happen.
-        raise NotImplementedError(type(msg).__name__)
+        raise NotImplementedError(type(msg).__name__)  # pragma: nocover
 
     @_process_msg.register
     def _(self, msg: dap.Request) -> None:
@@ -194,8 +201,7 @@ class DAServer:
                 dap.ErrorResponse(
                     command=msg.command,
                     request_seq=msg.seq,
-                    message="debuggee disconnected",
-                    # TODO: populate error
+                    message=f"Debuggee disconnected: {self._connection_exp!s}",
                 )
             )
             return
@@ -211,8 +217,7 @@ class DAServer:
                 dap.ErrorResponse(
                     command=msg.command,
                     request_seq=msg.seq,
-                    message="debuggee disconnected",
-                    # TODO: populate error
+                    message=f"Debuggee disconnected: {self._connection_exp!s}",
                 )
             )
 
@@ -271,8 +276,9 @@ class DAServer:
                 proto=lambda: self._proto,
                 ssl_context=ssl_context,
             )
-            # FIXME: Add timeout to the request args
-            self._debuggee.start(timeout=5.0)
+
+            connect_timeout = float(attach_arguments.get("connectTimeout", 5.0))
+            self._debuggee.start(timeout=connect_timeout)
 
             self.send_to_client(dap.AttachResponse(request_seq=msg.seq))
             self.send_to_client(dap.InitializedEvent())
@@ -316,7 +322,11 @@ class DAServer:
                     ]
                 )
 
-            ansibug_args.append(launch_arguments["playbook"])
+            if playbook := launch_arguments.get("playbook", None):
+                ansibug_args.append(playbook)
+            else:
+                raise Exception("Expecting playbook value but none provided.")
+
             ansibug_args += launch_arguments.get("args", [])
 
             launch_console = launch_arguments.get("console", "integratedTerminal")

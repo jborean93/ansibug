@@ -2,7 +2,10 @@
 # GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
 
 import pathlib
+import subprocess
+import sys
 
+import pytest
 from dap_client import DAPClient
 
 import ansibug.dap as dap
@@ -64,3 +67,48 @@ def test_attach_playbook(
     play_out = proc.communicate()
     if rc := proc.returncode:
         raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
+
+
+def test_run_with_listen_no_client(
+    tmp_path: pathlib.Path,
+) -> None:
+    playbook = tmp_path / "main.yml"
+    playbook.write_text(
+        r"""
+- hosts: localhost
+  gather_facts: false
+  tasks:
+  - name: ping test
+    ping:
+"""
+    )
+    actual = subprocess.run(
+        [sys.executable, "-m", "ansibug", "listen", "--no-wait", str(playbook)],
+        capture_output=True,
+        check=False,
+        encoding="utf-8",
+    )
+    if actual.returncode:
+        raise Exception(f"Playbook failed {actual.returncode}\nSTDOUT: {actual.stdout}\nSTDERR: {actual.stderr}")
+
+
+def test_attach_invalid_pid(
+    dap_client: DAPClient,
+) -> None:
+    attach_args = {
+        "processId": 0,
+    }
+
+    with pytest.raises(Exception, match="Failed to find process pid file at "):
+        dap_client.send(dap.AttachRequest(arguments=attach_args), dap.AttachResponse)
+
+
+def test_attach_no_pid_or_port(
+    dap_client: DAPClient,
+) -> None:
+    attach_args = {
+        "address": "localhost",
+    }
+
+    with pytest.raises(Exception, match="Expected processId or address and port to be specified for attach"):
+        dap_client.send(dap.AttachRequest(arguments=attach_args), dap.AttachResponse)

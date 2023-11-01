@@ -63,6 +63,11 @@
 								"type": "string",
 								"description": "The TLS verification settings, defaults to verify but can be set to ignore to ignore the verification checks. Can also be set to the path of a file or directory to use as the CA trust store.",
 								"default": "verify"
+							},
+							"connectTimeout": {
+								"type": "float",
+								"description": "The timeout, in seconds, to wait when trying to attach to the ansible-playbook process.",
+								"default": 5.0
 							}
 						}
 					},

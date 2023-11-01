@@ -146,47 +146,22 @@ from ansible.playbook.task import Task
 from ansible.plugins.callback import CallbackBase
 from ansible.utils.display import Display
 
-import ansibug
+from ansibug._debuggee import AnsibleDebugger
+from ansibug._logging import configure_file_logging
+from ansibug._tls import create_server_tls_context
 
 log = logging.getLogger("ansibug.callback")
 
 display = Display()
 
 
-def configure_logging(
-    file: str,
-    level: str,
-    format: str,
-) -> None:
-    log_level = {
-        "info": logging.INFO,
-        "debug": logging.DEBUG,
-        "warning": logging.WARNING,
-        "error": logging.ERROR,
-    }[level]
-
-    fh = logging.FileHandler(file, mode="w", encoding="utf-8")
-    fh.setLevel(log_level)
-    fh.setFormatter(logging.Formatter(format))
-
-    ansibug_logger = logging.getLogger("ansibug")
-    ansibug_logger.setLevel(log_level)
-    ansibug_logger.addHandler(fh)
-
-
 def load_playbook_tasks(
-    debugger: ansibug.AnsibleDebugger,
+    debugger: AnsibleDebugger,
     playbook: Playbook,
 ) -> None:
     play: Play
     block: Block
     task: Task
-
-    # import debugpy
-
-    # if not debugpy.is_client_connected():
-    #     debugpy.listen(("localhost", 12535))
-    #     debugpy.wait_for_client()
 
     def split_task_path(task: str) -> tuple[str, int]:
         split = task.rsplit(":", 1)
@@ -227,7 +202,7 @@ class CallbackModule(CallbackBase):
         **kwargs: t.Any,
     ) -> None:
         super().__init__(*args, **kwargs)
-        self._debugger = ansibug.AnsibleDebugger()
+        self._debugger = AnsibleDebugger()
 
     def v2_playbook_on_start(
         self,
@@ -237,7 +212,7 @@ class CallbackModule(CallbackBase):
 
         log_file = self.get_option("log_file")
         if log_file:
-            configure_logging(
+            configure_file_logging(
                 log_file,
                 self.get_option("log_level"),
                 self.get_option("log_format"),
@@ -254,7 +229,7 @@ class CallbackModule(CallbackBase):
 
         ssl_context: ssl.SSLContext | None = None
         if self.get_option("use_tls") and mode == "listen":
-            ssl_context = ansibug.create_server_tls_context(
+            ssl_context = create_server_tls_context(
                 certfile=self.get_option("tls_server_certfile"),
                 keyfile=self.get_option("tls_server_keyfile"),
                 password=self.get_option("tls_server_key_password"),
