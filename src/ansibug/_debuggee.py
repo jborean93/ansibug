@@ -133,7 +133,6 @@ class DAProtocol(MPProtocol):
                     command=msg.command,
                     request_seq=msg.seq,
                     message=f"Unknown error: {e!r}",
-                    # error=dap.Message(),  # FIXME
                 )
                 self._debugger.send(resp)
 
@@ -147,67 +146,67 @@ class DAProtocol(MPProtocol):
 
 class DebugState(t.Protocol):
     def ended(self) -> None:
-        ...
+        ...  # pragma: nocover
 
     def evaluate(
         self,
         request: dap.EvaluateRequest,
     ) -> dap.EvaluateResponse:
-        raise NotImplementedError()
+        raise NotImplementedError()  # pragma: nocover
 
     def continue_request(
         self,
         request: dap.ContinueRequest,
     ) -> dap.ContinueResponse:
-        raise NotImplementedError()
+        raise NotImplementedError()  # pragma: nocover
 
     def get_scopes(
         self,
         request: dap.ScopesRequest,
     ) -> dap.ScopesResponse:
-        raise NotImplementedError()
+        raise NotImplementedError()  # pragma: nocover
 
     def get_stacktrace(
         self,
         request: dap.StackTraceRequest,
     ) -> dap.StackTraceResponse:
-        raise NotImplementedError()
+        raise NotImplementedError()  # pragma: nocover
 
     def get_threads(
         self,
         request: dap.ThreadsRequest,
     ) -> dap.ThreadsResponse:
-        raise NotImplementedError()
+        raise NotImplementedError()  # pragma: nocover
 
     def get_variables(
         self,
         request: dap.VariablesRequest,
     ) -> dap.VariablesResponse:
-        raise NotImplementedError()
+        raise NotImplementedError()  # pragma: nocover
 
     def set_variable(
         self,
         request: dap.SetVariableRequest,
     ) -> dap.SetVariableResponse:
-        raise NotImplementedError()
+        raise NotImplementedError()  # pragma: nocover
 
     def step_in(
         self,
         request: dap.StepInRequest,
     ) -> None:
-        raise NotImplementedError()
+        raise NotImplementedError()  # pragma: nocover
 
     def step_out(
         self,
         request: dap.StepOutRequest,
     ) -> None:
-        raise NotImplementedError()
+        raise NotImplementedError()  # pragma: nocover
 
     def step_over(
         self,
         request: dap.NextRequest,
     ) -> None:
-        raise NotImplementedError()
+        raise NotImplementedError()  # pragma: nocover
 
 
 @dataclasses.dataclass
@@ -326,8 +325,6 @@ class AnsibleDebugger(metaclass=Singleton):
                 adapter is connected and ready.
         """
         self._da_connected.wait(timeout=timeout)
-        # self._configuration_done.wait(timeout=timeout)
-        # FIXME: Add check that this wasn't set on recv shutdown
 
     def get_breakpoint(
         self,
@@ -402,8 +399,9 @@ class AnsibleDebugger(metaclass=Singleton):
         self,
         msg: dap.ProtocolMessage | None,
     ) -> None:
-        log.info("Sending to DA adapter %r", msg)
-        self._send_queue.put(msg)
+        if self._connected:
+            log.info("Sending to DA adapter %r", msg)
+            self._send_queue.put(msg)
 
     def register_path_breakpoint(
         self,
@@ -526,9 +524,10 @@ class AnsibleDebugger(metaclass=Singleton):
                     self._addr_event.set()
 
                     mp_queue.start()
-                    self._da_connected.set()
-                    self._connected = True
                     try:
+                        self._connected = True
+                        self._da_connected.set()
+
                         while True:
                             resp = self._send_queue.get()
                             try:
@@ -703,13 +702,6 @@ class AnsibleDebugger(metaclass=Singleton):
             breakpoints=breakpoint_info,
         )
         self.send(resp)
-
-    @process_message.register
-    def _(
-        self,
-        msg: dap.SetExceptionBreakpointsRequest,
-    ) -> None:
-        raise NotImplementedError()
 
     @process_message.register
     def _(

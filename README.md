@@ -1,5 +1,9 @@
 # Ansibug
 
+[![Test workflow](https://github.com/jborean93/ansibug/actions/workflows/ci.yml/badge.svg)](https://github.com/jborean93/ansibug/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/jborean93/ansibug/graph/badge.svg?token=JHxSi6T0JJ)](https://codecov.io/gh/jborean93/ansibug)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/jborean93/ansibug/blob/main/LICENSE)
+
 POC for an Ansible Debug Adapter Protocol Runner debugger.
 See the [demo folder](./demo/) for some example DAP clients that have been configured to use `ansibug` for testing.
 

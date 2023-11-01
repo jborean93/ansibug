@@ -1,9 +1,12 @@
 # Copyright (c) 2023 Jordan Borean
 # GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
 
+from __future__ import annotations
+
 import datetime
 import pathlib
 import secrets
+import ssl
 import string
 
 import pytest
@@ -16,17 +19,17 @@ from cryptography.hazmat.primitives.serialization import (
     Encoding,
     NoEncryption,
     PrivateFormat,
-    load_pem_private_key,
 )
 from dap_client import DAPClient
 
 import ansibug.dap as dap
+from ansibug._tls import create_client_tls_context, create_server_tls_context
 
 COMBINED = "combined.pem"
 CERT_ONLY = "cert.pem"
 KEY_PLAINTEXT = "key-plaintext.pem"
 KEY_ENCRYPTED = "key-encrypted.pem"
-KEY_PASSWORD = "key-password.txt"
+KEY_PASSWORD = "".join(secrets.choice(string.ascii_letters + string.digits) for i in range(16))
 
 
 @pytest.fixture(scope="function")
@@ -63,9 +66,6 @@ def keypair(tmp_path: pathlib.Path) -> pathlib.Path:
         .sign(private_key, SHA256())
     )
 
-    alphabet = string.ascii_letters + string.digits + string.punctuation
-    key_password = "".join(secrets.choice(alphabet) for i in range(16)).encode()
-
     pub_key = cert.public_bytes(Encoding.PEM)
     key_plaintext = private_key.private_bytes(
         encoding=Encoding.PEM,
@@ -75,7 +75,7 @@ def keypair(tmp_path: pathlib.Path) -> pathlib.Path:
     key_encrypted = private_key.private_bytes(
         encoding=Encoding.PEM,
         format=PrivateFormat.TraditionalOpenSSL,
-        encryption_algorithm=BestAvailableEncryption(key_password),
+        encryption_algorithm=BestAvailableEncryption(KEY_PASSWORD.encode()),
     )
 
     cert_dir = tmp_path / "certificates"
@@ -93,9 +93,6 @@ def keypair(tmp_path: pathlib.Path) -> pathlib.Path:
 
     with open(cert_dir / KEY_ENCRYPTED, mode="wb") as fd:
         fd.write(key_encrypted)
-
-    with open(cert_dir / KEY_PASSWORD, mode="wb") as fd:
-        fd.write(key_password)
 
     return cert_dir
 
@@ -129,14 +126,13 @@ def test_attach_tls(
             str(keypair / KEY_PLAINTEXT),
         ]
     else:
-        key_password = (keypair / KEY_PASSWORD).read_text()
         ansibug_args += [
             "--tls-cert",
             str(keypair / CERT_ONLY),
             "--tls-key",
             str(keypair / KEY_ENCRYPTED),
             "--tls-key-pass",
-            key_password,
+            KEY_PASSWORD,
         ]
 
     proc = dap_client.attach(
@@ -170,3 +166,85 @@ def test_attach_tls(
     play_out = proc.communicate()
     if rc := proc.returncode:
         raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
+
+
+def test_client_verify(keypair: pathlib.Path) -> None:
+    client = create_client_tls_context(verify="verify")
+    client.load_verify_locations(cafile=str(keypair / CERT_ONLY))
+
+    server = create_server_tls_context(certfile=str(keypair / COMBINED))
+    _do_tls_handshake(client, server, "localhost")
+
+
+def test_client_ignore(keypair: pathlib.Path) -> None:
+    client = create_client_tls_context(verify="ignore")
+    server = create_server_tls_context(certfile=str(keypair / COMBINED))
+    _do_tls_handshake(client, server, "invalid")
+
+
+def test_client_ca_file(keypair: pathlib.Path) -> None:
+    client = create_client_tls_context(verify=str(keypair / CERT_ONLY))
+    server = create_server_tls_context(certfile=str(keypair / COMBINED))
+    _do_tls_handshake(client, server, "localhost")
+
+
+def test_client_invalid_ca(keypair: pathlib.Path) -> None:
+    client = create_client_tls_context()
+    server = create_server_tls_context(certfile=str(keypair / COMBINED))
+
+    with pytest.raises(ssl.SSLCertVerificationError):
+        _do_tls_handshake(client, server, "localhost")
+
+
+def test_client_invalid_cn(keypair: pathlib.Path) -> None:
+    client = create_client_tls_context(verify=str(keypair / CERT_ONLY))
+    server = create_server_tls_context(certfile=str(keypair / COMBINED))
+
+    with pytest.raises(ssl.SSLCertVerificationError):
+        _do_tls_handshake(client, server, "invalid")
+
+
+def test_client_invalid_path() -> None:
+    with pytest.raises(ValueError, match="verify location path '/tmp/fake path' does not exist"):
+        create_client_tls_context(verify="/tmp/fake path")
+
+
+def _do_tls_handshake(
+    client: ssl.SSLContext,
+    server: ssl.SSLContext,
+    target: str,
+) -> None:
+    c_in = ssl.MemoryBIO()
+    c_out = ssl.MemoryBIO()
+    s_in = ssl.MemoryBIO()
+    s_out = ssl.MemoryBIO()
+    c = client.wrap_bio(c_in, c_out, server_side=False, server_hostname=target)
+    s = server.wrap_bio(s_in, s_out, server_side=True)
+
+    in_token: bytes | None = None
+    while True:
+        if in_token:
+            c_in.write(in_token)
+
+        out_token: bytes | None = None
+        try:
+            c.do_handshake()
+        except ssl.SSLWantReadError:
+            pass
+
+        out_token = c_out.read()
+        if not out_token:
+            break
+
+        s_in.write(out_token)
+        try:
+            s.do_handshake()
+        except ssl.SSLWantReadError:
+            pass
+
+        in_token = s_out.read()
+        if not in_token:
+            break
+
+    assert c.version() == s.version()
+    assert c.cipher() == s.cipher()

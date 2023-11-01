@@ -11,6 +11,8 @@ import subprocess
 import sys
 import typing as t
 
+from ._logging import LogLevel
+
 
 def exec_playbook_connect(
     playbook_args: list[str],
@@ -20,7 +22,7 @@ def exec_playbook_connect(
     use_tls: bool = False,
     tls_cert_ca: bool | pathlib.Path | None = None,
     log_file: pathlib.Path | None = None,
-    log_level: t.Literal["info", "debug", "warning", "error"] = "info",
+    log_level: LogLevel = "info",
 ) -> None:
     """Launch a new debug ansible-playbook process in connect mode.
 
@@ -81,7 +83,7 @@ def exec_playbook_listen(
     tls_key: pathlib.Path | None = None,
     tls_password: str | None = None,
     log_file: pathlib.Path | None = None,
-    log_level: t.Literal["info", "debug", "warning", "error"] = "info",
+    log_level: LogLevel = "info",
 ) -> None:
     """Launch a new debug ansible-playbook process in listen mode.
 
@@ -150,7 +152,7 @@ def _exec_playbook(
     no_wait: bool = True,
     use_tls: bool = False,
     log_file: pathlib.Path | None = None,
-    log_level: t.Literal["info", "debug", "warning", "error"] = "info",
+    log_level: LogLevel = "info",
 ) -> None:
     """Common launch code for connect and listen modes."""
     ansible_env = os.environ | mode_env | _configure_ansible_env()

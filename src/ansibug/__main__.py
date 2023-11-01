@@ -19,11 +19,11 @@ from ._exec_playbook import exec_playbook_connect, exec_playbook_listen
 HAS_ARGCOMPLETE = True
 try:
     import argcomplete
-except ImportError:
+except ImportError:  # pragma: nocover
     HAS_ARGCOMPLETE = False
 
 
-ADDR_PATTERN = re.compile(r"(?:\[?(?P<hostname>[^\[\]]+)\]?:)?(?P<port>\d+)")
+ADDR_PATTERN = re.compile(r"^(?:\[?(?P<hostname>[^\[\]]+)\]?:)?(?P<port>\d+)$")
 
 
 def _add_launch_common_args(parser: argparse.ArgumentParser) -> None:
@@ -32,22 +32,6 @@ def _add_launch_common_args(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="Do not wait for the client to connect and send the "
         "configurationDone request before starting the playbook.",
-    )
-
-    parser.add_argument(
-        "--log-file",
-        action="store",
-        type=_parse_path,
-        help="Enable file logging to the file at this path for the ansibug debuggee logger.",
-    )
-
-    parser.add_argument(
-        "--log-level",
-        action="store",
-        choices=["info", "debug", "warning", "error"],
-        default="info",
-        type=str,
-        help="Set the logging filter level of the ansibug debuggee logger when --log-file is set. Defaults to info",
     )
 
     parser.add_argument(
@@ -60,6 +44,24 @@ def _add_launch_common_args(parser: argparse.ArgumentParser) -> None:
         "playbook_args",
         nargs=argparse.REMAINDER,
         help="Arguments to use when launching ansible-playbook.",
+    )
+
+
+def _add_log_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--log-file",
+        action="store",
+        type=_parse_path,
+        help="Enable file logging to the file at this path.",
+    )
+
+    parser.add_argument(
+        "--log-level",
+        action="store",
+        choices=["info", "debug", "warning", "error"],
+        default="info",
+        type=str,
+        help="Set the logging filter level of the logger when --log-file is set. Defaults to info",
     )
 
 
@@ -155,6 +157,7 @@ def parse_args(
         "the client will use for verification. The default is set to "
         "'verify' which will perform all the default checks.",
     )
+    _add_log_args(connect)
     _add_launch_common_args(connect)
 
     # DAP
@@ -168,6 +171,7 @@ def parse_args(
         "using the DAP protocol messages.",
         help="Start an executable Debug Adapter Protocol process",
     )
+    _add_log_args(dap)
 
     # Listen
 
@@ -188,10 +192,11 @@ def parse_args(
         "[host:]port where host defaults to 127.0.0.1 if not specified. If "
         "not specified the port will be randomly chosen",
     )
+    _add_log_args(listen)
     _add_launch_common_args(listen)
     _add_tls_server_args(listen)
 
-    if HAS_ARGCOMPLETE:
+    if HAS_ARGCOMPLETE:  # pragma: nocover
         argcomplete.autocomplete(parser)
 
     return parser.parse_args(args)
@@ -201,7 +206,7 @@ def main() -> None:
     args = parse_args(sys.argv[1:])
 
     if args.action == "dap":
-        start_dap()
+        start_dap(args.log_file, args.log_level)
         return
 
     addr = args.addr

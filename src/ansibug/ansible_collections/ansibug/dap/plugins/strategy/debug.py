@@ -16,15 +16,17 @@ author: Jordan Borean (@jborean93)
 import collections.abc
 import os
 import threading
+import traceback
 import typing as t
 
 from ansible import constants as C
-from ansible.errors import AnsibleError
+from ansible.errors import AnsibleError, AnsibleUndefinedVariable
 from ansible.executor.play_iterator import PlayIterator
 from ansible.executor.task_queue_manager import TaskQueueManager
 from ansible.executor.task_result import TaskResult
 from ansible.inventory.host import Host
 from ansible.parsing.dataloader import DataLoader
+from ansible.parsing.splitter import parse_kv
 from ansible.playbook.block import Block
 from ansible.playbook.conditional import Conditional
 from ansible.playbook.included_file import IncludedFile
@@ -37,6 +39,7 @@ from ansible.utils.display import Display
 from ansible.vars.manager import VariableManager
 
 import ansibug
+from ansibug._debuggee import AnsibleDebugger, DebugState
 
 display = Display()
 
@@ -118,14 +121,10 @@ class AnsibleStackFrame:
     def to_dap(self) -> ansibug.dap.StackFrame:
         task_path = self.task.get_path()
 
-        source: ansibug.dap.Source | None = None
-        line = 0
-        if task_path:
-            task_path_and_line = task_path.rsplit(":", 1)
-            path = task_path_and_line[0]
-            line = int(task_path_and_line[1])
-
-            source = ansibug.dap.Source(name=os.path.basename(path), path=path)
+        task_path_and_line = task_path.rsplit(":", 1)
+        path = task_path_and_line[0]
+        line = int(task_path_and_line[1])
+        source = ansibug.dap.Source(name=os.path.basename(path), path=path)
 
         return ansibug.dap.StackFrame(
             id=self.id,
@@ -154,10 +153,10 @@ class AnsibleVariable:
         self.indexed_variables = indexed_variables
 
 
-class AnsibleDebugState(ansibug.DebugState):
+class AnsibleDebugState(DebugState):
     def __init__(
         self,
-        debugger: ansibug.AnsibleDebugger,
+        debugger: AnsibleDebugger,
         loader: DataLoader,
         iterator: PlayIterator,
         play: Play,
@@ -188,16 +187,14 @@ class AnsibleDebugState(ansibug.DebugState):
             None,
         )
         if not thread:
-            thread = self.add_thread(host, advertise=True)
+            thread = self.add_thread(host)
 
-        last_frame_id = thread.stack_frames[0] if thread.stack_frames else None
-        if last_frame_id is not None:
+        if thread.stack_frames:
             # The parent is the implicit block and we want the parent of that.
             parent_task = task._parent._parent
+            last_frame_id = thread.stack_frames[0]
             last_frame = self.stackframes[last_frame_id]
-            if (not parent_task and thread.stack_frames) or (
-                last_frame.task and last_frame.task._uuid != parent_task._uuid
-            ):
+            if not parent_task or (last_frame.task and last_frame.task._uuid != parent_task._uuid):
                 thread.stack_frames.pop(0)
                 self.stackframes.pop(last_frame_id)
                 for variable_id in last_frame.variables:
@@ -213,9 +210,6 @@ class AnsibleDebugState(ansibug.DebugState):
         thread.stack_frames.insert(0, sfid)
 
         task_path = task.get_path()
-        if not task_path:
-            return sf
-
         path_and_line = task_path.rsplit(":", 1)
         path = path_and_line[0]
         line = int(path_and_line[1])
@@ -312,8 +306,6 @@ class AnsibleDebugState(ansibug.DebugState):
     def add_thread(
         self,
         host: Host,
-        *,
-        advertise: bool = True,
     ) -> AnsibleThread:
         tid = self._debugger.next_thread_id()
 
@@ -321,13 +313,12 @@ class AnsibleDebugState(ansibug.DebugState):
             id=tid,
             host=host,
         )
-        if advertise:
-            self._debugger.send(
-                ansibug.dap.ThreadEvent(
-                    reason="started",
-                    thread_id=tid,
-                )
+        self._debugger.send(
+            ansibug.dap.ThreadEvent(
+                reason="started",
+                thread_id=tid,
             )
+        )
 
         return thread
 
@@ -391,18 +382,15 @@ class AnsibleDebugState(ansibug.DebugState):
     def remove_thread(
         self,
         tid: int,
-        *,
-        advertise: bool = True,
     ) -> None:
         self.threads.pop(tid, None)
 
-        if advertise:
-            self._debugger.send(
-                ansibug.dap.ThreadEvent(
-                    reason="exited",
-                    thread_id=tid,
-                )
+        self._debugger.send(
+            ansibug.dap.ThreadEvent(
+                reason="exited",
+                thread_id=tid,
             )
+        )
 
     def ended(self) -> None:
         with self._waiting_condition:
@@ -414,21 +402,29 @@ class AnsibleDebugState(ansibug.DebugState):
         self,
         request: ansibug.dap.EvaluateRequest,
     ) -> ansibug.dap.EvaluateResponse:
-        value = f"Evaluation for {request.context} is not implemented"
+        value_type = None
 
         # FIXME: Implement watch
         if request.context == "repl" and request.frame_id:
             sf = self.stackframes[request.frame_id]
-            templar = Templar(loader=self._loader, variables=sf.task_vars)
 
-            # FIXME: This won't fail with AnsibleUndefined as a bare expression.
-            # FIXME: Wrap in custom error to display if undefined or other err.
-            value = templar.template(request.expression, convert_bare=True, fail_on_undefined=True)
+            try:
+                templated_value = self._template(request.expression, sf.task_vars)
+            except AnsibleUndefinedVariable as e:
+                value = f"{type(e).__name__}: {e!s}"
+            except Exception as e:
+                value = traceback.format_exc()
+            else:
+                value = repr(templated_value)
+                value_type = type(templated_value).__name__
+
+        else:
+            value = f"Evaluation for {request.context} is not implemented"
 
         return ansibug.dap.EvaluateResponse(
             request_seq=request.seq,
-            result=repr(value),
-            type=type(value).__name__,
+            result=value,
+            type=value_type,
         )
 
     def continue_request(
@@ -456,10 +452,6 @@ class AnsibleDebugState(ansibug.DebugState):
         # This is a very basic templating of the args and doesn't handle loops.
         templar = Templar(loader=self._loader, variables=sf.task_vars)
         task_args = templar.template(sf.task.args, fail_on_undefined=False)
-        omit_value = sf.task_vars["omit"]
-        for task_key, task_value in list(task_args.items()):
-            if task_value == omit_value:
-                del task_args[task_key]
 
         def module_opts_setter(
             request: ansibug.dap.SetVariableRequest,
@@ -581,15 +573,7 @@ class AnsibleDebugState(ansibug.DebugState):
         if not variable.setter:
             raise Exception(f"Cannot set {request.name}, no known setter available")
 
-        # Run the new variable through a template, always use native types even
-        # if the config has not been enabled as this allows users to set things
-        # like ints and other native types.
-        templar = Templar(loader=self._loader, variables=variable.stackframe.task_vars)
-        if not C.DEFAULT_JINJA2_NATIVE:
-            templar = templar.copy_with_new_env(environment_class=AnsibleNativeEnvironment)
-
-        new_value = templar.template("{{ %s }}" % request.value)
-
+        new_value = self._template(request.value, variable.stackframe.task_vars)
         variable.setter(request, new_value)
         new_container = None
         if isinstance(new_value, (collections.abc.Mapping, collections.abc.Sequence)) and not isinstance(
@@ -635,6 +619,23 @@ class AnsibleDebugState(ansibug.DebugState):
 
             self._waiting_condition.notify_all()
 
+    def _template(
+        self,
+        value: str,
+        variables: dict[t.Any, t.Any],
+    ) -> t.Any:
+        templar = Templar(loader=self._loader, variables=variables)
+
+        # Always use native types even if the config has not been enabled as it
+        # allows expressions like `1` to be returned as an int and keeps things
+        # consistent.
+        if not C.DEFAULT_JINJA2_NATIVE:
+            templar = templar.copy_with_new_env(environment_class=AnsibleNativeEnvironment)
+
+        expression = "{{ %s }}" % value
+
+        return templar.template(expression)
+
 
 class StrategyModule(LinearStrategy):
     def __init__(
@@ -646,7 +647,8 @@ class StrategyModule(LinearStrategy):
         # Used for type annotation checks, technically defined in __init__ as well
         self._tqm = tqm
 
-        self._debug_state: AnsibleDebugState | None = None
+        # Set in run()
+        self._debug_state: AnsibleDebugState
 
     def _execute_meta(
         self,
@@ -671,22 +673,21 @@ class StrategyModule(LinearStrategy):
             return split[0], int(split[1])
 
         # Need to register these blocks as valid breakpoints and update the client bps
-        if self._debug_state:
-            for block in included_blocks:
-                block_path_and_line = block.get_path()
-                if block_path_and_line:
-                    # If the path is set this is an explicit block and should be
-                    # marked as an invalid breakpoint section.
-                    block_path, block_line = split_task_path(block_path_and_line)
-                    self._debug_state._debugger.register_path_breakpoint(block_path, block_line, 0)
+        for block in included_blocks:
+            block_path_and_line = block.get_path()
+            if block_path_and_line:
+                # If the path is set this is an explicit block and should be
+                # marked as an invalid breakpoint section.
+                block_path, block_line = split_task_path(block_path_and_line)
+                self._debug_state._debugger.register_path_breakpoint(block_path, block_line, 0)
 
-                task_list: list[Task] = block.block[:]
-                task_list.extend(block.rescue)
-                task_list.extend(block.always)
+            task_list: list[Task] = block.block[:]
+            task_list.extend(block.rescue)
+            task_list.extend(block.always)
 
-                for task in task_list:
-                    task_path, task_line = split_task_path(task.get_path())
-                    self._debug_state._debugger.register_path_breakpoint(task_path, task_line, 1)
+            for task in task_list:
+                task_path, task_line = split_task_path(task.get_path())
+                self._debug_state._debugger.register_path_breakpoint(task_path, task_line, 1)
 
         return included_blocks
 
@@ -698,8 +699,7 @@ class StrategyModule(LinearStrategy):
         play_context: PlayContext,
     ) -> None:
         """Called just as a task is about to be queue"""
-        if self._debug_state:
-            self._debug_state.process_task(host, task, task_vars)
+        self._debug_state.process_task(host, task, task_vars)
 
         return super()._queue_task(host, task, task_vars, play_context)
 
@@ -713,9 +713,8 @@ class StrategyModule(LinearStrategy):
         """Called when gathering the results of a queued task."""
         res = super()._process_pending_results(iterator, one_pass=one_pass, max_passes=max_passes)
 
-        if self._debug_state:
-            for task_res in res:
-                self._debug_state.process_task_result(task_res._host, task_res._task)
+        for task_res in res:
+            self._debug_state.process_task_result(task_res._host, task_res._task)
 
         return res
 
@@ -736,7 +735,7 @@ class StrategyModule(LinearStrategy):
         #     debugpy.listen(("localhost", 12535))
         #     debugpy.wait_for_client()
 
-        debugger = ansibug.AnsibleDebugger()
+        debugger = AnsibleDebugger()
         self._debug_state = AnsibleDebugState(
             debugger,
             self._loader,
@@ -751,9 +750,9 @@ class StrategyModule(LinearStrategy):
             for tid in list(self._debug_state.threads.keys()):
                 if tid == 1:
                     continue
-                self._debug_state.remove_thread(tid, advertise=True)
+                self._debug_state.remove_thread(tid)
 
-            self._debug_state = None
+            self._debug_state = None  # type: ignore[assignment]
 
 
 # Other things to look at
