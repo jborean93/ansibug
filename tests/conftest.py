@@ -18,8 +18,8 @@ from dap_client import DAPClient
 
 
 @pytest.fixture(scope="function")
-def dap_client() -> collections.abc.Iterator[DAPClient]:
-    with DAPClient() as client:
+def dap_client(request: pytest.FixtureRequest) -> collections.abc.Iterator[DAPClient]:
+    with DAPClient(request.node.name) as client:
         client.send(
             dap.InitializeRequest(
                 adapter_id="ansibug",

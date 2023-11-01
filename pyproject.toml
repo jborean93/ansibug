@@ -38,6 +38,7 @@ dev = [
   "mypy == 1.6.0",
   "pre-commit",
   "pytest",
+  "pytest-timeout",
   "pytest-xdist",
   "tox",
 ]
@@ -101,6 +102,10 @@ ignore_missing_imports = true
 addopts = "--import-mode=importlib"
 testpaths = "tests"
 junit_family = "xunit2"
+# A test taking longer than a minute is a problem and sign of a deadlock
+timeout = 60
+# pytest-xdist doesn't play nice with signals so use the thread method
+timeout_method = "thread"
 
 [tool.coverage.paths]
 source = ["src", ".tox/py*/**/site-packages"]

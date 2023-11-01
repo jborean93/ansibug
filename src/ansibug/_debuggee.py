@@ -143,6 +143,10 @@ class DAProtocol(MPProtocol):
         # FIXME: log exception
         self._debugger.send(None)
 
+    def connection_made(self) -> None:
+        with self._debugger._send_queue_lock:
+            self._debugger._send_queue_active = True
+
 
 class DebugState(t.Protocol):
     def ended(self) -> None:
@@ -225,10 +229,11 @@ class AnsibleDebugger(metaclass=Singleton):
     def __init__(self) -> None:
         self._addr = ""
         self._addr_event = threading.Event()
-        self._connected = False
         self._cancel_token = SocketCancellationToken()
         self._recv_thread: threading.Thread | None = None
         self._send_queue: queue.Queue[dap.ProtocolMessage | None] = queue.Queue()
+        self._send_queue_active = False
+        self._send_queue_lock = threading.Lock()
         self._da_connected = threading.Event()
         self._configuration_done = threading.Event()
         self._proto = DAProtocol(self)
@@ -332,7 +337,7 @@ class AnsibleDebugger(metaclass=Singleton):
         line: int,
     ) -> AnsibleLineBreakpoint | None:
         # FIXME: This could cause a deadlock
-        if not self._connected:
+        if not self._send_queue_active:
             return None
 
         for b in self._breakpoints.values():
@@ -399,9 +404,12 @@ class AnsibleDebugger(metaclass=Singleton):
         self,
         msg: dap.ProtocolMessage | None,
     ) -> None:
-        if self._connected:
-            log.info("Sending to DA adapter %r", msg)
-            self._send_queue.put(msg)
+        with self._send_queue_lock:
+            if self._send_queue_active:
+                log.info("Sending to DA adapter - %r", msg)
+                self._send_queue.put(msg)
+            else:
+                log.info("Discarding msg to DA adapter as queue is off - %r", msg)
 
     def register_path_breakpoint(
         self,
@@ -525,7 +533,6 @@ class AnsibleDebugger(metaclass=Singleton):
 
                     mp_queue.start()
                     try:
-                        self._connected = True
                         self._da_connected.set()
 
                         while True:
@@ -539,7 +546,6 @@ class AnsibleDebugger(metaclass=Singleton):
 
                     finally:
                         self._da_connected.clear()
-                        self._connected = False
 
                 if mode == "connect":
                     break
@@ -552,13 +558,16 @@ class AnsibleDebugger(metaclass=Singleton):
 
         finally:
             # Ensure the queue is seen as complete so shutdown ends
-            while True:
-                try:
-                    self._send_queue.get(block=False)
-                except queue.Empty:
-                    break
-                else:
-                    self._send_queue.task_done()
+            with self._send_queue_lock:
+                while True:
+                    try:
+                        self._send_queue.get(block=False)
+                    except queue.Empty:
+                        break
+                    else:
+                        self._send_queue.task_done()
+
+                self._send_queue_active = False
 
         # Ensures client isn't stuck waiting for something to never come.
         self._da_connected.set()

@@ -11,7 +11,9 @@ from dap_client import DAPClient
 import ansibug.dap as dap
 
 
+@pytest.mark.parametrize("attach_by_address", [False, True])
 def test_attach_playbook(
+    attach_by_address: bool,
     dap_client: DAPClient,
     tmp_path: pathlib.Path,
 ) -> None:
@@ -26,7 +28,11 @@ def test_attach_playbook(
 """
     )
 
-    proc = dap_client.attach(playbook, playbook_dir=tmp_path)
+    proc = dap_client.attach(
+        playbook,
+        playbook_dir=tmp_path,
+        attach_by_address=attach_by_address,
+    )
 
     resp = dap_client.send(
         dap.SetBreakpointsRequest(
