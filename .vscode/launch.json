@@ -2,6 +2,15 @@
     "version": "0.2.0",
     "configurations": [
         {
+            // See _debuggee.py::AnsibleDebugger._enable_debugpy()
+            "name": "Python: Attach to ansibug Ansible process",
+            "type": "python",
+            "request": "attach",
+            "debugServer": 12535,
+            "justMyCode": false
+        },
+        {
+            // For the VSCode Python test runner subProcess setting
             "name": "Python: Debug Tests",
             "type": "python",
             "request": "launch",
@@ -12,63 +21,6 @@
             "console": "integratedTerminal",
             "justMyCode": true,
             "subProcess": false // debugpy breaks ansibug through pytest
-        },
-        {
-            "name": "Python: Server",
-            "type": "python",
-            "request": "launch",
-            "program": "proc1.py",
-            "console": "integratedTerminal",
-            "justMyCode": false
-        },
-        {
-            "name": "Python: Client",
-            "type": "python",
-            "request": "launch",
-            "program": "proc2.py",
-            "console": "integratedTerminal",
-            "justMyCode": false
-        },
-        {
-            "name": "Python: Attach using Process Id",
-            "type": "python",
-            "request": "attach",
-            "debugServer": 12535,
-            "justMyCode": false
-        },
-        {
-            "name": "Ansible Debug",
-            "type": "python",
-            "request": "launch",
-            "program": "/home/jborean/dev/ansible/bin/ansible-playbook",
-            "args": [
-                "main.yml",
-                "-vvv"
-            ],
-            "cwd": "/home/jborean/dev/ansible_collections/jborean93/vscode/playbooks",
-            "env": {
-                "ANSIBUG_LOG_FILE": "debug.log",
-                "ANSIBUG_LOG_LEVEL": "debug",
-                "ANSIBLE_COLLECTIONS_PATH": "${workspaceFolder}/src/ansibug:~/dev",
-                "ANSIBLE_CALLBACKS_ENABLED": "ansibug.dap.debug",
-                "ANSIBLE_STRATEGY": "ansibug.dap.debug"
-            },
-            "console": "integratedTerminal",
-            "justMyCode": false,
-        },
-        {
-            "name": "Python: Module",
-            "type": "python",
-            "request": "launch",
-            "module": "ansibug",
-            "args": [
-                "launch",
-                "--connect",
-                "1234",
-                "main.yml",
-            ],
-            "justMyCode": false,
-            "subProcess": true,
         },
     ]
 }

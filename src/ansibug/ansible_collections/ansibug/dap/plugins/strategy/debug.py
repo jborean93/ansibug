@@ -26,7 +26,6 @@ from ansible.executor.task_queue_manager import TaskQueueManager
 from ansible.executor.task_result import TaskResult
 from ansible.inventory.host import Host
 from ansible.parsing.dataloader import DataLoader
-from ansible.parsing.splitter import parse_kv
 from ansible.playbook.block import Block
 from ansible.playbook.conditional import Conditional
 from ansible.playbook.included_file import IncludedFile
@@ -40,6 +39,13 @@ from ansible.vars.manager import VariableManager
 
 import ansibug
 from ansibug._debuggee import AnsibleDebugger, DebugState
+
+from ..plugin_utils._repl_util import (
+    RemoveVarCommand,
+    SetVarCommand,
+    TemplateCommand,
+    parse_repl_args,
+)
 
 display = Display()
 
@@ -117,6 +123,8 @@ class AnsibleStackFrame:
         self.task_vars = task_vars
         self.scopes: list[int] = []
         self.variables: list[int] = []
+        self.variables_options_id = 0
+        self.variables_hostvars_id = 0
 
     def to_dap(self) -> ansibug.dap.StackFrame:
         task_path = self.task.get_path()
@@ -135,22 +143,141 @@ class AnsibleStackFrame:
 
 
 class AnsibleVariable:
+    """Structure needed for an AnsibleVariable implementation."""
+
     def __init__(
         self,
-        *,
         id: int,
         stackframe: AnsibleStackFrame,
-        getter: t.Callable[[], collections.abc.Iterable[tuple[str, t.Any]]],
-        setter: t.Callable[[ansibug.dap.SetVariableRequest, t.Any], None] | None = None,
-        named_variables: int = 0,
-        indexed_variables: int = 0,
     ) -> None:
         self.id = id
         self.stackframe = stackframe
-        self.getter = getter
-        self.setter = setter
-        self.named_variables = named_variables
-        self.indexed_variables = indexed_variables
+
+    @property
+    def named_variables(self) -> int:
+        return 0
+
+    @property
+    def indexed_variables(self) -> int:
+        return 0
+
+    def get(self) -> collections.abc.Iterable[tuple[str, t.Any]]:
+        raise NotImplementedError()  # pragma: nocover
+
+    def remove(
+        self,
+        index: str,
+    ) -> None:
+        raise NotImplementedError()  # pragma: nocover
+
+    def set(
+        self,
+        index: str,
+        value: t.Any,
+    ) -> None:
+        raise NotImplementedError()  # pragma: nocover
+
+
+class AnsibleListVariable(AnsibleVariable):
+    """AnsibleVariable with a list datastore."""
+
+    def __init__(
+        self,
+        id: int,
+        stackframe: AnsibleStackFrame,
+        value: collections.abc.Sequence[t.Any],
+    ) -> None:
+        super().__init__(id, stackframe)
+        self._ds = value
+
+    @property
+    def indexed_variables(self) -> int:
+        return len(self._ds)
+
+    def get(self) -> collections.abc.Iterable[tuple[str, t.Any]]:
+        return iter((str(k), v) for k, v in enumerate(self._ds))
+
+    def set(
+        self,
+        index: str,
+        value: t.Any,
+    ) -> None:
+        self._ds[int(index)] = value  # type: ignore[index]
+
+
+class AnsibleDictVariable(AnsibleVariable):
+    """AnsibleVariable with a dict datastore."""
+
+    def __init__(
+        self,
+        id: int,
+        stackframe: AnsibleStackFrame,
+        value: collections.abc.Mapping[t.Any, t.Any],
+    ) -> None:
+        super().__init__(id, stackframe)
+        self._ds = value
+
+    @property
+    def named_variables(self) -> int:
+        return len(self._ds)
+
+    def get(self) -> collections.abc.Iterable[tuple[str, t.Any]]:
+        return iter((str(k), v) for k, v in self._ds.items())
+
+    def remove(
+        self,
+        index: str,
+    ) -> None:
+        if index in self._ds:
+            del self._ds[index]  # type: ignore[attr-defined]
+
+    def set(
+        self,
+        index: str,
+        value: t.Any,
+    ) -> None:
+        self._ds[index] = value  # type: ignore[index]
+
+
+class AnsibleDictWithRawStoreVariable(AnsibleDictVariable):
+    """AnsibleDictVariable with a secondary/raw datastore to replicate changes to."""
+
+    def __init__(
+        self,
+        id: int,
+        stackframe: AnsibleStackFrame,
+        value: collections.abc.Mapping[t.Any, t.Any],
+        raw: dict[t.Any, t.Any],
+    ) -> None:
+        super().__init__(id, stackframe, value)
+        self._raw_ds = raw
+
+    def remove(self, index: str) -> None:
+        super().remove(index)
+        self._raw_ds.pop(index, None)
+
+    def set(self, index: str, value: t.Any) -> None:
+        super().set(index, value)
+        self._raw_ds[index] = value
+
+
+class AnsibleHostVarsVariable(AnsibleDictVariable):
+    def __init__(
+        self,
+        id: int,
+        stackframe: AnsibleStackFrame,
+        value: collections.abc.Mapping[t.Any, t.Any],
+        host: str,
+        variable_manager: VariableManager,
+    ) -> None:
+        super().__init__(id, stackframe, value)
+        self._host = host
+        self._variable_manager = variable_manager
+
+    def set(self, index: str, value: t.Any) -> None:
+        super().set(index, value)
+        # Persisting hostvars need to be done as a host_variable.
+        self._variable_manager.set_host_variable(self._host, index, value)
 
 
 class AnsibleDebugState(DebugState):
@@ -325,59 +452,24 @@ class AnsibleDebugState(DebugState):
     def add_variable(
         self,
         stackframe: AnsibleStackFrame,
-        getter: t.Callable[[], collections.abc.Iterable[tuple[str, t.Any]]],
-        setter: t.Callable[[ansibug.dap.SetVariableRequest, t.Any], None] | None = None,
-        named_variables: int = 0,
-        indexed_variables: int = 0,
+        value: collections.abc.Mapping[t.Any, t.Any] | collections.abc.Sequence[t.Any],
+        var_factory: t.Callable[[int], AnsibleVariable] | None = None,
     ) -> AnsibleVariable:
         var_id = self._debugger.next_variable_id()
 
-        var = self.variables[var_id] = AnsibleVariable(
-            id=var_id,
-            stackframe=stackframe,
-            named_variables=named_variables,
-            indexed_variables=indexed_variables,
-            getter=getter,
-            setter=setter,
-        )
+        if var_factory:
+            var = var_factory(var_id)
+
+        elif isinstance(value, collections.abc.Mapping):
+            var = AnsibleDictVariable(var_id, stackframe, value)
+
+        else:
+            var = AnsibleListVariable(var_id, stackframe, value)
+
+        self.variables[var_id] = var
         stackframe.variables.append(var_id)
 
         return var
-
-    def add_collection_variable(
-        self,
-        stackframe: AnsibleStackFrame,
-        value: collections.abc.Mapping[t.Any, t.Any] | collections.abc.Sequence[t.Any],
-    ) -> AnsibleVariable:
-        if isinstance(value, collections.abc.Mapping):
-
-            def setter(
-                request: ansibug.dap.SetVariableRequest,
-                new_value: t.Any,
-            ) -> None:
-                value[request.name] = new_value  # type: ignore[index] # Not checking isinstance
-
-            return self.add_variable(
-                stackframe,
-                lambda: iter((str(k), v) for k, v in value.items()),  # type: ignore[union-attr] # Not checking isinstance
-                setter=setter,
-                named_variables=len(value),
-            )
-
-        else:
-
-            def setter(
-                request: ansibug.dap.SetVariableRequest,
-                new_value: t.Any,
-            ) -> None:
-                value[int(request.name)] = new_value  # type: ignore[index] # Not checking isinstance
-
-            return self.add_variable(
-                stackframe,
-                lambda: iter((str(k), v) for k, v in enumerate(value)),
-                setter=setter,
-                indexed_variables=len(value),
-            )
 
     def remove_thread(
         self,
@@ -402,21 +494,56 @@ class AnsibleDebugState(DebugState):
         self,
         request: ansibug.dap.EvaluateRequest,
     ) -> ansibug.dap.EvaluateResponse:
+        value = ""
         value_type = None
 
-        # FIXME: Implement watch
-        if request.context == "repl" and request.frame_id:
+        # Known contexts and how they are used in VSCode
+        # repl - Debug Console with the expression entered
+        # watch - WATCH pane with an expression set
+        # clipboard - VARIABLES pane, right click variable -> 'Copy Value'
+        # variables - same as clipboard but only present for older code
+        # hover - not used as we don't set the capability, a bit dangerous to enable IMO
+
+        expression = request.expression
+
+        if request.context == "repl" and expression.startswith("!") and request.frame_id:
+            # The following repl commands are available, all start with !
+            # ro - remove option
+            #   Removes the option specified from the current module options
+            # so - set option
+            #   Add/sets the option on the module options.
+            # sh - set hostvar
+            #   Adds/sets the variable on the host vars.
+            # t - template
+            #   Templates the expression (default behaviour without !)
+            # The argparse library is used to parse this data rather than do
+            # it manually.
             sf = self.stackframes[request.frame_id]
 
-            try:
-                templated_value = self._template(request.expression, sf.task_vars)
-            except AnsibleUndefinedVariable as e:
-                value = f"{type(e).__name__}: {e!s}"
-            except Exception as e:
-                value = traceback.format_exc()
+            repl_command = parse_repl_args(expression[1:])
+            if isinstance(repl_command, TemplateCommand):
+                value, value_type = self._safe_evaluate_expression(repl_command.expression, sf.task_vars)
+
+            elif isinstance(repl_command, RemoveVarCommand):
+                ansible_var = self.variables[sf.variables_options_id]
+                ansible_var.remove(repl_command.name)
+
+            elif isinstance(repl_command, SetVarCommand):
+                new_value = self._template(repl_command.expression, sf.task_vars)
+
+                variable_id = (
+                    sf.variables_options_id if repl_command.command == "set_option" else sf.variables_hostvars_id
+                )
+                ansible_var = self.variables[variable_id]
+                ansible_var.set(repl_command.name, new_value)
+
             else:
-                value = repr(templated_value)
-                value_type = type(templated_value).__name__
+                # Error during parsing or --help was requested
+                value = str(repl_command)
+
+        elif request.context in ["repl", "watch", "clipboard", "variables"] and request.frame_id:
+            sf = self.stackframes[request.frame_id]
+            value, value_type = self._safe_evaluate_expression(expression, sf.task_vars)
 
         else:
             value = f"Evaluation for {request.context} is not implemented"
@@ -452,24 +579,37 @@ class AnsibleDebugState(DebugState):
         # This is a very basic templating of the args and doesn't handle loops.
         templar = Templar(loader=self._loader, variables=sf.task_vars)
         task_args = templar.template(sf.task.args, fail_on_undefined=False)
-
-        def module_opts_setter(
-            request: ansibug.dap.SetVariableRequest,
-            new_value: t.Any,
-        ) -> None:
-            sf.task.args[request.name] = new_value
-
         module_opts = self.add_variable(
             sf,
-            lambda: iter((str(k), v) for k, v in task_args.items()),
-            setter=module_opts_setter,
-            named_variables=len(task_args),
+            task_args,
+            # Any changes to our templated var also needs to reflect back onto
+            # the raw datastore so use a custom variable class.
+            var_factory=lambda i: AnsibleDictWithRawStoreVariable(i, sf, task_args, sf.task.args),
         )
+        sf.variables_options_id = module_opts.id
 
-        task_vars = self.add_collection_variable(sf, sf.task_vars)
-        # FIXME: Needs a custom setter to use self._variable_manager.set_host_variable(..., name, value)
-        host_vars = self.add_collection_variable(sf, sf.task_vars["hostvars"][sf.task_vars["inventory_hostname"]])
-        global_vars = self.add_collection_variable(sf, sf.task_vars["vars"])
+        task_vars = self.add_variable(sf, sf.task_vars)
+
+        # We use the hostvars but for simplicity sake we also overlay the task
+        # vars that might be set as these will contain things like play/task
+        # vars. The hostvars are a more persistent set of vars that last beyond
+        # this task so is important to give the user a way to set these
+        # persistently in the debugger.
+        host_vars_amalgamated = {k: v for k, v in sf.task_vars["hostvars"][sf.task_vars["inventory_hostname"]].items()}
+        for k, v in task_vars.get():
+            if k not in host_vars_amalgamated:
+                host_vars_amalgamated[k] = v
+
+        host_vars = self.add_variable(
+            sf,
+            host_vars_amalgamated,
+            var_factory=lambda i: AnsibleHostVarsVariable(
+                i, sf, host_vars_amalgamated, sf.task_vars["inventory_hostname"], self._variable_mamanger
+            ),
+        )
+        sf.variables_hostvars_id = host_vars.id
+
+        global_vars = self.add_variable(sf, sf.task_vars["vars"])
 
         scopes: list[ansibug.dap.Scope] = [
             # Options for the module itself
@@ -544,10 +684,10 @@ class AnsibleDebugState(DebugState):
         variable = self.variables[request.variables_reference]
 
         variables: list[ansibug.dap.Variable] = []
-        for name, value in variable.getter():
+        for name, value in variable.get():
             child_var: AnsibleVariable | None = None
             if isinstance(value, (collections.abc.Mapping, collections.abc.Sequence)) and not isinstance(value, str):
-                child_var = self.add_collection_variable(variable.stackframe, value)
+                child_var = self.add_variable(variable.stackframe, value)
 
             variables.append(
                 ansibug.dap.Variable(
@@ -570,16 +710,15 @@ class AnsibleDebugState(DebugState):
         request: ansibug.dap.SetVariableRequest,
     ) -> ansibug.dap.SetVariableResponse:
         variable = self.variables[request.variables_reference]
-        if not variable.setter:
-            raise Exception(f"Cannot set {request.name}, no known setter available")
 
         new_value = self._template(request.value, variable.stackframe.task_vars)
-        variable.setter(request, new_value)
+        variable.set(request.name, new_value)
+
         new_container = None
         if isinstance(new_value, (collections.abc.Mapping, collections.abc.Sequence)) and not isinstance(
             new_value, str
         ):
-            new_container = self.add_collection_variable(variable.stackframe, new_value)
+            new_container = self.add_variable(variable.stackframe, new_value)
 
         return ansibug.dap.SetVariableResponse(
             request_seq=request.seq,
@@ -618,6 +757,25 @@ class AnsibleDebugState(DebugState):
                 self._waiting_threads[tid] = action
 
             self._waiting_condition.notify_all()
+
+    def _safe_evaluate_expression(
+        self,
+        expression: str,
+        task_vars: dict[t.Any, t.Any],
+    ) -> tuple[t.Any, str | None]:
+        """Evaluates an expression with a fallback on exception."""
+        value_type = None
+        try:
+            templated_value = self._template(expression, task_vars)
+        except AnsibleUndefinedVariable as e:
+            value = f"{type(e).__name__}: {e!s}"
+        except Exception as e:
+            value = traceback.format_exc()
+        else:
+            value = repr(templated_value)
+            value_type = type(templated_value).__name__
+
+        return value, value_type
 
     def _template(
         self,
@@ -729,12 +887,6 @@ class StrategyModule(LinearStrategy):
         step is to associate the current strategy with the debuggee adapter so
         it can respond to breakpoint and other information.
         """
-        # import debugpy
-
-        # if not debugpy.is_client_connected():
-        #     debugpy.listen(("localhost", 12535))
-        #     debugpy.wait_for_client()
-
         debugger = AnsibleDebugger()
         self._debug_state = AnsibleDebugState(
             debugger,

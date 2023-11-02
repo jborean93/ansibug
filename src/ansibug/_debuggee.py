@@ -21,6 +21,13 @@ from ._mp_queue import ClientMPQueue, MPProtocol, MPQueue, ServerMPQueue
 from ._singleton import Singleton
 from ._socket_helper import CancelledError, SocketCancellationToken
 
+HAS_DEBUGPY = True
+try:  # pragma: nocover
+    import debugpy
+
+except Exception:  # pragma: nocover
+    HAS_DEBUGPY = False
+
 log = logging.getLogger(__name__)
 
 
@@ -336,9 +343,9 @@ class AnsibleDebugger(metaclass=Singleton):
         path: str,
         line: int,
     ) -> AnsibleLineBreakpoint | None:
-        # FIXME: This could cause a deadlock
-        if not self._send_queue_active:
-            return None
+        with self._send_queue_lock:
+            if not self._send_queue_active:
+                return None
 
         for b in self._breakpoints.values():
             if (
@@ -480,6 +487,16 @@ class AnsibleDebugger(metaclass=Singleton):
                         breakpoint=bp,
                     )
                 )
+
+    @classmethod
+    def _enable_debugpy(cls) -> None:  # pragma: nocover
+        """This is only meant for debugging ansibug in Ansible purposes."""
+        if not HAS_DEBUGPY:
+            return
+
+        elif not debugpy.is_client_connected():
+            debugpy.listen(("localhost", 12535))
+            debugpy.wait_for_client()
 
     def _get_strategy(self) -> DebugState:
         with self._strategy_connected:
