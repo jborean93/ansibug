@@ -281,6 +281,128 @@ host2 ansible_host=127.0.0.1 ansible_connection=local ansible_python_interpreter
         raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
 
 
+def test_playbook_set_task_and_hostvars(
+    dap_client: DAPClient,
+    tmp_path: pathlib.Path,
+) -> None:
+    playbook = tmp_path / "main.yml"
+    playbook.write_text(
+        r"""
+- hosts: localhost
+  gather_facts: false
+  vars:
+    foo: bar
+  tasks:
+  - set_fact:
+      my_test: '{{ foo }}'
+
+  - debug:
+      msg: Placeholder
+"""
+    )
+
+    proc = dap_client.launch("main.yml", playbook_dir=tmp_path)
+
+    dap_client.send(
+        dap.SetBreakpointsRequest(
+            source=dap.Source(
+                name="main.yml",
+                path=str(playbook.absolute()),
+            ),
+            lines=[7],
+            breakpoints=[dap.SourceBreakpoint(line=7)],
+            source_modified=False,
+        ),
+        dap.SetBreakpointsResponse,
+    )
+
+    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
+
+    thread_event = dap_client.wait_for_message(dap.ThreadEvent)
+    localhost_tid = thread_event.thread_id
+
+    dap_client.wait_for_message(dap.StoppedEvent)
+
+    st_resp = dap_client.send(dap.StackTraceRequest(thread_id=localhost_tid), dap.StackTraceResponse)
+    scope_resp = dap_client.send(dap.ScopesRequest(frame_id=st_resp.stack_frames[0].id), dap.ScopesResponse)
+
+    # Check that both the task vars and host vars see foo
+    task_vars = dap_client.send(
+        dap.VariablesRequest(variables_reference=scope_resp.scopes[1].variables_reference),
+        dap.VariablesResponse,
+    )
+    for v in task_vars.variables:
+        if v.name == "foo":
+            assert v.value == "'bar'"
+            break
+    else:
+        raise Exception("Failed to find foo in task vars")
+    host_vars = dap_client.send(
+        dap.VariablesRequest(variables_reference=scope_resp.scopes[2].variables_reference),
+        dap.VariablesResponse,
+    )
+    for v in host_vars.variables:
+        if v.name == "foo":
+            assert v.value == "'bar'"
+            break
+    else:
+        raise Exception("Failed to find foo in host vars")
+
+    # Setting a task var will set it only for the task whereas setting a
+    # hostvar will set it for the host beyond the task
+    dap_client.send(
+        dap.SetVariableRequest(
+            variables_reference=scope_resp.scopes[1].variables_reference,
+            name="foo",
+            value="'value 1'",
+        ),
+        dap.SetVariableResponse,
+    )
+    dap_client.send(
+        dap.SetVariableRequest(
+            variables_reference=scope_resp.scopes[2].variables_reference,
+            name="foo",
+            value="'value 2'",
+        ),
+        dap.SetVariableResponse,
+    )
+
+    dap_client.send(dap.StepInRequest(thread_id=localhost_tid), dap.StepInResponse)
+    dap_client.wait_for_message(dap.StoppedEvent)
+    st_resp = dap_client.send(dap.StackTraceRequest(thread_id=localhost_tid), dap.StackTraceResponse)
+    scope_resp = dap_client.send(dap.ScopesRequest(frame_id=st_resp.stack_frames[0].id), dap.ScopesResponse)
+    task_vars = dap_client.send(
+        dap.VariablesRequest(variables_reference=scope_resp.scopes[1].variables_reference),
+        dap.VariablesResponse,
+    )
+    to_check = {"foo", "my_test"}
+    for v in task_vars.variables:
+        # The foo value will be set to the hostvars value
+        if v.name == "foo":
+            to_check.remove("foo")
+            assert v.value == "'value 2'"
+            assert v.type == "str"
+
+        # This will be the saved value from when the taskvars changed
+        elif v.name == "my_test":
+            to_check.remove("my_test")
+            assert v.value == "'value 1'"
+            assert v.type == "str"
+
+        if not to_check:
+            break
+
+    assert not to_check
+
+    dap_client.send(dap.ContinueRequest(thread_id=localhost_tid), dap.ContinueResponse)
+    dap_client.wait_for_message(dap.ThreadEvent)
+    dap_client.wait_for_message(dap.TerminatedEvent)
+
+    play_out = proc.communicate()
+    if rc := proc.returncode:
+        raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
+
+
 def test_playbook_set_variable_types(
     dap_client: DAPClient,
     tmp_path: pathlib.Path,
@@ -570,9 +692,29 @@ def test_playbook_set_list_and_dict_value(
                 assert final_v.value == repr([1, 3])
                 assert final_v.type == "list"
 
+                list_values = dap_client.send(
+                    dap.VariablesRequest(variables_reference=final_v.variables_reference),
+                    dap.VariablesResponse,
+                )
+                assert len(list_values.variables) == 2
+                assert list_values.variables[0].name == "0"
+                assert list_values.variables[0].value == "1"
+                assert list_values.variables[1].name == "1"
+                assert list_values.variables[1].value == "3"
+
             else:
                 assert final_v.value == repr({"foo": "bar", "other": "new value"})
                 assert final_v.type == "dict"
+
+                dict_values = dap_client.send(
+                    dap.VariablesRequest(variables_reference=final_v.variables_reference),
+                    dap.VariablesResponse,
+                )
+                assert len(dict_values.variables) == 2
+                assert dict_values.variables[0].name == "foo"
+                assert dict_values.variables[0].value == "'bar'"
+                assert dict_values.variables[1].name == "other"
+                assert dict_values.variables[1].value == "'new value'"
 
         break
     else:
@@ -640,6 +782,61 @@ def test_playbook_eval(
 
     eval_resp = dap_client.send(
         dap.EvaluateRequest(
+            "!template foo",
+            frame_id=st_resp.stack_frames[0].id,
+            context="repl",
+        ),
+        dap.EvaluateResponse,
+    )
+    assert eval_resp.result == "'bar'"
+    assert eval_resp.type == "AnsibleUnicode"
+
+    eval_resp = dap_client.send(
+        dap.EvaluateRequest(
+            "!t foo",
+            frame_id=st_resp.stack_frames[0].id,
+            context="repl",
+        ),
+        dap.EvaluateResponse,
+    )
+    assert eval_resp.result == "'bar'"
+    assert eval_resp.type == "AnsibleUnicode"
+
+    eval_resp = dap_client.send(
+        dap.EvaluateRequest(
+            "foo",
+            frame_id=st_resp.stack_frames[0].id,
+            context="watch",
+        ),
+        dap.EvaluateResponse,
+    )
+    assert eval_resp.result == "'bar'"
+    assert eval_resp.type == "AnsibleUnicode"
+
+    eval_resp = dap_client.send(
+        dap.EvaluateRequest(
+            "foo",
+            frame_id=st_resp.stack_frames[0].id,
+            context="clipboard",
+        ),
+        dap.EvaluateResponse,
+    )
+    assert eval_resp.result == "'bar'"
+    assert eval_resp.type == "AnsibleUnicode"
+
+    eval_resp = dap_client.send(
+        dap.EvaluateRequest(
+            "foo",
+            frame_id=st_resp.stack_frames[0].id,
+            context="variables",
+        ),
+        dap.EvaluateResponse,
+    )
+    assert eval_resp.result == "'bar'"
+    assert eval_resp.type == "AnsibleUnicode"
+
+    eval_resp = dap_client.send(
+        dap.EvaluateRequest(
             "invalid",
             frame_id=st_resp.stack_frames[0].id,
             context="repl",
@@ -662,7 +859,7 @@ def test_playbook_eval(
 
     eval_resp = dap_client.send(
         dap.EvaluateRequest(
-            "not implemted",
+            "not implemented",
             frame_id=st_resp.stack_frames[0].id,
             context="unknown",
         ),
@@ -670,6 +867,463 @@ def test_playbook_eval(
     )
     assert eval_resp.result == "Evaluation for unknown is not implemented"
     assert eval_resp.type is None
+
+    dap_client.send(dap.ContinueRequest(thread_id=localhost_tid), dap.ContinueResponse)
+    dap_client.wait_for_message(dap.ThreadEvent)
+    dap_client.wait_for_message(dap.TerminatedEvent)
+
+    play_out = proc.communicate()
+    if rc := proc.returncode:
+        raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
+
+
+def test_eval_repl_set_option(
+    dap_client: DAPClient,
+    tmp_path: pathlib.Path,
+) -> None:
+    playbook = tmp_path / "main.yml"
+    playbook.write_text(
+        r"""
+- hosts: localhost
+  gather_facts: false
+  vars:
+    foo: bar
+  tasks:
+  - set_fact:
+      option_to_be_changed: value
+
+  - debug:
+      msg: Placeholder
+"""
+    )
+
+    proc = dap_client.launch("main.yml", playbook_dir=tmp_path)
+
+    dap_client.send(
+        dap.SetBreakpointsRequest(
+            source=dap.Source(
+                name="main.yml",
+                path=str(playbook.absolute()),
+            ),
+            lines=[7],
+            breakpoints=[dap.SourceBreakpoint(line=7)],
+            source_modified=False,
+        ),
+        dap.SetBreakpointsResponse,
+    )
+
+    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
+
+    thread_event = dap_client.wait_for_message(dap.ThreadEvent)
+    localhost_tid = thread_event.thread_id
+
+    dap_client.wait_for_message(dap.StoppedEvent)
+    st_resp = dap_client.send(dap.StackTraceRequest(thread_id=localhost_tid), dap.StackTraceResponse)
+    scope_resp = dap_client.send(dap.ScopesRequest(frame_id=st_resp.stack_frames[0].id), dap.ScopesResponse)
+
+    eval_resp = dap_client.send(
+        dap.EvaluateRequest(
+            "!set_option added 'value'",
+            frame_id=st_resp.stack_frames[0].id,
+            context="repl",
+        ),
+        dap.EvaluateResponse,
+    )
+    assert eval_resp.result == ""
+    assert eval_resp.type is None
+
+    eval_resp = dap_client.send(
+        dap.EvaluateRequest(
+            "!set_option 'added_with_single_quote' 'value'",
+            frame_id=st_resp.stack_frames[0].id,
+            context="repl",
+        ),
+        dap.EvaluateResponse,
+    )
+    assert eval_resp.result == ""
+    assert eval_resp.type is None
+
+    eval_resp = dap_client.send(
+        dap.EvaluateRequest(
+            '!so "added_with_double_quote" "value with space"',
+            frame_id=st_resp.stack_frames[0].id,
+            context="repl",
+        ),
+        dap.EvaluateResponse,
+    )
+    assert eval_resp.result == ""
+    assert eval_resp.type is None
+
+    eval_resp = dap_client.send(
+        dap.EvaluateRequest(
+            "!so option_to_be_changed foo",
+            frame_id=st_resp.stack_frames[0].id,
+            context="repl",
+        ),
+        dap.EvaluateResponse,
+    )
+    assert eval_resp.result == ""
+    assert eval_resp.type is None
+
+    def check_vars(variables: list[dap.Variable]) -> None:
+        to_check = {"added", "added_with_single_quote", "added_with_double_quote", "option_to_be_changed"}
+        for v in variables:
+            if v.name == "added":
+                to_check.remove("added")
+                assert v.value == "'value'"
+                assert v.type == "str"
+
+            elif v.name == "added_with_single_quote":
+                to_check.remove("added_with_single_quote")
+                assert v.value == "'value'"
+                assert v.type == "str"
+
+            elif v.name == "added_with_double_quote":
+                to_check.remove("added_with_double_quote")
+                assert v.value == "'value with space'"
+                assert v.type == "str"
+
+            elif v.name == "option_to_be_changed":
+                to_check.remove("option_to_be_changed")
+                assert v.value == "'bar'"
+                assert v.type == "AnsibleUnicode"
+
+            if not to_check:
+                break
+
+        assert not to_check
+
+    module_opts = dap_client.send(
+        dap.VariablesRequest(variables_reference=scope_resp.scopes[0].variables_reference),
+        dap.VariablesResponse,
+    )
+    check_vars(module_opts.variables)
+
+    dap_client.send(dap.StepInRequest(thread_id=localhost_tid), dap.StepInResponse)
+    dap_client.wait_for_message(dap.StoppedEvent)
+    st_resp = dap_client.send(dap.StackTraceRequest(thread_id=localhost_tid), dap.StackTraceResponse)
+    scope_resp = dap_client.send(dap.ScopesRequest(frame_id=st_resp.stack_frames[0].id), dap.ScopesResponse)
+
+    task_vars = dap_client.send(
+        dap.VariablesRequest(variables_reference=scope_resp.scopes[1].variables_reference),
+        dap.VariablesResponse,
+    )
+    check_vars(task_vars.variables)
+
+    dap_client.send(dap.ContinueRequest(thread_id=localhost_tid), dap.ContinueResponse)
+    dap_client.wait_for_message(dap.ThreadEvent)
+    dap_client.wait_for_message(dap.TerminatedEvent)
+
+    play_out = proc.communicate()
+    if rc := proc.returncode:
+        raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
+
+
+def test_eval_repl_remove_option(
+    dap_client: DAPClient,
+    tmp_path: pathlib.Path,
+) -> None:
+    playbook = tmp_path / "main.yml"
+    playbook.write_text(
+        r"""
+- hosts: localhost
+  gather_facts: false
+  vars:
+    foo: bar
+  tasks:
+  - set_fact:
+      option1: value
+      to_be_removed1: value
+      to_be_removed2: value
+
+  - debug:
+      msg: Placeholder
+"""
+    )
+
+    proc = dap_client.launch("main.yml", playbook_dir=tmp_path)
+
+    dap_client.send(
+        dap.SetBreakpointsRequest(
+            source=dap.Source(
+                name="main.yml",
+                path=str(playbook.absolute()),
+            ),
+            lines=[7],
+            breakpoints=[dap.SourceBreakpoint(line=7)],
+            source_modified=False,
+        ),
+        dap.SetBreakpointsResponse,
+    )
+
+    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
+
+    thread_event = dap_client.wait_for_message(dap.ThreadEvent)
+    localhost_tid = thread_event.thread_id
+
+    dap_client.wait_for_message(dap.StoppedEvent)
+    st_resp = dap_client.send(dap.StackTraceRequest(thread_id=localhost_tid), dap.StackTraceResponse)
+    scope_resp = dap_client.send(dap.ScopesRequest(frame_id=st_resp.stack_frames[0].id), dap.ScopesResponse)
+
+    eval_resp = dap_client.send(
+        dap.EvaluateRequest(
+            "!remove_option to_be_removed1",
+            frame_id=st_resp.stack_frames[0].id,
+            context="repl",
+        ),
+        dap.EvaluateResponse,
+    )
+    assert eval_resp.result == ""
+    assert eval_resp.type is None
+
+    eval_resp = dap_client.send(
+        dap.EvaluateRequest(
+            "!ro 'to_be_removed2'",
+            frame_id=st_resp.stack_frames[0].id,
+            context="repl",
+        ),
+        dap.EvaluateResponse,
+    )
+    assert eval_resp.result == ""
+    assert eval_resp.type is None
+
+    eval_resp = dap_client.send(
+        dap.EvaluateRequest(
+            "!ro option_not_present_no_failure",
+            frame_id=st_resp.stack_frames[0].id,
+            context="repl",
+        ),
+        dap.EvaluateResponse,
+    )
+    assert eval_resp.result == ""
+    assert eval_resp.type is None
+
+    module_opts = dap_client.send(
+        dap.VariablesRequest(variables_reference=scope_resp.scopes[0].variables_reference),
+        dap.VariablesResponse,
+    )
+    assert len(module_opts.variables) == 1
+
+    dap_client.send(dap.StepInRequest(thread_id=localhost_tid), dap.StepInResponse)
+    dap_client.wait_for_message(dap.StoppedEvent)
+    st_resp = dap_client.send(dap.StackTraceRequest(thread_id=localhost_tid), dap.StackTraceResponse)
+    scope_resp = dap_client.send(dap.ScopesRequest(frame_id=st_resp.stack_frames[0].id), dap.ScopesResponse)
+
+    task_vars = dap_client.send(
+        dap.VariablesRequest(variables_reference=scope_resp.scopes[1].variables_reference),
+        dap.VariablesResponse,
+    )
+    to_find = {"to_be_removed1", "to_be_removed2"}
+    for v in task_vars.variables:
+        if v.name in to_find:
+            to_find.remove(v.name)
+
+        if not to_find:
+            break
+
+    assert len(to_find) == 2
+
+    dap_client.send(dap.ContinueRequest(thread_id=localhost_tid), dap.ContinueResponse)
+    dap_client.wait_for_message(dap.ThreadEvent)
+    dap_client.wait_for_message(dap.TerminatedEvent)
+
+    play_out = proc.communicate()
+    if rc := proc.returncode:
+        raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
+
+
+def test_eval_repl_set_hostvar_option(
+    dap_client: DAPClient,
+    tmp_path: pathlib.Path,
+) -> None:
+    playbook = tmp_path / "main.yml"
+    playbook.write_text(
+        r"""
+- hosts: localhost
+  gather_facts: false
+  vars:
+    foo: bar
+  tasks:
+  - debug:
+      msg: Placeholder 1
+
+  - debug:
+      msg: Placeholder 2
+"""
+    )
+
+    proc = dap_client.launch("main.yml", playbook_dir=tmp_path)
+
+    dap_client.send(
+        dap.SetBreakpointsRequest(
+            source=dap.Source(
+                name="main.yml",
+                path=str(playbook.absolute()),
+            ),
+            lines=[7],
+            breakpoints=[dap.SourceBreakpoint(line=7)],
+            source_modified=False,
+        ),
+        dap.SetBreakpointsResponse,
+    )
+
+    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
+
+    thread_event = dap_client.wait_for_message(dap.ThreadEvent)
+    localhost_tid = thread_event.thread_id
+
+    dap_client.wait_for_message(dap.StoppedEvent)
+    st_resp = dap_client.send(dap.StackTraceRequest(thread_id=localhost_tid), dap.StackTraceResponse)
+    scope_resp = dap_client.send(dap.ScopesRequest(frame_id=st_resp.stack_frames[0].id), dap.ScopesResponse)
+
+    host_vars = dap_client.send(
+        dap.VariablesRequest(variables_reference=scope_resp.scopes[2].variables_reference),
+        dap.VariablesResponse,
+    )
+    new_var_found = False
+    for v in host_vars.variables:
+        if v.name == "foo":
+            assert v.value == "'bar'"
+
+        elif v.name == "new_var":
+            new_var_found = True
+
+    assert not new_var_found
+
+    eval_resp = dap_client.send(
+        dap.EvaluateRequest(
+            "!set_hostvar foo 'value 1'",
+            frame_id=st_resp.stack_frames[0].id,
+            context="repl",
+        ),
+        dap.EvaluateResponse,
+    )
+    assert eval_resp.result == ""
+    assert eval_resp.type is None
+
+    eval_resp = dap_client.send(
+        dap.EvaluateRequest(
+            "!sh new_var 'value 2'",
+            frame_id=st_resp.stack_frames[0].id,
+            context="repl",
+        ),
+        dap.EvaluateResponse,
+    )
+    assert eval_resp.result == ""
+    assert eval_resp.type is None
+
+    host_vars = dap_client.send(
+        dap.VariablesRequest(variables_reference=scope_resp.scopes[2].variables_reference),
+        dap.VariablesResponse,
+    )
+    to_find = {"foo", "new_var"}
+    for v in host_vars.variables:
+        if v.name == "foo":
+            to_find.remove("foo")
+            assert v.value == "'value 1'"
+
+        elif v.name == "new_var":
+            to_find.remove("new_var")
+            assert v.value == "'value 2'"
+
+        if not to_find:
+            break
+
+    assert not to_find
+
+    dap_client.send(dap.StepInRequest(thread_id=localhost_tid), dap.StepInResponse)
+    dap_client.wait_for_message(dap.StoppedEvent)
+    st_resp = dap_client.send(dap.StackTraceRequest(thread_id=localhost_tid), dap.StackTraceResponse)
+    scope_resp = dap_client.send(dap.ScopesRequest(frame_id=st_resp.stack_frames[0].id), dap.ScopesResponse)
+
+    # Ensure the hostvars have persisted to the next task.
+    host_vars = dap_client.send(
+        dap.VariablesRequest(variables_reference=scope_resp.scopes[2].variables_reference),
+        dap.VariablesResponse,
+    )
+    to_find = {"foo", "new_var"}
+    for v in host_vars.variables:
+        if v.name == "foo":
+            to_find.remove("foo")
+            assert v.value == "'value 1'"
+
+        elif v.name == "new_var":
+            to_find.remove("new_var")
+            assert v.value == "'value 2'"
+
+        if not to_find:
+            break
+
+    assert not to_find
+
+    dap_client.send(dap.ContinueRequest(thread_id=localhost_tid), dap.ContinueResponse)
+    dap_client.wait_for_message(dap.ThreadEvent)
+    dap_client.wait_for_message(dap.TerminatedEvent)
+
+    play_out = proc.communicate()
+    if rc := proc.returncode:
+        raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
+
+
+def test_eval_repl_invalid_commands(
+    dap_client: DAPClient,
+    tmp_path: pathlib.Path,
+) -> None:
+    playbook = tmp_path / "main.yml"
+    playbook.write_text(
+        r"""
+- hosts: localhost
+  gather_facts: false
+  tasks:
+  - debug:
+      msg: Placeholder 1
+"""
+    )
+
+    proc = dap_client.launch("main.yml", playbook_dir=tmp_path)
+
+    dap_client.send(
+        dap.SetBreakpointsRequest(
+            source=dap.Source(
+                name="main.yml",
+                path=str(playbook.absolute()),
+            ),
+            lines=[5],
+            breakpoints=[dap.SourceBreakpoint(line=5)],
+            source_modified=False,
+        ),
+        dap.SetBreakpointsResponse,
+    )
+
+    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
+
+    thread_event = dap_client.wait_for_message(dap.ThreadEvent)
+    localhost_tid = thread_event.thread_id
+
+    dap_client.wait_for_message(dap.StoppedEvent)
+    st_resp = dap_client.send(dap.StackTraceRequest(thread_id=localhost_tid), dap.StackTraceResponse)
+    dap_client.send(dap.ScopesRequest(frame_id=st_resp.stack_frames[0].id), dap.ScopesResponse)
+
+    eval_resp = dap_client.send(
+        dap.EvaluateRequest(
+            "!--help",
+            frame_id=st_resp.stack_frames[0].id,
+            context="repl",
+        ),
+        dap.EvaluateResponse,
+    )
+    assert eval_resp.result.startswith("usage: ! [-h] ")
+    assert "Ansibug debug console repl commands" in eval_resp.result
+
+    eval_resp = dap_client.send(
+        dap.EvaluateRequest(
+            "!unknown",
+            frame_id=st_resp.stack_frames[0].id,
+            context="repl",
+        ),
+        dap.EvaluateResponse,
+    )
+    assert eval_resp.result.startswith("argument command: invalid choice: 'unknown' (choose from ")
 
     dap_client.send(dap.ContinueRequest(thread_id=localhost_tid), dap.ContinueResponse)
     dap_client.wait_for_message(dap.ThreadEvent)

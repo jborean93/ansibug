@@ -1,6 +1,6 @@
 [build-system]
 requires = [
-  "setuptools >= 61.0.0", # Support for setuptools config in pyproject.toml
+    "setuptools >= 61.0.0", # Support for setuptools config in pyproject.toml
 ]
 build-backend = "setuptools.build_meta"
 
@@ -13,13 +13,13 @@ license = { file = "LICENSE" }
 authors = [{ name = "Jordan Borean", email = "jborean93@gmail.com" }]
 keywords = ["ansible", "debug", "lsp", "dap"]
 classifiers = [
-  "Development Status :: 4 - Beta",
-  "License :: OSI Approved :: MIT License",
-  "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.9",
-  "Programming Language :: Python :: 3.10",
-  "Programming Language :: Python :: 3.11",
-  "Programming Language :: Python :: 3.12",
+    "Development Status :: 4 - Beta",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
 ]
 dynamic = ["version"]
 
@@ -28,19 +28,19 @@ homepage = "https://github.com/jborean93/ansibug"
 
 [project.optional-dependencies]
 dev = [
-  "ansible-core >= 2.14.0",
-  "argcomplete",
-  # Support for source_pkgs
-  "coverage[toml] >= 5.3",
-  "cryptography",
-  "black == 23.9.1",
-  "isort == 5.12.0",
-  "mypy == 1.6.0",
-  "pre-commit",
-  "pytest",
-  "pytest-timeout",
-  "pytest-xdist",
-  "tox >= 4.0.0",
+    "ansible-core >= 2.14.0",
+    "argcomplete",
+    # Support for source_pkgs
+    "coverage[toml] >= 5.3",
+    "cryptography",
+    "black == 23.9.1",
+    "isort == 5.12.0",
+    "mypy == 1.6.0",
+    "pre-commit",
+    "pytest",
+    "pytest-timeout",
+    "pytest-xdist",
+    "tox >= 4.0.0",
 ]
 
 [tool.setuptools]
@@ -96,6 +96,10 @@ warn_unreachable = true
 
 [[tool.mypy.overrides]]
 module = "ansible.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "debugpy.*"
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

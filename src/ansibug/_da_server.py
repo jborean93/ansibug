@@ -236,6 +236,7 @@ class DAServer:
             dap.InitializeResponse(
                 request_seq=msg.seq,
                 capabilities=dap.Capabilities(
+                    supports_clipboard_context=True,
                     supports_conditional_breakpoints=True,
                     supports_configuration_done_request=True,
                     supports_set_variable=True,

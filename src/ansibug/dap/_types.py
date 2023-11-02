@@ -74,6 +74,7 @@ class Capabilities(
         "supportsGotoTargetsRequest": "supports_goto_targets_request",
         "supportsStepInTargetsRequest": "supports_step_in_targets_request",
         "supportsCompletionsRequest": "supports_completions_request",
+        "supportsClipboardContext": "supports_clipboard_context",
     },
 ):
     """Capabilities of a debug adapter.
@@ -102,6 +103,8 @@ class Capabilities(
             StepInTargetsRequest.
         supports_completions_request: The debug adapter supports the
             CompletionsRequest.
+        supports_clipboard_context: The debug adapter supports the clipboard
+            context value in the evaluate request.
     """
 
     supports_configuration_done_request: bool = False
@@ -138,7 +141,7 @@ class Capabilities(
     # supports_disassemble_request
     # supports_cancel_request
     # supports_breakpoint_locations_request
-    # supports_clipboard_context
+    supports_clipboard_context: bool = False
     # supports_stepping_granularity
     # supports_instruction_breakpoints
     # supports_exception_filter_options
