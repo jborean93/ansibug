@@ -815,3 +815,185 @@ def test_breakpoint_block_in_include(
     play_out = proc.communicate()
     if rc := proc.returncode:
         raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
+
+
+def test_multiple_plays(
+    dap_client: DAPClient,
+    tmp_path: pathlib.Path,
+) -> None:
+    playbook = tmp_path / "main.yml"
+    playbook.write_text(
+        r"""
+- name: play 1
+  hosts: localhost
+  gather_facts: false
+  tasks:
+  - name: ping test
+    ping:
+
+- name: play 2
+  hosts: localhost
+  gather_facts: false
+  tasks:
+  - name: ping test
+    ping:
+"""
+    )
+
+    proc = dap_client.launch(playbook, playbook_dir=tmp_path)
+
+    resp = dap_client.send(
+        dap.SetBreakpointsRequest(
+            source=dap.Source(
+                name="main.yml",
+                path=str(playbook.absolute()),
+            ),
+            lines=[13],
+            breakpoints=[dap.SourceBreakpoint(line=13)],
+            source_modified=False,
+        ),
+        dap.SetBreakpointsResponse,
+    )
+    assert len(resp.breakpoints) == 1
+    assert resp.breakpoints[0].verified
+    assert resp.breakpoints[0].line == 13
+    assert resp.breakpoints[0].end_line == 13
+    bid = resp.breakpoints[0].id
+
+    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
+
+    # The host thread will start and stop for the first play
+    thread_event = dap_client.wait_for_message(dap.ThreadEvent)
+    assert thread_event.reason == "started"
+
+    thread_event = dap_client.wait_for_message(dap.ThreadEvent)
+    assert thread_event.reason == "exited"
+
+    # The second play has a new thread that's started
+    thread_event = dap_client.wait_for_message(dap.ThreadEvent)
+    assert thread_event.reason == "started"
+    localhost_tid = thread_event.thread_id
+
+    stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
+    assert stopped_event.reason == dap.StoppedReason.BREAKPOINT
+    assert stopped_event.thread_id == localhost_tid
+    assert stopped_event.hit_breakpoint_ids == [bid]
+
+    dap_client.send(dap.ContinueRequest(thread_id=localhost_tid), dap.ContinueResponse)
+
+    thread_event = dap_client.wait_for_message(dap.ThreadEvent)
+    assert thread_event.reason == "exited"
+
+    dap_client.wait_for_message(dap.TerminatedEvent)
+
+    play_out = proc.communicate()
+    if rc := proc.returncode:
+        raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
+
+
+def test_breakpoint_set_during_run(
+    dap_client: DAPClient,
+    tmp_path: pathlib.Path,
+) -> None:
+    playbook = tmp_path / "main.yml"
+    playbook.write_text(
+        r"""
+- hosts: localhost
+  gather_facts: false
+  tasks:
+  - name: ping 1
+    ping:
+
+  - name: ping 2
+    ping:
+
+  - name: ping 3
+    ping:
+"""
+    )
+
+    proc = dap_client.launch(playbook, playbook_dir=tmp_path)
+
+    bp_resp = dap_client.send(
+        dap.SetBreakpointsRequest(
+            source=dap.Source(
+                name="main.yml",
+                path=str(playbook.absolute()),
+            ),
+            lines=[5, 11],
+            breakpoints=[dap.SourceBreakpoint(line=5), dap.SourceBreakpoint(line=11)],
+            source_modified=False,
+        ),
+        dap.SetBreakpointsResponse,
+    )
+    assert len(bp_resp.breakpoints) == 2
+    assert bp_resp.breakpoints[0].verified
+    assert bp_resp.breakpoints[0].line == 5
+    assert bp_resp.breakpoints[0].end_line == 7
+    assert bp_resp.breakpoints[1].verified
+    assert bp_resp.breakpoints[1].line == 11
+    assert bp_resp.breakpoints[1].end_line == 11
+
+    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
+
+    thread_event = dap_client.wait_for_message(dap.ThreadEvent)
+    localhost_tid = thread_event.thread_id
+
+    stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
+    assert stopped_event.reason == dap.StoppedReason.BREAKPOINT
+    assert stopped_event.thread_id == localhost_tid
+    assert stopped_event.hit_breakpoint_ids == [bp_resp.breakpoints[0].id]
+
+    # Unset the second breakpoint
+    bp_resp = dap_client.send(
+        dap.SetBreakpointsRequest(
+            source=dap.Source(
+                name="main.yml",
+                path=str(playbook.absolute()),
+            ),
+            lines=[5],
+            breakpoints=[dap.SourceBreakpoint(line=5)],
+            source_modified=False,
+        ),
+        dap.SetBreakpointsResponse,
+    )
+    assert len(bp_resp.breakpoints) == 1
+    assert bp_resp.breakpoints[0].verified
+    assert bp_resp.breakpoints[0].line == 5
+    assert bp_resp.breakpoints[0].end_line == 7
+
+    # Add in the second breakpoint again in a new location
+    bp_resp = dap_client.send(
+        dap.SetBreakpointsRequest(
+            source=dap.Source(
+                name="main.yml",
+                path=str(playbook.absolute()),
+            ),
+            lines=[5, 8],
+            breakpoints=[dap.SourceBreakpoint(line=5), dap.SourceBreakpoint(line=8)],
+            source_modified=False,
+        ),
+        dap.SetBreakpointsResponse,
+    )
+    assert len(bp_resp.breakpoints) == 2
+    assert bp_resp.breakpoints[0].verified
+    assert bp_resp.breakpoints[0].line == 5
+    assert bp_resp.breakpoints[0].end_line == 7
+    assert bp_resp.breakpoints[1].verified
+    assert bp_resp.breakpoints[1].line == 8
+    assert bp_resp.breakpoints[1].end_line == 10
+
+    dap_client.send(dap.ContinueRequest(thread_id=localhost_tid), dap.ContinueResponse)
+
+    stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
+    assert stopped_event.reason == dap.StoppedReason.BREAKPOINT
+    assert stopped_event.thread_id == localhost_tid
+    assert stopped_event.hit_breakpoint_ids == [bp_resp.breakpoints[1].id]
+
+    dap_client.send(dap.ContinueRequest(thread_id=localhost_tid), dap.ContinueResponse)
+    dap_client.wait_for_message(dap.ThreadEvent)
+    dap_client.wait_for_message(dap.TerminatedEvent)
+
+    play_out = proc.communicate()
+    if rc := proc.returncode:
+        raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")

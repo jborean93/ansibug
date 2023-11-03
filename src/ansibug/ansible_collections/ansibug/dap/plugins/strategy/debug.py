@@ -14,6 +14,7 @@ author: Jordan Borean (@jborean93)
 """
 
 import collections.abc
+import inspect
 import os
 import threading
 import traceback
@@ -816,7 +817,26 @@ class StrategyModule(LinearStrategy):
         target_host: Host,
     ) -> list[dict[str, t.Any]]:
         """Called when a meta task is about to run"""
-        return super()._execute_meta(task, play_context, iterator, target_host)
+        # This is super ick but recreating the vars just for meta tasks would
+        # involve too many internal attributes so just get it from the parent
+        # locals.
+
+        task_vars = inspect.currentframe().f_back.f_locals["task_vars"]  # type: ignore[union-attr]  # I know this is bad
+        self._debug_state.process_task(target_host, task, task_vars)
+        res = super()._execute_meta(task, play_context, iterator, target_host)
+
+        meta_action = task.args.get("_raw_params", None)
+        if meta_action == "refresh_inventory":
+            # refresh_inventory will update the uuid on the host object, we
+            # need to mark the existing threads as exited so the next run will
+            # pick up the correct changes. It will automatically start those
+            # threads as they run.
+            for tid in list(self._debug_state.threads.keys()):
+                if tid == 1:
+                    continue
+                self._debug_state.remove_thread(tid)
+
+        return res
 
     def _load_included_file(
         self,
