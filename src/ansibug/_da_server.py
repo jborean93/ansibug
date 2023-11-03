@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import functools
 import json
 import logging
@@ -21,6 +22,133 @@ from ._mp_queue import ClientMPQueue, MPProtocol, MPQueue, ServerMPQueue
 from ._tls import create_client_tls_context
 
 log = logging.getLogger(__name__)
+
+
+@dataclasses.dataclass(frozen=True)
+class AttachArguments:
+    """Arguments for AttachRequest.
+
+    These are the known arguments for attach request. See the from_json method
+    to see the default values. There are two ways to specify a process for
+    attach; through the local process id or with the manual socket address and
+    port.
+
+    If the process_id is specified, the code will attempt to lookup the
+    connection details of that process stored in a local temporary file under
+    the PID identifier.
+
+    If the address and port is specified, ensure use_tls is set to whether the
+    socket server is expecting TLS or not.
+
+    Args:
+        process_id: The local ansible-playbook process to attach to.
+        address: The socket address to connect to.
+        port: The port of the socket address to connect to.
+        connect_timeout: The timeout in seconds for the connection timeout.
+        use_tls: Whether to use TLS or not.
+        tls_verification: The TLS verification settings.
+    """
+
+    process_id: t.Optional[int]
+    address: str
+    port: t.Optional[int]
+    connect_timeout: float
+    use_tls: bool
+    tls_verification: t.Union[t.Literal["verify", "ignore"], str]
+
+    def get_connection_tuple(self) -> tuple[str, int, bool]:
+        """Gets the address, port, and use_tls settings for this request."""
+        if self.process_id is not None:
+            pid_path = get_pid_info_path(self.process_id)
+            if not pid_path.exists():
+                raise ValueError(f"Failed to find process pid file at '{pid_path}'")
+
+            proc_json = json.loads(pid_path.read_text())
+            proc_info = PlaybookProcessInfo.from_json(proc_json)
+            use_tls = proc_info.use_tls
+            addr = proc_info.host
+            port = proc_info.port
+
+            return (addr, port, use_tls)
+
+        elif self.port is not None:
+            return (self.address, self.port, self.use_tls)
+
+        else:
+            raise ValueError("Expected processId or address/port to be specified for attach.")
+
+    @classmethod
+    def from_json(
+        cls,
+        data: dict[str, t.Any],
+    ) -> AttachArguments:
+        attach_kwargs: dict[str, t.Any] = {}
+        if "useTls" in data:
+            attach_kwargs["use_tls"] = bool(data["useTls"])
+
+        return AttachArguments(
+            process_id=data.get("processId", None),
+            address=data.get("address", "localhost"),
+            port=data.get("port", None),
+            connect_timeout=float(data.get("connectTimeout", 5.0)),
+            use_tls=bool(data.get("useTls", False)),
+            tls_verification=data.get("tlsVerification", "verify"),
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class LaunchArguments:
+    """Arguments for LaunchRequest.
+
+    These are the known arguments for launch request. See the from_json method
+    to see the default values. A launch request will spawn a new
+    ansible-playbook process through 'python -m ansibug connect ...' which sets
+    up the new process to talk to the debug adapter server.
+
+    Args:
+        playbook: The playbook to launch.
+        args: Extra arguments to run with ansible-playbook.
+        cwd: The working directory to launch ansible-playbook with.
+        env: Extra environment variables to use when launching the process.
+        console: The console type to use.
+        log_file: Path to a local file to log ansibug details to.
+        log_level: The level of logging to use.
+    """
+
+    playbook: str
+    args: t.List[str]
+    cwd: str
+    env: t.Dict[str, t.Optional[str]]
+    console: t.Literal["integrated", "external"]
+    log_file: t.Optional[str]
+    log_level: LogLevel
+
+    @classmethod
+    def from_json(
+        cls,
+        data: dict[str, t.Any],
+    ) -> LaunchArguments:
+        if not (playbook := data.get("playbook", None)):
+            raise ValueError("Expected playbook to be specified for launch.")
+
+        console = data.get("console", "integratedTerminal")
+        console_kind: t.Literal["external", "integrated"]
+        if console == "integratedTerminal":
+            console_kind = "integrated"
+        elif console == "externalTerminal":
+            console_kind = "external"
+        else:
+            raise ValueError(f"Unknown console value '{console}' - expected integratedTerminal or externalTerminal.")
+
+        return LaunchArguments(
+            playbook=playbook,
+            args=data.get("args", []),
+            cwd=data.get("cwd", ""),
+            env=data.get("env", {}),
+            console=console_kind,
+            log_file=data.get("logFile", None),
+            log_level=data.get("logLevel", "info"),
+        )
 
 
 def start_dap(
@@ -247,30 +375,12 @@ class DAServer:
     @_process_msg.register
     def _(self, msg: dap.AttachRequest) -> None:
         try:
-            attach_arguments = msg.arguments
-
-            use_tls = attach_arguments.get("useTLS", False)
-
-            if (playbook_pid := attach_arguments.get("processId", None)) is not None:
-                pid_path = get_pid_info_path(playbook_pid)
-                if not pid_path.exists():
-                    raise Exception(f"Failed to find process pid file at '{pid_path}'")
-
-                proc_json = json.loads(pid_path.read_text())
-                proc_info = PlaybookProcessInfo.from_json(proc_json)
-                use_tls = proc_info.use_tls
-                addr = proc_info.host
-                port = proc_info.port
-
-            else:
-                addr = attach_arguments.get("address", "localhost")
-                if not (port := attach_arguments.get("port", None)):
-                    raise Exception("Expected processId or address and port to be specified for attach")
+            attach_args = AttachArguments.from_json(msg.arguments)
+            addr, port, use_tls = attach_args.get_connection_tuple()
 
             ssl_context = None
             if use_tls:
-                verify = attach_arguments.get("tlsVerification", "verify")
-                ssl_context = create_client_tls_context(verify)
+                ssl_context = create_client_tls_context(attach_args.tls_verification)
 
             self._debuggee = ClientMPQueue(
                 (addr, int(port)),
@@ -278,8 +388,7 @@ class DAServer:
                 ssl_context=ssl_context,
             )
 
-            connect_timeout = float(attach_arguments.get("connectTimeout", 5.0))
-            self._debuggee.start(timeout=connect_timeout)
+            self._debuggee.start(timeout=attach_args.connect_timeout)
 
             self.send_to_client(dap.AttachResponse(request_seq=msg.seq))
             self.send_to_client(dap.InitializedEvent())
@@ -296,7 +405,7 @@ class DAServer:
     @_process_msg.register
     def _(self, msg: dap.LaunchRequest) -> None:
         try:
-            launch_arguments = msg.arguments
+            launch_args = LaunchArguments.from_json(msg.arguments)
 
             self._debuggee = ServerMPQueue(
                 ("", 0),
@@ -313,41 +422,26 @@ class DAServer:
                 "--addr",
                 addr_str,
             ]
-            if log_file := launch_arguments.get("logFile", None):
+            if launch_args.log_file is not None:
                 ansibug_args.extend(
                     [
                         "--log-file",
-                        log_file,
+                        launch_args.log_file,
                         "--log-level",
-                        launch_arguments.get("logLevel", "info"),
+                        launch_args.log_level,
                     ]
                 )
 
-            if playbook := launch_arguments.get("playbook", None):
-                ansibug_args.append(playbook)
-            else:
-                raise Exception("Expecting playbook value but none provided.")
-
-            ansibug_args += launch_arguments.get("args", [])
-
-            launch_console = launch_arguments.get("console", "integratedTerminal")
-            console_kind: t.Literal["external", "integrated"]
-            if launch_console == "integratedTerminal":
-                console_kind = "integrated"
-            elif launch_console == "externalTerminal":
-                console_kind = "external"
-            else:
-                raise Exception(
-                    f"Unknown console value '{launch_console}' - expected integratedTerminal or externalTerminal."
-                )
+            ansibug_args.append(launch_args.playbook)
+            ansibug_args.extend(launch_args.args)
 
             self.send_to_client(
                 dap.RunInTerminalRequest(
-                    cwd=launch_arguments.get("cwd", ""),
-                    kind=console_kind,
+                    cwd=launch_args.cwd,
+                    kind=launch_args.console,
                     args=ansibug_args,
                     title="Ansible Debug Console",
-                    env=launch_arguments.get("env", {}),
+                    env=launch_args.env,
                 )
             )
 

@@ -116,5 +116,5 @@ def test_attach_no_pid_or_port(
         "address": "localhost",
     }
 
-    with pytest.raises(Exception, match="Expected processId or address and port to be specified for attach"):
+    with pytest.raises(Exception, match="Expected processId or address/port to be specified for attach"):
         dap_client.send(dap.AttachRequest(arguments=attach_args), dap.AttachResponse)
