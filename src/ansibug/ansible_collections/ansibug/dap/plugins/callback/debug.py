@@ -173,7 +173,11 @@ def load_playbook_tasks(
         play_path, play_line = split_task_path(play.get_path())
         debugger.register_path_breakpoint(play_path, play_line, 1)
 
-        for block in play.compile():
+        play_blocks = play.compile() + play.handlers
+        for r in play.roles:
+            play_blocks += r.get_handler_blocks(play)
+
+        for block in play_blocks:
             block_path_and_line = block.get_path()
             if block_path_and_line:
                 # If the path is set this is an explicit block and should be

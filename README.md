@@ -315,6 +315,9 @@ Because of the nature of include tasks, these are run at runtime rather than bef
 This means that the breakpoint validation cannot parse all the files at the start and may have to do it for any new files/tasks that appear during the run.
 This isn't too bad as DAP allows breakpoints to be updated during a run allowing the client to validate the breakpoints based on new information that has been processed.
 
+Another side effect is that handlers inside a role added with `include_role` won't be validated.
+They will still be hit but will appear as disabled in the client.
+
 Overall I'm not too happy with the breakpoint validation logic and propbably needs a better implementation.
 For now things sortoff works but it might just be better to do an initial pass of the provided playbooks by parsing the yaml file manually and doing it's own logic to map out where breakpoints can be set.
 
@@ -330,11 +333,3 @@ Will have to look at this further.
 While I've strived to remove any deadlocks that might cause a deadlock when debugging a task there are still some that exist.
 There's not much that can be done about this expect to try and write a bit more defensive code to ensure a failure is recoverable and the Ansible playbook can continue to run on a failure.
 In the event of a deadlock, the simplest solution is to kill the `ansible-playbook` process that was spawned.
-
-# TODO
-
-While this is a POC there are a few outstanding things I am hoping to do before actually releasing this as a plugin.
-
-* Cleanup the code and remove the duplication
-* Sort out handler and `meta` task logic
-* Have the strategy inject itself over the existing `linear`, `free`, something else if possible, currently only `linear` works
