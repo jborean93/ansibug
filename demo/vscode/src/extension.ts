@@ -1,6 +1,7 @@
 // The module 'vscode' contains the VS Code extensibility API
 // Import the module and reference it with the alias vscode in your code below
 import * as vscode from 'vscode';
+import * as path from 'path';
 
 // this method is called when your extension is activated
 // your extension is activated the very first time the command is executed
@@ -30,7 +31,28 @@ export function activate(context: vscode.ExtensionContext) {
 
 	context.subscriptions.push(vscode.debug.registerDebugAdapterDescriptorFactory('ansibug', {
 		createDebugAdapterDescriptor: (session: vscode.DebugSession) => {
-			return new vscode.DebugAdapterExecutable("python", ["-m", "ansibug", "dap"]);
+
+			const ansibugArgs = ["-m", "ansibug", "dap"];
+			const dapOptions: vscode.DebugAdapterExecutableOptions = {};
+
+			const pythonSettings = vscode.workspace.getConfiguration("ansibug.python");
+			let pythonPath = pythonSettings.interpreterPath;
+			let venvPath = pythonSettings.virtualEnvironment;
+			if (venvPath) {
+				let currentPath = process.env.PATH ?? "";
+				dapOptions.env = {
+					"VIRTUAL_ENV": venvPath,
+					"PATH": `${venvPath}${path.sep}bin${path.delimiter}${currentPath}`,
+				};
+			}
+
+			const loggingSettings = vscode.workspace.getConfiguration("ansibug.logging");
+			let logFile = loggingSettings.debugServerLogFile;
+			if (logFile) {
+				ansibugArgs.push("--log-file", logFile, "--log-level", loggingSettings.debugServerLogLevel);
+			}
+
+			return new vscode.DebugAdapterExecutable(pythonPath, ansibugArgs, dapOptions);
 		}
 	}));
 }
