@@ -23,6 +23,37 @@
 			}
 		],
 		"commands": [],
+		"configuration": {
+			"title": "Ansibug",
+			"properties": {
+				"ansibug.python.interpreterPath": {
+					"type": "string",
+					"default": "python",
+					"description": "The path to the Python interepreter to use for the debug adapter server."
+				},
+				"ansibug.python.virtualEnvironment": {
+					"type": "string",
+					"default": "",
+					"description": "Run the debug adapter server under this Python virtual environment. This should be the folder containing the bin folder where the virtualenv was created."
+				},
+				"ansibug.logging.debugServerLogFile": {
+					"type": "string",
+					"default": "",
+					"description": "Set to enable the debug server logging to the path set."
+				},
+				"ansibug.logging.debugServerLogLevel": {
+					"type": "string",
+					"default": "info",
+					"enum": [
+						"info",
+						"debug",
+						"warning",
+						"error"
+					],
+					"description": "The logging level to configure for the debug server."
+				}
+			}
+		},
 		"debuggers": [
 			{
 				"type": "ansibug",
