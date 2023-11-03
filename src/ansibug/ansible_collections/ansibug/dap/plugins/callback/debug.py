@@ -140,9 +140,6 @@ import typing as t
 from ansible.errors import AnsibleError
 from ansible.executor.stats import AggregateStats
 from ansible.playbook import Playbook
-from ansible.playbook.block import Block
-from ansible.playbook.play import Play
-from ansible.playbook.task import Task
 from ansible.plugins.callback import CallbackBase
 from ansible.utils.display import Display
 
@@ -150,48 +147,11 @@ from ansibug._debuggee import AnsibleDebugger
 from ansibug._logging import configure_file_logging
 from ansibug._tls import create_server_tls_context
 
+from ..plugin_utils._breakpoints import register_play_breakpoints
+
 log = logging.getLogger("ansibug.callback")
 
 display = Display()
-
-
-def load_playbook_tasks(
-    debugger: AnsibleDebugger,
-    playbook: Playbook,
-) -> None:
-    play: Play
-    block: Block
-    task: Task
-
-    def split_task_path(task: str) -> tuple[str, int]:
-        split = task.rsplit(":", 1)
-        return split[0], int(split[1])
-
-    for play in playbook.get_plays():
-        # This is essentially doing what play.compile() does but without the
-        # flush stages.
-        play_path, play_line = split_task_path(play.get_path())
-        debugger.register_path_breakpoint(play_path, play_line, 1)
-
-        play_blocks = play.compile() + play.handlers
-        for r in play.roles:
-            play_blocks += r.get_handler_blocks(play)
-
-        for block in play_blocks:
-            block_path_and_line = block.get_path()
-            if block_path_and_line:
-                # If the path is set this is an explicit block and should be
-                # marked as an invalid breakpoint section.
-                block_path, block_line = split_task_path(block_path_and_line)
-                debugger.register_path_breakpoint(block_path, block_line, 0)
-
-            task_list: list[Task] = block.block[:]
-            task_list.extend(block.rescue)
-            task_list.extend(block.always)
-
-            for task in task_list:
-                task_path, task_line = split_task_path(task.get_path())
-                debugger.register_path_breakpoint(task_path, task_line, 1)
 
 
 class CallbackModule(CallbackBase):
@@ -212,7 +172,7 @@ class CallbackModule(CallbackBase):
         self,
         playbook: Playbook,
     ) -> None:
-        load_playbook_tasks(self._debugger, playbook)
+        register_play_breakpoints(self._debugger, playbook.get_plays())
 
         log_file = self.get_option("log_file")
         if log_file:
@@ -245,6 +205,7 @@ class CallbackModule(CallbackBase):
             port=socket_port,
             mode=mode,
             ssl_context=ssl_context,
+            playbook_file=getattr(playbook, "_file_name", None),
         )
 
         if mode == "listen":
