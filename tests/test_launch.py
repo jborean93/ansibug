@@ -10,7 +10,7 @@ import ansibug.dap as dap
 def test_launch_no_playbook(
     dap_client: DAPClient,
 ) -> None:
-    with pytest.raises(Exception, match="Expecting playbook value but none provided."):
+    with pytest.raises(Exception, match="Expected playbook to be specified for launch"):
         dap_client.send(dap.LaunchRequest(arguments={}), dap.LaunchResponse)
 
 
