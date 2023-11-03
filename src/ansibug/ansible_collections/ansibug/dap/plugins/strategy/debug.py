@@ -337,7 +337,7 @@ class AnsibleDebugState(DebugState):
                 and last_frame.task.action in C._ACTION_INCLUDE_ROLE
                 and hasattr(task, "_role")
             ):
-                role_handlers = task._role.get_handler_blocks(task.get_play())
+                role_handlers = task._role.get_handler_blocks(task.play)
                 register_block_breakpoints(self._debugger, role_handlers)
 
         sfid = self._debugger.next_stackframe_id()
