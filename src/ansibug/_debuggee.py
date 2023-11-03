@@ -33,10 +33,12 @@ log = logging.getLogger(__name__)
 
 @dataclasses.dataclass(frozen=True)
 class PlaybookProcessInfo:
+    pid: int
     host: str
     port: int
     is_ipv6: bool
     use_tls: bool
+    playbook_file: t.Optional[str]
 
     @classmethod
     def from_json(
@@ -44,23 +46,30 @@ class PlaybookProcessInfo:
         data: dict[str, t.Any],
     ) -> PlaybookProcessInfo:
         return PlaybookProcessInfo(
+            pid=data["pid"],
             host=data["host"],
             port=int(data["port"]),
             is_ipv6=data["is_ipv6"],
             use_tls=data["use_tls"],
+            playbook_file=data["playbook_file"],
         )
 
     def to_json(self) -> dict[str, t.Any]:
         return {
+            "pid": self.pid,
             "host": self.host,
             "port": self.port,
             "is_ipv6": self.is_ipv6,
             "use_tls": self.use_tls,
+            "playbook_file": self.playbook_file,
         }
 
 
 def get_pid_info_path(pid: int) -> pathlib.Path:
     """Get the path used to store info about the ansible-playbook debug proc."""
+    # It is important that changes here are also reflected in the extension code
+    # so that it knows where dir and what file pattern to look for when
+    # scanning for available playbooks.
     tmpdir = os.environ.get("TMPDIR", "/tmp")
     return pathlib.Path(tmpdir) / f"ANSIBUG-{pid}"
 
@@ -73,6 +82,7 @@ def wait_for_dap_server(
     cancel_token: SocketCancellationToken,
     *,
     ssl_context: ssl.SSLContext | None = None,
+    playbook_file: str | None = None,
 ) -> MPQueue:
     """Wait for DAP Server.
 
@@ -90,6 +100,8 @@ def wait_for_dap_server(
         cancel_token: The cancellation token to cancel the socket operations.
         ssl_context: Optional client SSLContext to wrap the socket connection
             with.
+        playbook_file: The file of the playbook being run, this is optional
+                info used for storing metadata with the process pid on listen.
 
     Returns:
         MPQueue: The multiprocessing queue handler that can exchange DAP
@@ -106,10 +118,12 @@ def wait_for_dap_server(
     if isinstance(mp_queue, ServerMPQueue):
         bound_host, bound_port, is_ipv6 = mp_queue.address
         proc_info = PlaybookProcessInfo(
+            pid=os.getpid(),
             host=bound_host,
             port=bound_port,
             is_ipv6=is_ipv6,
             use_tls=ssl_context is not None,
+            playbook_file=playbook_file,
         )
 
         with open(get_pid_info_path(os.getpid()), mode="w") as fd:
@@ -364,6 +378,7 @@ class AnsibleDebugger(metaclass=Singleton):
         mode: t.Literal["connect", "listen"],
         *,
         ssl_context: ssl.SSLContext | None = None,
+        playbook_file: str | None = None,
     ) -> str:
         """Start the background server thread.
 
@@ -378,6 +393,8 @@ class AnsibleDebugger(metaclass=Singleton):
                 while listen will bind to the addr and wait for a connection.
             ssl_context: Optional client SSLContext to wrap the socket
                 connection with.
+            playbook_file: The file of the playbook being run, this is optional
+                info used for storing metadata with the process pid on listen.
 
         returns:
             str: The socket address that is being used, this is only valid when
@@ -385,7 +402,7 @@ class AnsibleDebugger(metaclass=Singleton):
         """
         self._recv_thread = threading.Thread(
             target=self._recv_task,
-            args=(host, port, mode, ssl_context),
+            args=(host, port, mode, ssl_context, playbook_file),
             name="ansibug-debugger",
         )
         self._recv_thread.start()
@@ -509,6 +526,7 @@ class AnsibleDebugger(metaclass=Singleton):
         port: int,
         mode: t.Literal["connect", "listen"],
         ssl_context: ssl.SSLContext | None,
+        playbook_file: str | None = None,
     ) -> None:
         """Background server recv task.
 
@@ -528,6 +546,8 @@ class AnsibleDebugger(metaclass=Singleton):
                 while listen will bind to the addr and wait for a connection.
             ssl_context: Optional client SSLContext to wrap the socket
                 connection with.
+            playbook_file: The file of the playbook being run, this is optional
+                info used for storing metadata with the process pid on listen.
         """
         log.debug("Starting DAP server thread")
 
@@ -540,6 +560,7 @@ class AnsibleDebugger(metaclass=Singleton):
                     mode,
                     self._cancel_token,
                     ssl_context=ssl_context,
+                    playbook_file=playbook_file,
                 ) as mp_queue:
                     sock_host, sock_port, is_ipv6 = mp_queue.address
                     if is_ipv6:

@@ -100,7 +100,7 @@ This is essentially the same as `Launch` except it waits until the `ansibug` pro
 There are 3 components to the debug process:
 
 1. Client - the software that exposes the debugger UI, e.g. VSCode
-1. DA Server - the broker between the client and debugee, e.g. `ansibug`
+1. DA Server - the broker between the client and debuggee, e.g. `ansibug`
 1. Debuggee - the software to be debugged, e.g. `ansible-playbook`
 
 The communication between the client and the DA Server is done through process stdio.
@@ -284,7 +284,7 @@ There are some problems with this approach
 
 ### Static imports are not preserved in the task block
 
-Because the static imports are pre-processed before reaching the stategy or debug callback plugins they do not appear in the task blocks.
+Because the static imports are pre-processed before reaching the strategy or debug callback plugins they do not appear in the task blocks.
 The playbook task block is used to validate breakpoints and without the parsed yaml metadata the validator cannot detect these entries.
 The result of this problem is that the import task and subsequent lines are treated as part of a previous task (if present).
 For example:
@@ -315,11 +315,8 @@ Because of the nature of include tasks, these are run at runtime rather than bef
 This means that the breakpoint validation cannot parse all the files at the start and may have to do it for any new files/tasks that appear during the run.
 This isn't too bad as DAP allows breakpoints to be updated during a run allowing the client to validate the breakpoints based on new information that has been processed.
 
-Another side effect is that handlers inside a role added with `include_role` won't be validated.
-They will still be hit but will appear as disabled in the client.
-
-Overall I'm not too happy with the breakpoint validation logic and propbably needs a better implementation.
-For now things sortoff works but it might just be better to do an initial pass of the provided playbooks by parsing the yaml file manually and doing it's own logic to map out where breakpoints can be set.
+Overall I'm not too happy with the breakpoint validation logic and probably needs a better implementation.
+For now things sort-off works but it might just be better to do an initial pass of the provided playbooks by parsing the yaml file manually and doing it's own logic to map out where breakpoints can be set.
 
 ## Loops
 

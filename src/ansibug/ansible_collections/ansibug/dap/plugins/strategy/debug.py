@@ -41,6 +41,7 @@ from ansible.vars.manager import VariableManager
 import ansibug
 from ansibug._debuggee import AnsibleDebugger, DebugState
 
+from ..plugin_utils._breakpoints import register_block_breakpoints
 from ..plugin_utils._repl_util import (
     RemoveVarCommand,
     SetVarCommand,
@@ -327,6 +328,17 @@ class AnsibleDebugState(DebugState):
                 self.stackframes.pop(last_frame_id)
                 for variable_id in last_frame.variables:
                     del self.variables[variable_id]
+
+            # If this is the first task in a role included by include_role we
+            # need to scan the handlers and validate the breakpoints
+            if (
+                parent_task
+                and last_frame.task
+                and last_frame.task.action in C._ACTION_INCLUDE_ROLE
+                and hasattr(task, "_role")
+            ):
+                role_handlers = task._role.get_handler_blocks(task.play)
+                register_block_breakpoints(self._debugger, role_handlers)
 
         sfid = self._debugger.next_stackframe_id()
 
@@ -846,26 +858,8 @@ class StrategyModule(LinearStrategy):
     ) -> list[Block]:
         included_blocks = super()._load_included_file(included_file, iterator, is_handler)
 
-        def split_task_path(task: str) -> tuple[str, int]:
-            split = task.rsplit(":", 1)
-            return split[0], int(split[1])
-
         # Need to register these blocks as valid breakpoints and update the client bps
-        for block in included_blocks:
-            block_path_and_line = block.get_path()
-            if block_path_and_line:
-                # If the path is set this is an explicit block and should be
-                # marked as an invalid breakpoint section.
-                block_path, block_line = split_task_path(block_path_and_line)
-                self._debug_state._debugger.register_path_breakpoint(block_path, block_line, 0)
-
-            task_list: list[Task] = block.block[:]
-            task_list.extend(block.rescue)
-            task_list.extend(block.always)
-
-            for task in task_list:
-                task_path, task_line = split_task_path(task.get_path())
-                self._debug_state._debugger.register_path_breakpoint(task_path, task_line, 1)
+        register_block_breakpoints(self._debug_state._debugger, included_blocks)
 
         return included_blocks
 
@@ -928,8 +922,5 @@ class StrategyModule(LinearStrategy):
 
 
 # Other things to look at
-#   * Deal with handlers - _do_handler_run
 #   * Should we have an uncaught exception (not rescue on failed task)
 #   * Should we have a raised exception (- fail:) task
-#   * Function breakpoints for specific actions or maybe includes?
-#   * Meta tasks, especially ones that deal with host details
