@@ -74,64 +74,6 @@ def get_pid_info_path(pid: int) -> pathlib.Path:
     return pathlib.Path(tmpdir) / f"ANSIBUG-{pid}"
 
 
-def wait_for_dap_server(
-    host: str,
-    port: int,
-    proto_factory: t.Callable[[], MPProtocol],
-    mode: t.Literal["connect", "listen"],
-    cancel_token: SocketCancellationToken,
-    *,
-    ssl_context: ssl.SSLContext | None = None,
-    playbook_file: str | None = None,
-) -> MPQueue:
-    """Wait for DAP Server.
-
-    Attempts to either connect to a DAP server or start a new socket that the
-    DAP server connects to. This connection exposes 2 methods that can send and
-    receive DAP messages to and from the DAP server.
-
-    Args:
-        host: The socket hostname portion to connect/bind.
-        port: The socket port portion to connect/bind.
-        proto_factory: Callable that returns the protocol associated with the
-            socket.
-        mode: The socket mode to use, connect will connect to the addr while
-            listen will bind to the addr and wait for a connection.
-        cancel_token: The cancellation token to cancel the socket operations.
-        ssl_context: Optional client SSLContext to wrap the socket connection
-            with.
-        playbook_file: The file of the playbook being run, this is optional
-                info used for storing metadata with the process pid on listen.
-
-    Returns:
-        MPQueue: The multiprocessing queue handler that can exchange DAP
-        messages with the peer.
-    """
-    log.info("Setting up ansible-playbook debug %s socket at '%s:%d'", mode, host, port)
-
-    mp_queue = (ClientMPQueue if mode == "connect" else ServerMPQueue)(
-        (host, port),
-        proto_factory,
-        ssl_context=ssl_context,
-        cancel_token=cancel_token,
-    )
-    if isinstance(mp_queue, ServerMPQueue):
-        bound_host, bound_port, is_ipv6 = mp_queue.address
-        proc_info = PlaybookProcessInfo(
-            pid=os.getpid(),
-            host=bound_host,
-            port=bound_port,
-            is_ipv6=is_ipv6,
-            use_tls=ssl_context is not None,
-            playbook_file=playbook_file,
-        )
-
-        with open(get_pid_info_path(os.getpid()), mode="w") as fd:
-            json.dump(proc_info.to_json(), fd)
-
-    return mp_queue
-
-
 class DAProtocol(MPProtocol):
     def __init__(
         self,
@@ -549,19 +491,33 @@ class AnsibleDebugger(metaclass=Singleton):
             playbook_file: The file of the playbook being run, this is optional
                 info used for storing metadata with the process pid on listen.
         """
-        log.debug("Starting DAP server thread")
+        log.info("Setting up ansible-playbook debug %s socket at '%s:%d'", mode, host, port)
 
+        queue_kwargs: dict[str, t.Any] = {
+            "address": (host, port),
+            "proto": lambda: self._proto,
+            "ssl_context": ssl_context,
+            "cancel_token": self._cancel_token,
+        }
+        queue_type = ClientMPQueue if mode == "connect" else ServerMPQueue
+
+        proc_pid_file = get_pid_info_path(os.getpid())
         try:
             while True:
-                with wait_for_dap_server(
-                    host,
-                    port,
-                    lambda: self._proto,
-                    mode,
-                    self._cancel_token,
-                    ssl_context=ssl_context,
-                    playbook_file=playbook_file,
-                ) as mp_queue:
+                with queue_type(**queue_kwargs) as mp_queue:
+                    if isinstance(mp_queue, ServerMPQueue):
+                        bound_host, bound_port, is_ipv6 = mp_queue.address
+                        proc_info = PlaybookProcessInfo(
+                            pid=os.getpid(),
+                            host=bound_host,
+                            port=bound_port,
+                            is_ipv6=is_ipv6,
+                            use_tls=ssl_context is not None,
+                            playbook_file=playbook_file,
+                        )
+                        proc_json = json.dumps(proc_info.to_json())
+                        proc_pid_file.write_text(proc_json)
+
                     sock_host, sock_port, is_ipv6 = mp_queue.address
                     if is_ipv6:
                         self._addr = f"[{sock_host}]:{sock_port}"
@@ -595,6 +551,9 @@ class AnsibleDebugger(metaclass=Singleton):
             log.exception(f"Unknown error in DAP thread: %s", e)
 
         finally:
+            if proc_pid_file.exists():
+                proc_pid_file.unlink(missing_ok=True)
+
             # Ensure the queue is seen as complete so shutdown ends
             with self._send_queue_lock:
                 while True:
