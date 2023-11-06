@@ -127,6 +127,7 @@ class AnsibleStackFrame:
         self.scopes: list[int] = []
         self.variables: list[int] = []
         self.variables_options_id = 0
+        self.variables_taskvar_id = 0
         self.variables_hostvars_id = 0
 
         self._debugger = debugger
@@ -306,7 +307,7 @@ class AnsibleDebugState(DebugState):
         self._variable_mamanger = variable_manager
 
         self._waiting_condition = threading.Condition()
-        self._waiting_threads: dict[int, t.Literal["in", "out", "over"] | None] = {}
+        self._waiting_threads: dict[int, t.Literal["in", "out", "over", "wait"] | None] = {}
         self._waiting_ended = False
 
     def process_task(
@@ -410,14 +411,16 @@ class AnsibleDebugState(DebugState):
                     thread_id=tid,
                     **stopped_kwargs,
                 )
-                self._debugger.send(stopped_event)
-                self._waiting_condition.wait_for(lambda: self._waiting_ended or tid in self._waiting_threads)
+                self._waiting_threads[tid] = "wait"
+                self._debugger.queue_msg(stopped_event)
+                self._waiting_condition.wait_for(lambda: self._waiting_ended or self._waiting_threads[tid] != "wait")
                 if self._waiting_ended:
                     # ended() was called and the connection has been closed, do
                     # not try and process the result.
                     return sf
 
                 stepping_type = self._waiting_threads.pop(tid)
+                assert stepping_type != "wait"  # This should never happen due to the condition above
                 if stepping_type == "in" and task.action not in C._ACTION_ALL_INCLUDES:
                     stepping_type = "over"
 
@@ -460,7 +463,7 @@ class AnsibleDebugState(DebugState):
             id=tid,
             host=host,
         )
-        self._debugger.send(
+        self._debugger.queue_msg(
             ansibug.dap.ThreadEvent(
                 reason="started",
                 thread_id=tid,
@@ -497,7 +500,7 @@ class AnsibleDebugState(DebugState):
     ) -> None:
         self.threads.pop(tid, None)
 
-        self._debugger.send(
+        self._debugger.queue_msg(
             ansibug.dap.ThreadEvent(
                 reason="exited",
                 thread_id=tid,
@@ -551,11 +554,17 @@ class AnsibleDebugState(DebugState):
             elif isinstance(repl_command, SetVarCommand):
                 new_value = self._template(repl_command.expression, sf.task_vars)
 
-                variable_id = (
-                    sf.variables_options_id if repl_command.command == "set_option" else sf.variables_hostvars_id
-                )
-                ansible_var = self.variables[variable_id]
-                ansible_var.set(repl_command.name, new_value)
+                var_ids = []
+                if repl_command.command == "set_option":
+                    var_ids += [sf.variables_options_id]
+                else:
+                    # We want to have changing hostvars also apply to the task
+                    # vars
+                    var_ids += [sf.variables_taskvar_id, sf.variables_hostvars_id]
+
+                for vid in var_ids:
+                    ansible_var = self.variables[vid]
+                    ansible_var.set(repl_command.name, new_value)
 
             else:
                 # Error during parsing or --help was requested
@@ -609,6 +618,7 @@ class AnsibleDebugState(DebugState):
         sf.variables_options_id = module_opts.id
 
         task_vars = self.add_variable(sf, sf.task_vars)
+        sf.variables_taskvar_id = task_vars.id
 
         # We use the hostvars but for simplicity sake we also overlay the task
         # vars that might be set as these will contain things like play/task
@@ -673,9 +683,6 @@ class AnsibleDebugState(DebugState):
         self,
         request: ansibug.dap.StackTraceRequest,
     ) -> ansibug.dap.StackTraceResponse:
-        with self._waiting_condition:
-            wait_info = self._waiting_threads.get(request.thread_id, None)
-
         stack_frames: list[ansibug.dap.StackFrame] = []
         thread = self.threads[request.thread_id]
         for sfid in thread.stack_frames:
@@ -921,18 +928,11 @@ class StrategyModule(LinearStrategy):
             iterator._play,
             self._variable_manager,
         )
-        try:
-            with debugger.with_strategy(self._debug_state):
+        with debugger.with_strategy(self._debug_state):
+            try:
                 return super().run(iterator, play_context)
-        finally:
-            for tid in list(self._debug_state.threads.keys()):
-                if tid == 1:
-                    continue
-                self._debug_state.remove_thread(tid)
-
-            self._debug_state = None  # type: ignore[assignment]
-
-
-# Other things to look at
-#   * Should we have an uncaught exception (not rescue on failed task)
-#   * Should we have a raised exception (- fail:) task
+            finally:
+                for tid in list(self._debug_state.threads.keys()):
+                    if tid == 1:
+                        continue
+                    self._debug_state.remove_thread(tid)

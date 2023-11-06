@@ -7,6 +7,7 @@ import pathlib
 import shutil
 import subprocess
 import sys
+import typing as t
 
 import pytest
 from dap_client import DAPClient
@@ -14,9 +15,28 @@ from dap_client import DAPClient
 import ansibug.dap as dap
 
 
-@pytest.mark.parametrize("attach_by_address", [False, True])
+@pytest.mark.parametrize(
+    ["attach_by_address", "connection_type"],
+    [
+        (False, "uds"),
+        (False, "ipv4"),
+        (False, "ipv6"),
+        (True, "uds"),
+        (True, "ipv4"),
+        (True, "ipv6"),
+    ],
+    ids=[
+        "pid_uds",
+        "pid_tcp_ipv4",
+        "pid_tcp_ipv6",
+        "address_uds",
+        "address_tcp_ipv4",
+        "address_tcp_ipv6",
+    ],
+)
 def test_attach_playbook(
     attach_by_address: bool,
+    connection_type: t.Literal["uds", "ipv4", "ipv6"],
     dap_client: DAPClient,
     tmp_path: pathlib.Path,
 ) -> None:
@@ -31,9 +51,16 @@ def test_attach_playbook(
 """
     )
 
+    ansibug_args = []
+    if connection_type == "ipv4":
+        ansibug_args.extend(["--addr", "tcp://:0"])
+    elif connection_type == "ipv6":
+        ansibug_args.extend(["--addr", "tcp://[::]:0"])
+
     proc = dap_client.attach(
         playbook,
         playbook_dir=tmp_path,
+        ansibug_args=ansibug_args,
         attach_by_address=attach_by_address,
     )
 
@@ -247,12 +274,19 @@ def test_attach_invalid_pid(
         dap_client.send(dap.AttachRequest(arguments=attach_args), dap.AttachResponse)
 
 
-def test_attach_no_pid_or_port(
+def test_attach_invalid_address(
     dap_client: DAPClient,
 ) -> None:
     attach_args = {
-        "address": "localhost",
+        "address": "tcp://invalid:port",
     }
 
-    with pytest.raises(Exception, match="Expected processId or address/port to be specified for attach"):
+    with pytest.raises(Exception, match="Port could not be cast to integer value"):
         dap_client.send(dap.AttachRequest(arguments=attach_args), dap.AttachResponse)
+
+
+def test_attach_no_pid_or_port(
+    dap_client: DAPClient,
+) -> None:
+    with pytest.raises(Exception, match="Expected processId or address/port to be specified for attach"):
+        dap_client.send(dap.AttachRequest(arguments={}), dap.AttachResponse)

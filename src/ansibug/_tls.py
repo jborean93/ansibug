@@ -11,6 +11,9 @@ import typing as t
 
 def create_client_tls_context(
     verify: t.Literal["verify", "ignore"] | str = "verify",
+    certfile: str | None = None,
+    keyfile: str | None = None,
+    password: str | None = None,
 ) -> ssl.SSLContext:
     """Creates a client TLS context.
 
@@ -21,6 +24,12 @@ def create_client_tls_context(
 
     Args:
         verify: The verification settings for the TLS context.
+        certfile: The path to the certificate and optional key used for the
+            client's identity.
+        keyfile: The path to the key if not present in the certfile path.
+        password: The password used to decrypt the key if it is encrypted.
+        ca_trust: Optional CA file that turns on client certificate
+            authentication with a cert signed by a CA in this path.
 
     Returns:
         ssl.SSLContext: The configured client TLS context.
@@ -34,24 +43,23 @@ def create_client_tls_context(
         ssl_context.verify_mode = ssl.VerifyMode.CERT_NONE
 
     elif verify != "verify":
-        cert_ca_path = pathlib.Path(os.path.expanduser(os.path.expandvars(verify)))
+        _load_verify_locations(ssl_context, verify)
 
-        if cert_ca_path.is_dir():
-            ssl_context.load_verify_locations(capath=str(cert_ca_path.absolute()))
-
-        elif cert_ca_path.exists():
-            ssl_context.load_verify_locations(cafile=str(cert_ca_path.absolute()))
-
-        else:
-            raise ValueError(f"verify location path '{verify}' does not exist")
+    if certfile:
+        ssl_context.load_cert_chain(
+            certfile,
+            keyfile=keyfile,
+            password=password,
+        )
 
     return ssl_context
 
 
 def create_server_tls_context(
-    certfile: str | None = None,
+    certfile: str,
     keyfile: str | None = None,
     password: str | None = None,
+    ca_trust: str | None = None,
 ) -> ssl.SSLContext:
     """Creates a server TLS context.
 
@@ -63,16 +71,37 @@ def create_server_tls_context(
             server's identity.
         keyfile: The path to the key if not present in the certfile path.
         password: The password used to decrypt the key if it is encrypted.
+        ca_trust: Optional CA file that turns on client certificate
+            authentication with a cert signed by a CA in this path.
 
     Returns:
         ssl.SSLContext: The configured server TLS context.
     """
     ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
-    if certfile is not None:
-        ssl_context.load_cert_chain(
-            certfile,
-            keyfile=keyfile,
-            password=password,
-        )
+    ssl_context.load_cert_chain(
+        certfile,
+        keyfile=keyfile,
+        password=password,
+    )
+
+    if ca_trust:
+        ssl_context.verify_mode = ssl.VerifyMode.CERT_REQUIRED
+        _load_verify_locations(ssl_context, ca_trust)
 
     return ssl_context
+
+
+def _load_verify_locations(
+    ssl_context: ssl.SSLContext,
+    location: str,
+) -> None:
+    ca_path = pathlib.Path(os.path.expanduser(os.path.expandvars(location)))
+
+    if ca_path.is_dir():
+        ssl_context.load_verify_locations(capath=str(ca_path.absolute()))
+
+    elif ca_path.exists():
+        ssl_context.load_verify_locations(cafile=str(ca_path.absolute()))
+
+    else:
+        raise ValueError(f"Certificate CA verify path '{location}' does not exist")

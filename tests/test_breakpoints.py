@@ -6,6 +6,7 @@ from __future__ import annotations
 import pathlib
 import shutil
 
+import pytest
 from dap_client import DAPClient
 
 import ansibug.dap as dap
@@ -77,7 +78,9 @@ def test_playbook_with_logging(
     assert log_path.exists()
 
 
+@pytest.mark.parametrize("single_thread", [True, False])
 def test_playbook_with_breakpoint(
+    single_thread: bool,
     dap_client: DAPClient,
     tmp_path: pathlib.Path,
 ) -> None:
@@ -102,6 +105,72 @@ def test_playbook_with_breakpoint(
             ),
             lines=[4],
             breakpoints=[dap.SourceBreakpoint(line=6)],
+            source_modified=False,
+        ),
+        dap.SetBreakpointsResponse,
+    )
+    assert len(resp.breakpoints) == 1
+    assert resp.breakpoints[0].verified
+    assert resp.breakpoints[0].line == 5
+    assert resp.breakpoints[0].end_line == 5
+    bid = resp.breakpoints[0].id
+
+    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
+
+    thread_event = dap_client.wait_for_message(dap.ThreadEvent)
+    assert thread_event.reason == "started"
+    localhost_tid = thread_event.thread_id
+
+    stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
+    assert stopped_event.reason == dap.StoppedReason.BREAKPOINT
+    assert stopped_event.thread_id == localhost_tid
+    assert stopped_event.hit_breakpoint_ids == [bid]
+
+    st_resp = dap_client.send(dap.StackTraceRequest(thread_id=localhost_tid), dap.StackTraceResponse)
+    assert len(st_resp.stack_frames) == 1
+    assert st_resp.total_frames == 1
+    assert st_resp.stack_frames[0].name == "ping test"
+    assert st_resp.stack_frames[0].source is not None
+    assert st_resp.stack_frames[0].source.path == str(playbook)
+    assert st_resp.stack_frames[0].source.name == "main.yml"
+
+    dap_client.send(dap.ContinueRequest(thread_id=localhost_tid, single_thread=single_thread), dap.ContinueResponse)
+
+    thread_event = dap_client.wait_for_message(dap.ThreadEvent)
+    assert thread_event.reason == "exited"
+
+    dap_client.wait_for_message(dap.TerminatedEvent)
+
+    play_out = proc.communicate()
+    if rc := proc.returncode:
+        raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
+
+
+def test_breakpoint_at_end_of_file(
+    dap_client: DAPClient,
+    tmp_path: pathlib.Path,
+) -> None:
+    playbook = tmp_path / "main.yml"
+    playbook.write_text(
+        r"""
+- hosts: localhost
+  gather_facts: false
+  tasks:
+  - name: ping test
+    ping:
+"""
+    )
+
+    proc = dap_client.launch(playbook, playbook_dir=tmp_path)
+
+    resp = dap_client.send(
+        dap.SetBreakpointsRequest(
+            source=dap.Source(
+                name="main.yml",
+                path=str(playbook.absolute()),
+            ),
+            lines=[8],
+            breakpoints=[dap.SourceBreakpoint(line=8)],
             source_modified=False,
         ),
         dap.SetBreakpointsResponse,
@@ -282,7 +351,6 @@ def test_breakpoint_with_disconnect_on_stop(
     dap_client.wait_for_message(dap.StoppedEvent)
     dap_client.send(dap.DisconnectRequest(), dap.DisconnectResponse)
     dap_client.wait_for_message(dap.TerminatedEvent)
-    dap_client.wait_for_message(dap.ExitedEvent)
 
     play_out = proc.communicate()
     if rc := proc.returncode:
@@ -697,25 +765,34 @@ def test_breakpoint_block(
                 name="main.yml",
                 path=str(playbook.absolute()),
             ),
-            lines=[7, 12, 15],
-            breakpoints=[dap.SourceBreakpoint(line=7), dap.SourceBreakpoint(line=12), dap.SourceBreakpoint(line=15)],
+            lines=[5, 7, 12, 15],
+            breakpoints=[
+                dap.SourceBreakpoint(line=5),
+                dap.SourceBreakpoint(line=7),
+                dap.SourceBreakpoint(line=12),
+                dap.SourceBreakpoint(line=15),
+            ],
             source_modified=False,
         ),
         dap.SetBreakpointsResponse,
     )
-    assert len(bp_resp.breakpoints) == 3
+    assert len(bp_resp.breakpoints) == 4
     # Currently blocks are limited in how they are mapped, the block/rescue/always
     # label are included in the previous task, the breakpoint task mapping only
     # works from the `- name: ...` declaration of the task until the next one
-    assert bp_resp.breakpoints[0].verified
-    assert bp_resp.breakpoints[0].line == 6
-    assert bp_resp.breakpoints[0].end_line == 9
+    assert bp_resp.breakpoints[0].verified is False
+    assert bp_resp.breakpoints[0].message == "Breakpoint cannot be set here."
+    assert bp_resp.breakpoints[0].line == 5
+    assert bp_resp.breakpoints[0].end_line == 5
     assert bp_resp.breakpoints[1].verified
-    assert bp_resp.breakpoints[1].line == 10
-    assert bp_resp.breakpoints[1].end_line == 13
+    assert bp_resp.breakpoints[1].line == 6
+    assert bp_resp.breakpoints[1].end_line == 9
     assert bp_resp.breakpoints[2].verified
-    assert bp_resp.breakpoints[2].line == 14
-    assert bp_resp.breakpoints[2].end_line == 14
+    assert bp_resp.breakpoints[2].line == 10
+    assert bp_resp.breakpoints[2].end_line == 13
+    assert bp_resp.breakpoints[3].verified
+    assert bp_resp.breakpoints[3].line == 14
+    assert bp_resp.breakpoints[3].end_line == 14
 
     dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
 
@@ -725,14 +802,14 @@ def test_breakpoint_block(
     stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
     assert stopped_event.reason == dap.StoppedReason.BREAKPOINT
     assert stopped_event.thread_id == localhost_tid
-    assert stopped_event.hit_breakpoint_ids == [bp_resp.breakpoints[0].id]
+    assert stopped_event.hit_breakpoint_ids == [bp_resp.breakpoints[1].id]
 
     dap_client.send(dap.ContinueRequest(thread_id=localhost_tid), dap.ContinueResponse)
 
     stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
     assert stopped_event.reason == dap.StoppedReason.BREAKPOINT
     assert stopped_event.thread_id == localhost_tid
-    assert stopped_event.hit_breakpoint_ids == [bp_resp.breakpoints[2].id]
+    assert stopped_event.hit_breakpoint_ids == [bp_resp.breakpoints[3].id]
 
     dap_client.send(dap.ContinueRequest(thread_id=localhost_tid), dap.ContinueResponse)
 
@@ -761,6 +838,9 @@ def test_breakpoint_block_in_include(
     tasks = tmp_path / "tasks.yml"
     tasks.write_text(
         r"""
+- name: ping pre
+  ping:
+
 - block:
   - name: ping 1
     ping:
@@ -783,29 +863,39 @@ def test_breakpoint_block_in_include(
                 name="tasks.yml",
                 path=str(tasks.absolute()),
             ),
-            lines=[3, 7, 11],
-            breakpoints=[dap.SourceBreakpoint(line=3), dap.SourceBreakpoint(line=7), dap.SourceBreakpoint(line=11)],
+            lines=[5, 6, 10, 17],
+            breakpoints=[
+                dap.SourceBreakpoint(line=5),
+                dap.SourceBreakpoint(line=6),
+                dap.SourceBreakpoint(line=10),
+                dap.SourceBreakpoint(line=17),
+            ],
             source_modified=False,
         ),
         dap.SetBreakpointsResponse,
     )
-    assert len(bp_resp.breakpoints) == 3
+    assert len(bp_resp.breakpoints) == 4
     assert bp_resp.breakpoints[0].verified is False
     assert bp_resp.breakpoints[0].message == "File has not been loaded by Ansible, cannot detect breakpoints yet."
-    assert bp_resp.breakpoints[0].line == 3
+    assert bp_resp.breakpoints[0].line == 5
     assert bp_resp.breakpoints[0].end_line is None
     assert bp_resp.breakpoints[1].verified is False
     assert bp_resp.breakpoints[1].message == "File has not been loaded by Ansible, cannot detect breakpoints yet."
-    assert bp_resp.breakpoints[1].line == 7
+    assert bp_resp.breakpoints[1].line == 6
     assert bp_resp.breakpoints[1].end_line is None
     assert bp_resp.breakpoints[2].verified is False
     assert bp_resp.breakpoints[2].message == "File has not been loaded by Ansible, cannot detect breakpoints yet."
-    assert bp_resp.breakpoints[2].line == 11
+    assert bp_resp.breakpoints[2].line == 10
     assert bp_resp.breakpoints[2].end_line is None
+    assert bp_resp.breakpoints[3].verified is False
+    assert bp_resp.breakpoints[3].message == "File has not been loaded by Ansible, cannot detect breakpoints yet."
+    assert bp_resp.breakpoints[3].line == 17
+    assert bp_resp.breakpoints[3].end_line is None
 
     bp_id1 = bp_resp.breakpoints[0].id
     bp_id2 = bp_resp.breakpoints[1].id
     bp_id3 = bp_resp.breakpoints[2].id
+    bp_id4 = bp_resp.breakpoints[3].id
 
     dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
 
@@ -815,101 +905,137 @@ def test_breakpoint_block_in_include(
     # Tasks are processed one by one which will affect the breakpoints in the
     # file and their locations.
 
-    # First block is processed, all breakpoints have end_line set to block:
+    # First task is processed, all breakpoints are set to this task
     bp_event1 = dap_client.wait_for_message(dap.BreakpointEvent)
     assert bp_event1.breakpoint.id == bp_id1
-    assert bp_event1.breakpoint.verified is False
-    assert bp_event1.breakpoint.message == "Breakpoint cannot be set here."
+    assert bp_event1.breakpoint.verified is True
+    assert bp_event1.breakpoint.message is None
     assert bp_event1.breakpoint.line == 2
     assert bp_event1.breakpoint.end_line == 2
 
     bp_event2 = dap_client.wait_for_message(dap.BreakpointEvent)
     assert bp_event2.breakpoint.id == bp_id2
-    assert bp_event2.breakpoint.verified is False
-    assert bp_event2.breakpoint.message == "Breakpoint cannot be set here."
+    assert bp_event2.breakpoint.verified is True
+    assert bp_event2.breakpoint.message is None
     assert bp_event2.breakpoint.line == 2
     assert bp_event2.breakpoint.end_line == 2
 
     bp_event3 = dap_client.wait_for_message(dap.BreakpointEvent)
     assert bp_event3.breakpoint.id == bp_id3
-    assert bp_event3.breakpoint.verified is False
-    assert bp_event3.breakpoint.message == "Breakpoint cannot be set here."
+    assert bp_event3.breakpoint.verified is True
+    assert bp_event3.breakpoint.message is None
     assert bp_event3.breakpoint.line == 2
     assert bp_event3.breakpoint.end_line == 2
 
-    # First task in block is processed, the breakpoints are now verified to
-    # this task, end_line is the same as it's the last task found
     bp_event4 = dap_client.wait_for_message(dap.BreakpointEvent)
-    assert bp_event4.breakpoint.id == bp_id1
-    assert bp_event4.breakpoint.verified
+    assert bp_event4.breakpoint.id == bp_id4
+    assert bp_event4.breakpoint.verified is True
     assert bp_event4.breakpoint.message is None
-    assert bp_event4.breakpoint.line == 3
-    assert bp_event4.breakpoint.end_line == 3
+    assert bp_event4.breakpoint.line == 2
+    assert bp_event4.breakpoint.end_line == 2
 
+    # block is processed, all are marked as invalid
     bp_event5 = dap_client.wait_for_message(dap.BreakpointEvent)
-    assert bp_event5.breakpoint.id == bp_id2
-    assert bp_event5.breakpoint.verified
-    assert bp_event5.breakpoint.message is None
-    assert bp_event5.breakpoint.line == 3
-    assert bp_event5.breakpoint.end_line == 3
+    assert bp_event5.breakpoint.id == bp_id1
+    assert bp_event5.breakpoint.verified is False
+    assert bp_event5.breakpoint.message == "Breakpoint cannot be set here."
+    assert bp_event5.breakpoint.line == 5
+    assert bp_event5.breakpoint.end_line == 5
 
     bp_event6 = dap_client.wait_for_message(dap.BreakpointEvent)
-    assert bp_event6.breakpoint.id == bp_id3
-    assert bp_event6.breakpoint.verified
-    assert bp_event6.breakpoint.message is None
-    assert bp_event6.breakpoint.line == 3
-    assert bp_event6.breakpoint.end_line == 3
+    assert bp_event6.breakpoint.id == bp_id2
+    assert bp_event6.breakpoint.verified is False
+    assert bp_event6.breakpoint.message == "Breakpoint cannot be set here."
+    assert bp_event6.breakpoint.line == 5
+    assert bp_event6.breakpoint.end_line == 5
 
-    # Rescue block task is processed, first breakpoint now has an end line
-    # and remaining breakpoints are set to this location
     bp_event7 = dap_client.wait_for_message(dap.BreakpointEvent)
-    assert bp_event7.breakpoint.id == bp_id1
-    assert bp_event7.breakpoint.verified
-    assert bp_event7.breakpoint.message is None
-    assert bp_event7.breakpoint.line == 3
-    assert bp_event7.breakpoint.end_line == 6
+    assert bp_event7.breakpoint.id == bp_id3
+    assert bp_event7.breakpoint.verified is False
+    assert bp_event7.breakpoint.message == "Breakpoint cannot be set here."
+    assert bp_event7.breakpoint.line == 5
+    assert bp_event7.breakpoint.end_line == 5
 
     bp_event8 = dap_client.wait_for_message(dap.BreakpointEvent)
-    assert bp_event8.breakpoint.id == bp_id2
-    assert bp_event8.breakpoint.verified
-    assert bp_event8.breakpoint.message is None
-    assert bp_event8.breakpoint.line == 7
-    assert bp_event8.breakpoint.end_line == 7
+    assert bp_event8.breakpoint.id == bp_id4
+    assert bp_event8.breakpoint.verified is False
+    assert bp_event8.breakpoint.message == "Breakpoint cannot be set here."
+    assert bp_event8.breakpoint.line == 5
+    assert bp_event8.breakpoint.end_line == 5
 
+    # ping 1 is processed, bp1 is still invalid but remaining are updated to
+    # new location
     bp_event9 = dap_client.wait_for_message(dap.BreakpointEvent)
-    assert bp_event9.breakpoint.id == bp_id3
+    assert bp_event9.breakpoint.id == bp_id2
     assert bp_event9.breakpoint.verified
     assert bp_event9.breakpoint.message is None
-    assert bp_event9.breakpoint.line == 7
-    assert bp_event9.breakpoint.end_line == 7
+    assert bp_event9.breakpoint.line == 6
+    assert bp_event9.breakpoint.end_line == 6
 
-    # Always block is processed, second bp is updated to the new end_line and
-    # third bp has new location
     bp_event10 = dap_client.wait_for_message(dap.BreakpointEvent)
-    assert bp_event10.breakpoint.id == bp_id2
+    assert bp_event10.breakpoint.id == bp_id3
     assert bp_event10.breakpoint.verified
     assert bp_event10.breakpoint.message is None
-    assert bp_event10.breakpoint.line == 7
-    assert bp_event10.breakpoint.end_line == 10
+    assert bp_event10.breakpoint.line == 6
+    assert bp_event10.breakpoint.end_line == 6
 
     bp_event11 = dap_client.wait_for_message(dap.BreakpointEvent)
-    assert bp_event11.breakpoint.id == bp_id3
+    assert bp_event11.breakpoint.id == bp_id4
     assert bp_event11.breakpoint.verified
     assert bp_event11.breakpoint.message is None
-    assert bp_event11.breakpoint.line == 11
-    assert bp_event11.breakpoint.end_line == 11
+    assert bp_event11.breakpoint.line == 6
+    assert bp_event11.breakpoint.end_line == 6
+
+    # rescue/ping 2 is processed, bp1 stays the same, bp2 has new lines, bp3+
+    # are set to the end lines.
+    bp_event12 = dap_client.wait_for_message(dap.BreakpointEvent)
+    assert bp_event12.breakpoint.id == bp_id2
+    assert bp_event12.breakpoint.verified
+    assert bp_event12.breakpoint.message is None
+    assert bp_event12.breakpoint.line == 6
+    assert bp_event12.breakpoint.end_line == 9
+
+    bp_event13 = dap_client.wait_for_message(dap.BreakpointEvent)
+    assert bp_event13.breakpoint.id == bp_id3
+    assert bp_event13.breakpoint.verified
+    assert bp_event13.breakpoint.message is None
+    assert bp_event13.breakpoint.line == 10
+    assert bp_event13.breakpoint.end_line == 10
+
+    bp_event14 = dap_client.wait_for_message(dap.BreakpointEvent)
+    assert bp_event14.breakpoint.id == bp_id4
+    assert bp_event14.breakpoint.verified
+    assert bp_event14.breakpoint.message is None
+    assert bp_event14.breakpoint.line == 10
+    assert bp_event14.breakpoint.end_line == 10
+
+    # always/ping 3 is processed, bp1/2 stays the same, bp3 has new end line,
+    # bp4 has updated line.
+    bp_event15 = dap_client.wait_for_message(dap.BreakpointEvent)
+    assert bp_event15.breakpoint.id == bp_id3
+    assert bp_event15.breakpoint.verified
+    assert bp_event15.breakpoint.message is None
+    assert bp_event15.breakpoint.line == 10
+    assert bp_event15.breakpoint.end_line == 13
+
+    bp_event16 = dap_client.wait_for_message(dap.BreakpointEvent)
+    assert bp_event16.breakpoint.id == bp_id4
+    assert bp_event16.breakpoint.verified
+    assert bp_event16.breakpoint.message is None
+    assert bp_event16.breakpoint.line == 14
+    assert bp_event16.breakpoint.end_line == 14
 
     stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
     assert stopped_event.reason == dap.StoppedReason.BREAKPOINT
     assert stopped_event.thread_id == localhost_tid
-    assert stopped_event.hit_breakpoint_ids == [bp_id1]
+    assert stopped_event.hit_breakpoint_ids == [bp_id2]
 
     dap_client.send(dap.ContinueRequest(thread_id=localhost_tid), dap.ContinueResponse)
 
     stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
     assert stopped_event.reason == dap.StoppedReason.BREAKPOINT
     assert stopped_event.thread_id == localhost_tid
-    assert stopped_event.hit_breakpoint_ids == [bp_id3]
+    assert stopped_event.hit_breakpoint_ids == [bp_id4]
 
     dap_client.send(dap.ContinueRequest(thread_id=localhost_tid), dap.ContinueResponse)
 

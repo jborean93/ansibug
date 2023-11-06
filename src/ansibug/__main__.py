@@ -9,11 +9,9 @@ from __future__ import annotations
 import argparse
 import os
 import pathlib
-import re
 import sys
-import typing as t
 
-from ._da_server import start_dap
+from ._debug_adapter import start_dap
 from ._exec_playbook import exec_playbook_connect, exec_playbook_listen
 
 HAS_ARGCOMPLETE = True
@@ -21,9 +19,6 @@ try:
     import argcomplete
 except ImportError:  # pragma: nocover
     HAS_ARGCOMPLETE = False
-
-
-ADDR_PATTERN = re.compile(r"^(?:\[?(?P<hostname>[^\[\]]+)\]?:)?(?P<port>\d+)$")
 
 
 def _add_launch_common_args(parser: argparse.ArgumentParser) -> None:
@@ -91,16 +86,17 @@ def _add_tls_server_args(parser: argparse.ArgumentParser) -> None:
         "provide the password without passing it through the command line.",
     )
 
-
-def _parse_addr(addr: str) -> tuple[str, int]:
-    if m := ADDR_PATTERN.match(addr):
-        hostname = m.group("hostname") or "localhost"
-        port = int(m.group("port"))
-
-        return hostname, port
-
-    else:
-        raise argparse.ArgumentTypeError("listener must be in the format [host:]port")
+    parser.add_argument(
+        "--tls-client-ca",
+        action="store",
+        type=_parse_path,
+        help="The path to a TLS CA bundle file or directory to use with "
+        "verifying the identity of the client. If set the client must "
+        "provide a certificate signed by a CA in the bundle specified for it "
+        "to connect. There are no checks on the client provided cert's key "
+        "usage or extended key usage, just the isssuer. If not set then no "
+        "client authentication is needed.",
+    )
 
 
 def _parse_path(path: str) -> pathlib.Path:
@@ -135,11 +131,9 @@ def parse_args(
     connect.add_argument(
         "--addr",
         action="store",
-        type=_parse_addr,
+        type=str,
         required=True,
-        help="Have the ansible-playbook process connect to this socket addr "
-        "that is bound to the DAP server. The addr is in the form [host:]port "
-        "where host defaults to 127.0.0.1 if not specified.",
+        help="Have the ansible-playbook process connect to this socket addr that is bound to the DAP server.",
     )
     _add_log_args(connect)
     _add_launch_common_args(connect)
@@ -171,10 +165,18 @@ def parse_args(
     listen.add_argument(
         "--addr",
         action="store",
-        type=_parse_addr,
-        help="A custom hostname and port to listen on in the form "
-        "[host:]port where host defaults to 127.0.0.1 if not specified. If "
-        "not specified the port will be randomly chosen",
+        default="uds://",
+        type=str,
+        help="Specify the socket address to listen on. The address can "
+        "either be a TCP or UDS address in the format 'tcp://hostname:port' "
+        "or 'uds:///path/to/uds'. The default behavior is to create a UDS "
+        "socket that only allows the current user to connect. Using a TCP "
+        "address can allow connections from another host on that socket. For "
+        "example 'tcp://:0' will bind a random port to all IPs on the "
+        "current host. Using 'tcp://127.0.0.1:0' will bind a random port for "
+        "localhost communication. Using the address 'uds://' will create a "
+        "random Unix Domain Socket automatically. The address used will be "
+        "displayed on the console when it is available.",
     )
     _add_log_args(listen)
     _add_launch_common_args(listen)
@@ -198,11 +200,10 @@ def main() -> None:
         start_dap(args.log_file, args.log_level)
         return
 
-    addr = args.addr
     if args.action == "connect":
         exec_playbook_connect(
             args.playbook_args,
-            addr=addr,
+            addr=args.addr,
             no_wait=args.no_wait,
             log_file=args.log_file,
             log_level=args.log_level,
@@ -211,16 +212,17 @@ def main() -> None:
     else:
         exec_playbook_listen(
             args.playbook_args,
-            addr=addr,
+            addr=args.addr,
             no_wait=args.no_wait,
             use_tls=args.wrap_tls,
             tls_cert=args.tls_cert,
             tls_key=args.tls_key,
             tls_password=args.tls_key_pass,
+            tls_client_ca=args.tls_client_ca,
             log_file=args.log_file,
             log_level=args.log_level,
         )
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: nocover
     main()
