@@ -8,7 +8,7 @@ import enum
 import typing as t
 
 from ._messages import Event, EventType
-from ._types import Breakpoint
+from ._types import Breakpoint, Source
 
 
 class StoppedReason(enum.Enum):
@@ -67,6 +67,50 @@ class InitializedEvent(Event):
     """
 
     event = EventType.INITIALIZED
+
+
+@dataclasses.dataclass()
+class OutputEvent(
+    Event,
+    dap={
+        "body": {
+            "category": "category",
+            "output": "output",
+            "group": "group",
+            "variablesReference": "variables_reference",
+            "source": "source",
+            "line": "line",
+            "column": "column",
+            "data": "data",
+        }
+    },
+):
+    """Indicates that the target has produced some output.
+
+    A debuggee is expected to send this event when it has produced some output
+    for the client to process.
+
+    Args:
+        category: The output category.
+        output: The output to report.
+        group: The identifier for grouping related messages.
+        variables_reference: Related variables.
+        source: The source location where the output was produced.
+        line: The source location's line where the output was produced.
+        column: The source location's column where the output was produced.
+        data: Additional data to report.
+    """
+
+    event = EventType.OUTPUT
+
+    category: t.Union[t.Literal["console", "important", "stdout", "stderr", "telemetry"], str]
+    output: str
+    group: t.Optional[t.Literal["start", "startCollapsed", "end"]] = None
+    variables_reference: t.Optional[int] = None
+    source: t.Optional[Source] = None
+    line: t.Optional[int] = None
+    column: t.Optional[int] = None
+    data: t.Any = None
 
 
 @dataclasses.dataclass()

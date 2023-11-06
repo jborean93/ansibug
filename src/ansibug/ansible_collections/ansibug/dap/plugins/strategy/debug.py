@@ -119,6 +119,7 @@ class AnsibleStackFrame:
         id: int,
         task: Task,
         task_vars: dict[str, t.Any],
+        debugger: AnsibleDebugger,
     ) -> None:
         self.id = id
         self.task = task
@@ -128,13 +129,16 @@ class AnsibleStackFrame:
         self.variables_options_id = 0
         self.variables_hostvars_id = 0
 
+        self._debugger = debugger
+
     def to_dap(self) -> ansibug.dap.StackFrame:
         task_path = self.task.get_path()
 
         task_path_and_line = task_path.rsplit(":", 1)
         path = task_path_and_line[0]
         line = int(task_path_and_line[1])
-        source = ansibug.dap.Source(name=os.path.basename(path), path=path)
+        client_path = self._debugger.convert_to_client_path(path)
+        source = ansibug.dap.Source(name=os.path.basename(client_path), path=client_path)
 
         return ansibug.dap.StackFrame(
             id=self.id,
@@ -330,14 +334,16 @@ class AnsibleDebugState(DebugState):
                     del self.variables[variable_id]
 
             # If this is the first task in a role included by include_role we
-            # need to scan the handlers and validate the breakpoints
+            # need to scan the tasks and handlers to validate the breakpoints
             if (
                 parent_task
                 and last_frame.task
                 and last_frame.task.action in C._ACTION_INCLUDE_ROLE
                 and hasattr(task, "_role")
             ):
+                task_handlers = task._role.get_task_blocks()
                 role_handlers = task._role.get_handler_blocks(task.play)
+                register_block_breakpoints(self._debugger, task_handlers)
                 register_block_breakpoints(self._debugger, role_handlers)
 
         sfid = self._debugger.next_stackframe_id()
@@ -346,6 +352,7 @@ class AnsibleDebugState(DebugState):
             id=sfid,
             task=task,
             task_vars=task_vars,
+            debugger=self._debugger,
         )
         thread.stack_frames.insert(0, sfid)
 
@@ -847,6 +854,11 @@ class StrategyModule(LinearStrategy):
                 if tid == 1:
                     continue
                 self._debug_state.remove_thread(tid)
+
+        else:
+            # Needed to ensure the stackframe is removed as these meta tasks
+            # have no results for _process_pending_results to handle.
+            self._debug_state.process_task_result(target_host, task)
 
         return res
 

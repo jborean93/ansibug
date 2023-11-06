@@ -10,8 +10,8 @@ from ansible.playbook.task import Task
 from ansibug._debuggee import AnsibleDebugger
 
 
-def _split_task_path(task: str) -> tuple[str, int]:
-    split = task.rsplit(":", 1)
+def _split_task_path(task_path: str) -> tuple[str, int]:
+    split = task_path.rsplit(":", 1)
     return split[0], int(split[1])
 
 
@@ -43,8 +43,13 @@ def register_block_breakpoints(
         task_list.extend(block.always)
 
         for task in task_list:
-            task_path, task_line = _split_task_path(task.get_path())
-            debugger.register_path_breakpoint(task_path, task_line, 1)
+            if isinstance(task, Block):
+                # import_tasks will wrap the tasks in a standalone block.
+                register_block_breakpoints(debugger, [task])
+
+            else:
+                task_path, task_line = _split_task_path(task.get_path())
+                debugger.register_path_breakpoint(task_path, task_line, 1)
 
 
 def register_play_breakpoints(

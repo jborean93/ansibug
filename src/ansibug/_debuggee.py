@@ -17,7 +17,7 @@ import threading
 import typing as t
 
 from . import dap
-from ._mp_queue import ClientMPQueue, MPProtocol, MPQueue, ServerMPQueue
+from ._mp_queue import ClientMPQueue, MPProtocol, ServerMPQueue
 from ._singleton import Singleton
 from ._socket_helper import CancelledError, SocketCancellationToken
 
@@ -29,6 +29,32 @@ except Exception:  # pragma: nocover
     HAS_DEBUGPY = False
 
 log = logging.getLogger(__name__)
+
+
+@dataclasses.dataclass(frozen=True)
+class PathMapping:
+    """Maps a local path to the equivalent remote path."""
+
+    local_root: str
+    remote_root: str
+
+
+@dataclasses.dataclass(frozen=True)
+class DebugConfiguration:
+    """Debug configuration data.
+
+    Extra debug configuration data sent from the DA server after the debuggee
+    has connected. This data is used to send extra data not defined in the
+    debug adapter protocol needed for debug operations.
+
+    Args:
+        path_mappings: The path mappings to use when translating source paths
+            with what Ansible is running with.
+    """
+
+    OUTPUT_CATEGORY: t.ClassVar[str] = "ansibug_debug_configuration"
+
+    path_mappings: t.List[PathMapping] = dataclasses.field(default_factory=list)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -182,10 +208,8 @@ class AnsibleLineBreakpoint:
     source: dap.Source
     source_breakpoint: dap.SourceBreakpoint
     breakpoint: dap.Breakpoint
-
-    @property
-    def path(self) -> str:
-        return self.source.path or ""
+    actual_path: str
+    source_path: str
 
 
 class AnsibleDebugger(metaclass=Singleton):
@@ -193,6 +217,7 @@ class AnsibleDebugger(metaclass=Singleton):
         self._addr = ""
         self._addr_event = threading.Event()
         self._cancel_token = SocketCancellationToken()
+        self._debug_config: DebugConfiguration = DebugConfiguration()
         self._recv_thread: threading.Thread | None = None
         self._send_queue: queue.Queue[dap.ProtocolMessage | None] = queue.Queue()
         self._send_queue_active = False
@@ -244,9 +269,6 @@ class AnsibleDebugger(metaclass=Singleton):
         strategy: DebugState,
     ) -> collections.abc.Generator[None, None, None]:
         with self._strategy_connected:
-            if self._strategy:
-                raise Exception("Strategy has already been registered")
-
             self._strategy = strategy
             self._strategy_connected.notify_all()
 
@@ -305,7 +327,7 @@ class AnsibleDebugger(metaclass=Singleton):
 
         for b in self._breakpoints.values():
             if (
-                b.path == path
+                b.actual_path == path
                 and (b.breakpoint.line is None or b.breakpoint.line <= line)
                 and (b.breakpoint.end_line is None or b.breakpoint.end_line >= line)
             ):
@@ -377,6 +399,30 @@ class AnsibleDebugger(metaclass=Singleton):
             else:
                 log.info("Discarding msg to DA adapter as queue is off - %r", msg)
 
+    def convert_to_client_path(
+        self,
+        path: str,
+    ) -> str:
+        """Converts the path to the client path.
+
+        Converts the path provided to the client path equivalent based on the
+        mappings provided. This is used in cases where the paths in the client
+        does not match up with what Ansible is running with, for example
+        debugging on a different host with a different path root.
+
+        Args:
+            path: The path to convert.
+
+        Returns:
+            str: The converted path.
+        """
+        for mapping in self._debug_config.path_mappings:
+            if path.startswith(mapping.remote_root):
+                return mapping.local_root + path[len(mapping.remote_root) :]
+
+        else:
+            return path
+
     def register_path_breakpoint(
         self,
         path: str,
@@ -403,7 +449,7 @@ class AnsibleDebugger(metaclass=Singleton):
 
         # FIXME: Put into common location to share with SetBreakpointRequest.
         for breakpoint in self._breakpoints.values():
-            if breakpoint.path != path:
+            if breakpoint.actual_path != path:
                 continue
 
             source_breakpoint = breakpoint.source_breakpoint
@@ -580,7 +626,7 @@ class AnsibleDebugger(metaclass=Singleton):
         self,
         msg: dap.ProtocolMessage,
     ) -> None:
-        raise NotImplementedError(type(msg).__name__)
+        raise NotImplementedError(type(msg).__name__)  # pramga: nocover
 
     @process_message.register
     def _(
@@ -634,10 +680,21 @@ class AnsibleDebugger(metaclass=Singleton):
     ) -> None:
         # FIXME: Deal with source_reference if set
         source_path = msg.source.path or ""
-        source_info = self._source_info.get(source_path, None)
 
-        # Clear out existing breakpoints for the source as each request should send the latest list for a source.
-        self._breakpoints = {bpid: b for bpid, b in self._breakpoints.items() if b.path != source_path}
+        # If explicit path mappings are provided we convert the client provided
+        # source path to the path known to Ansible. This is important as the
+        # source mappings are keyed by the Ansible paths.
+        actual_path = source_path
+        for mapping in self._debug_config.path_mappings:
+            if actual_path.startswith(mapping.local_root):
+                actual_path = mapping.remote_root + actual_path[len(mapping.local_root) :]
+                break
+
+        source_info = self._source_info.get(actual_path, None)
+
+        # Clear out existing breakpoints for the source as each request should
+        # send the latest list for a source.
+        self._breakpoints = {bpid: b for bpid, b in self._breakpoints.items() if b.source_path != source_path}
 
         breakpoint_info: list[dap.Breakpoint] = []
         for source_breakpoint in msg.breakpoints:
@@ -700,6 +757,8 @@ class AnsibleDebugger(metaclass=Singleton):
                 source=msg.source,
                 source_breakpoint=source_breakpoint,
                 breakpoint=bp,
+                actual_path=actual_path,
+                source_path=source_path,
             )
             breakpoint_info.append(bp)
 
@@ -762,3 +821,17 @@ class AnsibleDebugger(metaclass=Singleton):
         strategy = self._get_strategy()
         resp = strategy.get_variables(msg)
         self.send(resp)
+
+    @process_message.register
+    def _(
+        self,
+        msg: dap.OutputEvent,
+    ) -> None:
+        # This should always be this category as only the da server sends this
+        # message to the debuggee.
+        if msg.category != DebugConfiguration.OUTPUT_CATEGORY or not isinstance(
+            msg.data, DebugConfiguration
+        ):  # pragma: nocover
+            return
+
+        self._debug_config = msg.data
