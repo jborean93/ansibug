@@ -17,15 +17,15 @@ from .dap import ProtocolMessage
 class MPProtocol(t.Protocol):
     def on_msg_received(self, msg: ProtocolMessage) -> None:
         """Called when a message has been received from the peer."""
-        return
+        return  # pragma: nocover
 
     def connection_closed(self, exp: Exception | None) -> None:
         """Called when the connection is closed, exp will contain an exception if an error occurred."""
-        return
+        return  # pragma: nocover
 
     def connection_made(self) -> None:
         """Called when the connection has been made with the peer."""
-        return
+        return  # pragma: nocover
 
 
 class MPQueue:

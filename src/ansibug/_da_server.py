@@ -16,7 +16,12 @@ import types
 import typing as t
 
 from . import dap as dap
-from ._debuggee import PlaybookProcessInfo, get_pid_info_path
+from ._debuggee import (
+    DebugConfiguration,
+    PathMapping,
+    PlaybookProcessInfo,
+    get_pid_info_path,
+)
 from ._logging import LogLevel, configure_file_logging
 from ._mp_queue import ClientMPQueue, MPProtocol, MPQueue, ServerMPQueue
 from ._tls import create_client_tls_context
@@ -44,9 +49,11 @@ class AttachArguments:
         process_id: The local ansible-playbook process to attach to.
         address: The socket address to connect to.
         port: The port of the socket address to connect to.
-        connect_timeout: The timeout in seconds for the connection timeout.
+        connect_timeout: The timeout in seconds for the debug adapter to wait
+            for when attempting to connect to the ansible-playbook process.
         use_tls: Whether to use TLS or not.
         tls_verification: The TLS verification settings.
+        path_mappings: A list of paths to map between a local and remote root.
     """
 
     process_id: t.Optional[int]
@@ -55,6 +62,7 @@ class AttachArguments:
     connect_timeout: float
     use_tls: bool
     tls_verification: t.Union[t.Literal["verify", "ignore"], str]
+    path_mappings: t.List[PathMapping]
 
     def get_connection_tuple(self) -> tuple[str, int, bool]:
         """Gets the address, port, and use_tls settings for this request."""
@@ -86,6 +94,15 @@ class AttachArguments:
         if "useTls" in data:
             attach_kwargs["use_tls"] = bool(data["useTls"])
 
+        path_mappings = []
+        for mapping in data.get("pathMappings", []):
+            path_mappings.append(
+                PathMapping(
+                    local_root=mapping["localRoot"],
+                    remote_root=mapping["remoteRoot"],
+                )
+            )
+
         return AttachArguments(
             process_id=data.get("processId", None),
             address=data.get("address", "localhost"),
@@ -93,6 +110,7 @@ class AttachArguments:
             connect_timeout=float(data.get("connectTimeout", 5.0)),
             use_tls=bool(data.get("useTls", False)),
             tls_verification=data.get("tlsVerification", "verify"),
+            path_mappings=path_mappings,
         )
 
 
@@ -111,6 +129,9 @@ class LaunchArguments:
         cwd: The working directory to launch ansible-playbook with.
         env: Extra environment variables to use when launching the process.
         console: The console type to use.
+        connect_timeout: The timeout in seconds to wait for the newly spawned
+            ansible-playbook process to connect back to the debug adapter.
+        path_mappings: A list of paths to map between a local and remote root.
         log_file: Path to a local file to log ansibug details to.
         log_level: The level of logging to use.
     """
@@ -120,6 +141,8 @@ class LaunchArguments:
     cwd: str
     env: t.Dict[str, t.Optional[str]]
     console: t.Literal["integrated", "external"]
+    connect_timeout: float
+    path_mappings: t.List[PathMapping]
     log_file: t.Optional[str]
     log_level: LogLevel
 
@@ -140,12 +163,23 @@ class LaunchArguments:
         else:
             raise ValueError(f"Unknown console value '{console}' - expected integratedTerminal or externalTerminal.")
 
+        path_mappings = []
+        for mapping in data.get("pathMappings", []):
+            path_mappings.append(
+                PathMapping(
+                    local_root=mapping["localRoot"],
+                    remote_root=mapping["remoteRoot"],
+                )
+            )
+
         return LaunchArguments(
             playbook=playbook,
             args=data.get("args", []),
             cwd=data.get("cwd", ""),
             env=data.get("env", {}),
             console=console_kind,
+            connect_timeout=float(data.get("connectTimeout", 5.0)),
+            path_mappings=path_mappings,
             log_file=data.get("logFile", None),
             log_level=data.get("logLevel", "info"),
         )
@@ -207,6 +241,7 @@ class DAServer:
         self._incoming_requests: dict[int, dap.Request] = {}
         self._outgoing_requests: set[int] = set()
         self._outgoing_lock = threading.Condition()
+        self._run_in_response_data: dict[int, tuple[LaunchArguments, int, MPQueue]] = {}
 
     def __enter__(self) -> DAServer:
         return self
@@ -293,10 +328,10 @@ class DAServer:
     def send_to_client(
         self,
         msg: dap.ProtocolMessage,
-    ) -> None:
+    ) -> int:
         stdout = sys.stdout.buffer
 
-        self._adapter.queue_msg(msg)
+        req_no = self._adapter.queue_msg(msg)
         if data := self._adapter.data_to_send():
             if log.isEnabledFor(logging.DEBUG):
                 log.debug("STDOUT: %s", data.decode())
@@ -312,6 +347,8 @@ class DAServer:
 
                 if msg.request_seq in self._incoming_requests:
                     del self._incoming_requests[msg.request_seq]
+
+        return req_no
 
     @functools.singledispatchmethod
     def _process_msg(self, msg: dap.ProtocolMessage) -> None:
@@ -390,6 +427,13 @@ class DAServer:
 
             self._debuggee.start(timeout=attach_args.connect_timeout)
 
+            self._send_debug_configuration(
+                self._debuggee,
+                DebugConfiguration(
+                    path_mappings=attach_args.path_mappings,
+                ),
+            )
+
             self.send_to_client(dap.AttachResponse(request_seq=msg.seq))
             self.send_to_client(dap.InitializedEvent())
 
@@ -435,7 +479,7 @@ class DAServer:
             ansibug_args.append(launch_args.playbook)
             ansibug_args.extend(launch_args.args)
 
-            self.send_to_client(
+            req_no = self.send_to_client(
                 dap.RunInTerminalRequest(
                     cwd=launch_args.cwd,
                     kind=launch_args.console,
@@ -444,6 +488,9 @@ class DAServer:
                     env=launch_args.env,
                 )
             )
+            # The remaining work is done in the RunInTerminalResponse from the
+            # client, this stores the data needed for that to work.
+            self._run_in_response_data[req_no] = (launch_args, msg.seq, self._debuggee)
 
         except Exception as e:
             self.send_to_client(
@@ -456,24 +503,37 @@ class DAServer:
 
     @_process_msg.register
     def _(self, msg: dap.RunInTerminalResponse) -> None:
-        timeout = 5.0  # FIXME: Make configurable
-
-        if not self._debuggee:
-            raise Exception(f"RunInTerminalResponse received but debuggee connection has not been configured.")
+        launch_args, launch_seq, debuggee = self._run_in_response_data.pop(msg.request_seq)
+        timeout = launch_args.connect_timeout
 
         start = time.time()
-        self._debuggee.start(timeout=timeout)
+        debuggee.start(timeout=timeout)
         timeout = max(1.0, time.time() - start)
 
         if not self._proto.connected.wait(timeout=timeout):
             raise TimeoutError("Timed out waiting for Ansible to connect to DA.")
 
-        launch_seq = next(
-            (seq_no for seq_no, msg in self._incoming_requests.items() if isinstance(msg, dap.LaunchRequest)),
-            -1,
+        self._send_debug_configuration(
+            debuggee,
+            DebugConfiguration(
+                path_mappings=launch_args.path_mappings,
+            ),
         )
-        if launch_seq != -1:
-            self.send_to_client(dap.LaunchResponse(request_seq=launch_seq))
 
-        # FIXME: Move this into the strategy run() method
+        self.send_to_client(dap.LaunchResponse(request_seq=launch_seq))
         self.send_to_client(dap.InitializedEvent())
+
+    def _send_debug_configuration(
+        self,
+        debuggee: MPQueue,
+        config: DebugConfiguration,
+    ) -> None:
+        # Smuggle through the source mapping through an OutputEvent that is
+        # only for the debuggee to process.
+        debuggee.send(
+            dap.OutputEvent(
+                category=DebugConfiguration.OUTPUT_CATEGORY,
+                output="",
+                data=config,
+            )
+        )

@@ -35,12 +35,6 @@ def _add_launch_common_args(parser: argparse.ArgumentParser) -> None:
     )
 
     parser.add_argument(
-        "--wrap-tls",
-        action="store_true",
-        help="Has the ansible-playbook process wrap its socket communication with the DA server with TLS",
-    )
-
-    parser.add_argument(
         "playbook_args",
         nargs=argparse.REMAINDER,
         help="Arguments to use when launching ansible-playbook.",
@@ -147,16 +141,6 @@ def parse_args(
         "that is bound to the DAP server. The addr is in the form [host:]port "
         "where host defaults to 127.0.0.1 if not specified.",
     )
-    connect.add_argument(
-        "--tls-verification",
-        action="store",
-        default="verify",
-        type=str,
-        help="Set to ignore to disable the TLS verification checks or the "
-        "path to a file or directory containing the CA PEM encoded bundles "
-        "the client will use for verification. The default is set to "
-        "'verify' which will perform all the default checks.",
-    )
     _add_log_args(connect)
     _add_launch_common_args(connect)
 
@@ -194,6 +178,11 @@ def parse_args(
     )
     _add_log_args(listen)
     _add_launch_common_args(listen)
+    listen.add_argument(
+        "--wrap-tls",
+        action="store_true",
+        help="Has the ansible-playbook process wrap its socket communication with the DA server with TLS",
+    )
     _add_tls_server_args(listen)
 
     if HAS_ARGCOMPLETE:  # pragma: nocover
@@ -210,22 +199,11 @@ def main() -> None:
         return
 
     addr = args.addr
-    use_tls = t.cast(bool, args.wrap_tls)
-
     if args.action == "connect":
-        if args.tls_verification == "verify":
-            tls_cert_ca = True
-        elif args.tls_verification == "ignore":
-            tls_cert_ca = False
-        else:
-            tls_cert_ca = args.tls_verification
-
         exec_playbook_connect(
             args.playbook_args,
             addr=addr,
             no_wait=args.no_wait,
-            use_tls=use_tls,
-            tls_cert_ca=tls_cert_ca,
             log_file=args.log_file,
             log_level=args.log_level,
         )
@@ -235,7 +213,7 @@ def main() -> None:
             args.playbook_args,
             addr=addr,
             no_wait=args.no_wait,
-            use_tls=use_tls,
+            use_tls=args.wrap_tls,
             tls_cert=args.tls_cert,
             tls_key=args.tls_key,
             tls_password=args.tls_key_pass,

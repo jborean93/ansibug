@@ -19,8 +19,6 @@ def exec_playbook_connect(
     addr: tuple[str, int],
     *,
     no_wait: bool = True,
-    use_tls: bool = False,
-    tls_cert_ca: bool | pathlib.Path | None = None,
     log_file: pathlib.Path | None = None,
     log_level: LogLevel = "info",
 ) -> None:
@@ -43,9 +41,6 @@ def exec_playbook_connect(
         no_wait: Do not wait until the client has communicated with the
             ansible-playbook process and sent the configurationDone request
             before starting the playbook.
-        use_tls: Specify the client to wrap the socket connection through a TLS
-            tunnel.
-        tls_cert_ca: The TLS certificate verification settings.
         log_file: Set ansibug debuggee logger to log to the absolute path of
             this file if set.
         log_level: Set ansibug debuggee logger filter to use this level when
@@ -56,18 +51,12 @@ def exec_playbook_connect(
         "ANSIBUG_SOCKET_PORT": str(addr[1]),
     }
 
-    if tls_cert_ca is not None:
-        if isinstance(tls_cert_ca, bool):
-            mode_env["ANSIBUG_TLS_CERT_VALIDATION"] = "verify" if tls_cert_ca else "ignore"
-        else:
-            mode_env["ANSIBUG_TLS_CERT_VALIDATION"] = str(tls_cert_ca.absolute())
-
     _exec_playbook(
         playbook_args=playbook_args,
         mode="connect",
         mode_env=mode_env,
         no_wait=no_wait,
-        use_tls=use_tls,
+        use_tls=False,
         log_file=log_file,
         log_level=log_level,
     )
