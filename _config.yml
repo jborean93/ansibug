@@ -1,6 +1,5 @@
 plugins:
-- jekyll-relative-links
+  - jekyll-relative-links
 relative_links:
   enabled: true
   collections: true
-theme: cayman
