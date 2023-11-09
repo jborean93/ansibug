@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import pathlib
 
-import pytest
 from dap_client import DAPClient
 
 import ansibug.dap as dap

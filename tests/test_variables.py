@@ -283,6 +283,60 @@ host2 ansible_host=127.0.0.1 ansible_connection=local ansible_python_interpreter
         raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
 
 
+def test_get_variable_critical_failure(
+    dap_client: DAPClient,
+    tmp_path: pathlib.Path,
+) -> None:
+    playbook = tmp_path / "main.yml"
+    playbook.write_text(
+        r"""
+- hosts: localhost
+  gather_facts: false
+  tasks:
+  - debug:
+      msg: Placeholder 1
+"""
+    )
+
+    proc = dap_client.launch("main.yml", playbook_dir=tmp_path)
+
+    dap_client.send(
+        dap.SetBreakpointsRequest(
+            source=dap.Source(
+                name="main.yml",
+                path=str(playbook.absolute()),
+            ),
+            lines=[5],
+            breakpoints=[dap.SourceBreakpoint(line=5)],
+            source_modified=False,
+        ),
+        dap.SetBreakpointsResponse,
+    )
+
+    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
+
+    thread_event = dap_client.wait_for_message(dap.ThreadEvent)
+    localhost_tid = thread_event.thread_id
+
+    dap_client.wait_for_message(dap.StoppedEvent)
+    st_resp = dap_client.send(dap.StackTraceRequest(thread_id=localhost_tid), dap.StackTraceResponse)
+    dap_client.send(dap.ScopesRequest(frame_id=st_resp.stack_frames[0].id), dap.ScopesResponse)
+
+    # Sending a bad variable reference should test out a failure in the debugger.
+    err = dap_client.send(dap.VariablesRequest(variables_reference=666), dap.ErrorResponse)
+    assert isinstance(err, dap.ErrorResponse)
+    assert err.message
+    assert "KeyError: 666" in err.message
+
+    dap_client.send(dap.ContinueRequest(thread_id=localhost_tid), dap.ContinueResponse)
+    dap_client.wait_for_message(dap.ThreadEvent)
+    dap_client.wait_for_message(dap.TerminatedEvent)
+
+    play_out = proc.communicate()
+    if rc := proc.returncode:
+        raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
+
+
 def test_playbook_set_task_and_hostvars(
     dap_client: DAPClient,
     tmp_path: pathlib.Path,
@@ -1146,8 +1200,8 @@ def test_eval_repl_set_hostvar_option(
   vars:
     foo: bar
   tasks:
-  - debug:
-      msg: Placeholder 1
+  - set_fact:
+      my_var: '{{ unset_var }}'
 
   - debug:
       msg: Placeholder 2
@@ -1214,6 +1268,17 @@ def test_eval_repl_set_hostvar_option(
     assert eval_resp.result == ""
     assert eval_resp.type is None
 
+    eval_resp = dap_client.send(
+        dap.EvaluateRequest(
+            "!sh unset_var 'biz'",
+            frame_id=st_resp.stack_frames[0].id,
+            context="repl",
+        ),
+        dap.EvaluateResponse,
+    )
+    assert eval_resp.result == ""
+    assert eval_resp.type is None
+
     host_vars = dap_client.send(
         dap.VariablesRequest(variables_reference=scope_resp.scopes[2].variables_reference),
         dap.VariablesResponse,
@@ -1243,7 +1308,7 @@ def test_eval_repl_set_hostvar_option(
         dap.VariablesRequest(variables_reference=scope_resp.scopes[2].variables_reference),
         dap.VariablesResponse,
     )
-    to_find = {"foo", "new_var"}
+    to_find = {"foo", "new_var", "my_var"}
     for v in host_vars.variables:
         if v.name == "foo":
             to_find.remove("foo")
@@ -1252,6 +1317,10 @@ def test_eval_repl_set_hostvar_option(
         elif v.name == "new_var":
             to_find.remove("new_var")
             assert v.value == "'value 2'"
+
+        elif v.name == "my_var":
+            to_find.remove("my_var")
+            assert v.value == "'biz'"
 
         if not to_find:
             break

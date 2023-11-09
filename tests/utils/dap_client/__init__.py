@@ -36,10 +36,10 @@ class DAPClient:
     def __init__(
         self,
         test_name: str,
-        enable_logging: bool = False,
+        log_dir: pathlib.Path | None,
     ) -> None:
         self._client = dap.DebugAdapterConnection()
-        self._enable_logging = enable_logging
+        self._log_dir = log_dir
         self._test_name = test_name
 
         proc_env = get_test_env()
@@ -49,11 +49,11 @@ class DAPClient:
             "ansibug",
             "dap",
         ]
-        if enable_logging:
+        if log_dir:
             dap_args.extend(
                 [
                     "--log-file",
-                    f"/tmp/ansibug-{test_name}-dap.log",
+                    str((log_dir / f"ansibug-{test_name}-dap.log").absolute()),
                     "--log-level",
                     "debug",
                 ]
@@ -142,7 +142,7 @@ class DAPClient:
             stderr = self._stderr or b"Unknown error"
             raise Exception(f"DAP process has ended with {self._dap_proc.poll()}: {stderr.decode()}")
 
-        elif isinstance(msg, dap.ErrorResponse):
+        elif isinstance(msg, dap.ErrorResponse) and expected_type != dap.ErrorResponse:
             raise Exception(f"Received error response for {msg.command.value}: {msg.message}")
 
         elif not isinstance(msg, expected_type):
@@ -163,11 +163,11 @@ class DAPClient:
         if ansibug_args:
             proc_args += ansibug_args
 
-        if self._enable_logging and "--log-file" not in proc_args:
+        if self._log_dir and "--log-file" not in proc_args:
             proc_args.extend(
                 [
                     "--log-file",
-                    f"/tmp/ansibug-{self._test_name}-debuggee.log",
+                    str((self._log_dir / f"ansibug-{self._test_name}-debuggee.log").absolute()),
                     "--log-level",
                     "debug",
                 ]
@@ -203,7 +203,7 @@ class DAPClient:
 
         if attach_by_address:
             proc_conn_data = json.loads(pid_path.read_text())
-            proc_info = {"address": proc_conn_data["host"], "port": int(proc_conn_data["port"])}
+            proc_info = {"address": proc_conn_data["address"]}
         else:
             proc_info = {"processId": proc.pid}
 
@@ -219,6 +219,8 @@ class DAPClient:
         playbook_dir: str | pathlib.Path | None = None,
         playbook_args: list[str] | None = None,
         launch_options: dict[str, t.Any] | None = None,
+        do_not_launch: bool = False,
+        expected_terminated: bool = False,
     ) -> subprocess.Popen:
         launch_args: dict[str, t.Any] = (launch_options or {}) | {"playbook": str(playbook)}
         if playbook_args:
@@ -226,8 +228,8 @@ class DAPClient:
         if playbook_dir:
             launch_args["cwd"] = str(playbook_dir)
 
-        if self._enable_logging and "logFile" not in launch_args:
-            launch_args["logFile"] = f"/tmp/ansibug-{self._test_name}-debuggee.log"
+        if self._log_dir and "logFile" not in launch_args:
+            launch_args["logFile"] = str((self._log_dir / f"ansibug-{self._test_name}-debuggee.log").absolute())
             launch_args["logLevel"] = "debug"
 
         self.send(dap.LaunchRequest(arguments=launch_args))
@@ -237,16 +239,29 @@ class DAPClient:
         if resp.env:
             new_environment = new_environment | {k: v or "" for k, v in resp.env.items()}
 
-        proc = subprocess.Popen(
-            resp.args,
-            cwd=resp.cwd or None,
-            env=new_environment,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
+        if do_not_launch:
+            # This is for a specific test that makes sure the timeout is honoured
+            self.send(dap.RunInTerminalResponse(request_seq=resp.seq, process_id=1))
+            self.wait_for_message(dap.LaunchResponse)
+            raise Exception("This should not happen")
 
-        self.send(dap.RunInTerminalResponse(request_seq=resp.seq, process_id=proc.pid))
-        self.wait_for_message(dap.LaunchResponse)
+        else:
+            proc = subprocess.Popen(
+                resp.args,
+                cwd=resp.cwd or None,
+                env=new_environment,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            self.send(dap.RunInTerminalResponse(request_seq=resp.seq, process_id=proc.pid))
+
+            if expected_terminated:
+                self.wait_for_message(dap.TerminatedEvent)
+                return proc
+
+            else:
+                self.wait_for_message(dap.LaunchResponse)
+
         self.wait_for_message(dap.InitializedEvent)
 
         return proc

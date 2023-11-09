@@ -7,13 +7,92 @@ import base64
 import collections.abc
 import contextlib
 import logging
+import os.path
+import pathlib
 import select
 import socket
 import ssl
+import tempfile
 import threading
 import typing as t
+import urllib.parse
+import uuid
 
 log = logging.getLogger(__name__)
+
+
+def parse_addr_string(
+    value: str,
+) -> t.Any:
+    """Parse the an address string.
+
+    Parses the address string using the formats known to Ansibug. Currently the
+    following formats are allowed:
+
+        # TCP for all interfaces and available port
+        tcp://
+
+        # Hostname
+        tcp://hostname:1234
+
+        # IPv4
+        tcp://192.168.1.0:5678
+
+        # IPv6
+        tcp://[::1]:1010
+
+        # No hostname (represents 0.0.0.0)
+        tcp://:2020
+
+        # UDS generate random filename in tmp
+        uds://
+
+        # UDS with just the filename
+        uds://ansibug-dap-sock
+
+        # UDS with full path
+        uds:/tmp/ansibug-dap-socket
+
+        # UDS with full path alternative
+        uds:///tmp/ansibug-dap-socket
+
+    A TCP socket must include both the hostname and port. A UDS socket can be
+    just the socket filename located in the temporary directory or the full
+    path to the UDS socket.
+
+    Args:
+        value: The string to parse.
+
+    Returns:
+        Any: The required address for the scheme specified.
+    """
+    value_split = urllib.parse.urlsplit(value)
+
+    if value_split.scheme == "tcp":
+        if not value_split.netloc and not value_split.port:
+            return "", 0
+
+        if value_split.port is not None:
+            return value_split.hostname or "", value_split.port
+
+        else:
+            raise ValueError("Specifying a tcp address must include the port")
+
+    elif value_split.scheme == "uds":
+        if value_split.netloc and value_split.path:
+            raise ValueError("Specifying a uds address must only contain the port or netloc, not both")
+
+        elif value_split.netloc:
+            return os.path.join(tempfile.gettempdir(), value_split.netloc)
+
+        elif value_split.path:
+            return value_split.path
+
+        else:
+            return str(pathlib.Path(tempfile.gettempdir()) / f"ansibug-dap-{uuid.uuid4()}")
+
+    else:
+        raise ValueError(f"An address must be for the tcp or uds scheme")
 
 
 class SocketHelper:
@@ -37,17 +116,17 @@ class SocketHelper:
         self,
         cancel_token: SocketCancellationToken,
         timeout: float = 0,
-    ) -> t.Any:
+        cancel_socket: SocketHelper | None = None,
+    ) -> SocketHelper:
         log.debug("Socket %s starting accept", self.use)
-        conn, addr = cancel_token.accept(self._sock, timeout=timeout)
-        log.debug("Socket %s accepted conn from %s", self.use, addr)
+        conn, addr = cancel_token.accept(
+            self._sock,
+            timeout=timeout,
+            cancel_socket=cancel_socket._sock if cancel_socket else None,
+        )
+        log.debug("Socket %s accepted conn from '%s'", self.use, addr)
 
-        # The underlying socket is no longer needed, only 1 connection is
-        # expected per server socket.
-        self._sock.close()
-        self._sock = conn
-
-        return addr
+        return SocketHelper(self.use, conn)
 
     def getsockname(self) -> t.Any:
         return self._sock.getsockname()
@@ -120,19 +199,27 @@ class SocketCancellationToken:
         self,
         sock: socket.socket,
         timeout: float = 0,
+        cancel_socket: socket.socket | None = None,
     ) -> tuple[socket.socket, t.Any]:
         with self.with_cancel(lambda: sock.shutdown(socket.SHUT_RDWR)):
             try:
-                # When cancelled select will detect that sock is ready for a
+                # When cancelled, select will detect that sock is ready for a
                 # read and accept() will raise OSError. In the rare event the
-                # sockec was connected to and closed/shutdown between select
+                # socket was connected to and closed/shutdown between select
                 # and the subsequent recv/send on the socket will act like it's
                 # disconnected
-                rd, _, _ = select.select([sock], [], [], timeout or None)
+                socks = [sock]
+                if cancel_socket:
+                    socks.append(cancel_socket)
+
+                rd, _, _ = select.select(socks, [], [], timeout or None)
                 if not rd:
                     raise TimeoutError("Timed out waiting for socket.accept()")
+                elif cancel_socket and cancel_socket in rd:
+                    raise CancelledError()
 
-                return sock.accept()
+                return rd[0].accept()
+
             except OSError:
                 if self._cancelled:
                     raise CancelledError()
@@ -142,24 +229,31 @@ class SocketCancellationToken:
     def connect(
         self,
         sock: socket.socket,
-        addr: tuple,
+        addr: t.Any,
         timeout: float = 0,
     ) -> None:
         with self.with_cancel(lambda: sock.shutdown(socket.SHUT_RDWR)):
-            if timeout:
-                sock.settimeout(timeout)
+            # There seems to be a bug in some Linux kernel versions where
+            # trying to shutdown a socket during a connect() fails with EBUSY.
+            # This was reproduced in Ubuntu 22.04 (Linux 5.15.0) but could not
+            # be reproduced in Fedora 38 (Linux 6.2) or Arch at Linux 6.5.9.
+            # Using select is an option to wait until the socket is writable.
+            sock.setblocking(False)
 
             try:
                 sock.connect(addr)
-            except OSError:
-                if self._cancelled:
-                    raise CancelledError()
-                else:
-                    raise
+            except BlockingIOError:
+                pass
 
-            else:
-                # Set back into blocking mode.
-                sock.settimeout(None)
+            _, wd, _ = select.select([], [sock], [], timeout or None)
+            if not wd:
+                raise TimeoutError("Timed out waiting for socket.connect")
+            elif self._cancelled:
+                raise CancelledError()
+            elif err := sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR):
+                raise OSError(err, os.strerror(err))
+
+            sock.setblocking(True)
 
     def recv_into(
         self,
@@ -183,13 +277,10 @@ class SocketCancellationToken:
             try:
                 sock.sendall(data)
             except OSError:
-                if self._cancel_funcs:
+                if self._cancelled:
                     raise CancelledError()
                 else:
                     raise
-
-            if self._cancelled:
-                raise CancelledError()
 
     def cancel(self) -> None:
         with self._lock:

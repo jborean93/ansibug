@@ -26,26 +26,16 @@ options:
     - listen
     env:
     - name: ANSIBUG_MODE
-  socket_host:
+  debug_addr:
     description:
-    - The socket hostname to connect or bind to, dependening on C(mode).
-    - When C(mode=listen), the value C(localhost) will bind the socket to all
-      IPv4 and IPv6 addresses on localhost.
+    - For C(mode=listen), the connection string the process will listen on.
+    - For C(mode=connect), the connection string the process will connect to.
+    - The details of these connection strings are internal to ansibug itself.
     default: localhost
+    required: true
     type: str
     env:
-    - name: ANSIBUG_SOCKET_HOST
-  socket_port:
-    description:
-    - The socket port to connect or bind to, depending on C(mode).
-    - When C(mode=connect), this must be set to a value greater than 0.
-    - When C(mode=listen), the value 0 will bind to a port given to it by the
-      OS. This vaalue will be displayed when the callback has initialised and
-      is ready for the debug adapter to connect to the listening socket.
-    default: 0
-    type: int
-    env:
-    - name: ANSIBUG_SOCKET_PORT
+    - name: ANSIBUG_DEBUG_ADDR
   tls_server_certfile:
     description:
     - The TLS server certificate used when C(mode=listen).
@@ -54,7 +44,7 @@ options:
       the certificate's authenticity.
     - This can also contain the PEM encoded certificate key, otherwise use
       C(tls_server_keyfile).
-    type: str
+    type: path
     env:
     - name: ANSIBUG_TLS_SERVER_CERTFILE
   tls_server_keyfile:
@@ -64,7 +54,7 @@ options:
       certificate key.
     - If the key is encrypted use C(tls_server_key_password) to provide the
       password needed to decrypt the key.
-    type: str
+    type: path
     env:
     - name: ANSIBUG_TLS_SERVER_KEYFILE
   tls_server_key_password:
@@ -74,6 +64,17 @@ options:
     type: str
     env:
     - name: ANSIBUG_TLS_SERVER_KEY_PASSWORD
+  tls_client_ca:
+    description:
+    - The TLS client authentication CA verification bundles to use when
+      C(mode=listen).
+    - If set this will enforce client authentication meaning the client
+      connecting to the listener must provide the certificate and key issued by
+      a CA in the bundle provided.
+    - If not set then no client authentication will be performed.
+    type: path
+    env:
+    - name: ANSIBUG_TLS_CLIENT_CA
   use_tls:
     description:
     - Sets up a TLS protected stream when C(mode=listen).
@@ -96,15 +97,6 @@ options:
     default: false
     env:
     - name: ANSIBUG_NO_WAIT_FOR_CONFIG_DONE
-  wait_for_config_done_timeout:
-    description:
-    - The time to wait, in seconds, to wait until the configurationDone request
-      has been sent by the client.
-    - Set to C(-1) to wait indefinitely.
-    type: float
-    default: -1
-    env:
-    - name: ANSIBUG_WAIT_FOR_CLIENT_TIMEOUT
   log_file:
     description:
     - The path used to store background logging events of the DAP thread.
@@ -137,7 +129,6 @@ import os
 import ssl
 import typing as t
 
-from ansible.errors import AnsibleError
 from ansible.executor.stats import AggregateStats
 from ansible.playbook import Playbook
 from ansible.plugins.callback import CallbackBase
@@ -183,13 +174,7 @@ class CallbackModule(CallbackBase):
             )
 
         mode = self.get_option("mode")
-
-        socket_host = self.get_option("socket_host")
-        socket_port = self.get_option("socket_port")
-        if mode == "connect" and not socket_port:
-            raise AnsibleError("socket_port must be specified when mode=connect")
-        elif mode == "listen" and socket_host == "localhost":
-            socket_host = ""
+        debug_addr = self.get_option("debug_addr")
 
         ssl_context: ssl.SSLContext | None = None
         if self.get_option("use_tls") and mode == "listen":
@@ -197,27 +182,24 @@ class CallbackModule(CallbackBase):
                 certfile=self.get_option("tls_server_certfile"),
                 keyfile=self.get_option("tls_server_keyfile"),
                 password=self.get_option("tls_server_key_password"),
+                ca_trust=self.get_option("tls_client_ca"),
             )
 
-        log.info("Staring Ansible Debugger with %s on %s:%d", mode, socket_host, socket_port)
+        log.info("Staring Ansible Debugger with %s on '%s'", mode, debug_addr)
         socket_addr = self._debugger.start(
-            host=socket_host,
-            port=socket_port,
+            addr=debug_addr,
             mode=mode,
             ssl_context=ssl_context,
             playbook_file=getattr(playbook, "_file_name", None),
         )
 
         if mode == "listen":
-            display.display(f"Ansibug listener has been configured for process PID {os.getpid()} on {socket_addr}")
+            display.display(f"Ansibug listener has been configured for process PID {os.getpid()} on '{socket_addr}'")
 
         no_wait_for_config_done = self.get_option("no_wait_for_config_done")
-        wait_for_config_done_timeout = self.get_option("wait_for_config_done_timeout")
         if not no_wait_for_config_done:
             log.info("Waiting for configuration done request to be received in Ansible")
-            if wait_for_config_done_timeout == -1:
-                wait_for_config_done_timeout = None
-            self._debugger.wait_for_config_done(timeout=wait_for_config_done_timeout)
+            self._debugger.wait_for_config_done(timeout=None)
 
     def v2_playbook_on_stats(
         self,

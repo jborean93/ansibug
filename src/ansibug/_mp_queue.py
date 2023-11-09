@@ -3,6 +3,9 @@
 
 from __future__ import annotations
 
+import logging
+import os
+import pathlib
 import pickle
 import socket
 import ssl
@@ -10,21 +13,24 @@ import threading
 import types
 import typing as t
 
-from ._socket_helper import CancelledError, SocketCancellationToken, SocketHelper
+from ._socket_helper import (
+    CancelledError,
+    SocketCancellationToken,
+    SocketHelper,
+    parse_addr_string,
+)
 from .dap import ProtocolMessage
 
+log = logging.getLogger(__name__)
 
-class MPProtocol(t.Protocol):
+
+class MPProtocol:
     def on_msg_received(self, msg: ProtocolMessage) -> None:
         """Called when a message has been received from the peer."""
         return  # pragma: nocover
 
     def connection_closed(self, exp: Exception | None) -> None:
         """Called when the connection is closed, exp will contain an exception if an error occurred."""
-        return  # pragma: nocover
-
-    def connection_made(self) -> None:
-        """Called when the connection has been made with the peer."""
         return  # pragma: nocover
 
 
@@ -53,15 +59,18 @@ class MPQueue:
         self.stop()
 
     @property
-    def address(self) -> tuple[str, int, bool]:
-        if self._socket.family == socket.AddressFamily.AF_INET6:
-            host, port, flowinfo, scope_id = self._socket.getsockname()
-            ipv6 = True
+    def address(self) -> str:
+        if self._socket.family == socket.AddressFamily.AF_UNIX:
+            host = self._socket.getsockname()
+            return f"uds://{host}"
+
+        elif self._socket.family == socket.AddressFamily.AF_INET6:
+            host, port, _, _ = self._socket.getsockname()
+            return f"tcp://[{host}]:{port}"
+
         else:
             host, port = self._socket.getsockname()
-            ipv6 = False
-
-        return host, port, ipv6
+            return f"tcp://{host}:{port}"
 
     def send(
         self,
@@ -75,7 +84,6 @@ class MPQueue:
         self,
         timeout: float = 0,
     ) -> None:
-        self._proto.connection_made()
         self._recv_thread = threading.Thread(
             target=self._recv_handler,
             name=f"{type(self).__name__} Recv",
@@ -118,7 +126,7 @@ class MPQueue:
 class ClientMPQueue(MPQueue):
     def __init__(
         self,
-        address: tuple[str, int],
+        address: str,
         proto: t.Callable[[], MPProtocol],
         *,
         ssl_context: ssl.SSLContext | None = None,
@@ -126,31 +134,42 @@ class ClientMPQueue(MPQueue):
     ) -> None:
         # Use a blank socket, the real one is created in start()
         super().__init__(SocketHelper("client", socket.socket()), proto, cancel_token=cancel_token)
-        self._host, self._port = address
+        self._address = parse_addr_string(address)
         self._ssl_context = ssl_context
-
-    def __enter__(self) -> ClientMPQueue:
-        super().__enter__()
-        return self
 
     def start(
         self,
         timeout: float = 0,
     ) -> None:
-        sock = None
-        error = OSError(f"Found no results for getaddrinfo for {self._host}:{self._port}")
+        addr_info: list[
+            tuple[
+                socket.AddressFamily,
+                socket.SocketKind,
+                int,
+                str,
+                t.Any,
+            ]
+        ]
+        if isinstance(self._address, str):
+            hostname = self._address
+            addr_info = [(socket.AF_UNIX, socket.SOCK_STREAM, -1, "", self._address)]
 
-        for family, socktype, proto, _, addr in socket.getaddrinfo(self._host, self._port, 0, socket.SOCK_STREAM):
+        else:
+            hostname, port = self._address
+            addr_info = socket.getaddrinfo(hostname, port, 0, socket.SOCK_STREAM)
+
+        sock = None
+        error = OSError(f"Found no results for getaddrinfo for {self._address}")
+        for family, socktype, proto, _, addr in addr_info:
+            sock = socket.socket(family, socktype, proto)
             try:
-                sock = socket.socket(family, socktype, proto)
                 self._cancel_token.connect(sock, addr, timeout=timeout)
                 break
 
             except OSError as e:
                 error = e
-                if sock:
-                    sock.close()
-                sock = None
+                sock.close()
+            sock = None
 
         if sock:
             self._socket = SocketHelper("client", sock)
@@ -161,8 +180,16 @@ class ClientMPQueue(MPQueue):
             self._socket.wrap_tls(
                 self._ssl_context,
                 server_side=False,
-                server_hostname=self._host,
+                server_hostname=hostname,
             )
+            # TLS 1.3 won't validate their cert was accepted until its first
+            # read. This ensures the connection is validated before it is
+            # going to be used.
+            self._socket.recv(1, self._cancel_token)
+        else:
+            # Ensures that the server is actually connected to us and we aren't
+            # in the backlog waiting for an accept().
+            self._socket.recv(1, self._cancel_token)
 
         super().start()
 
@@ -170,43 +197,100 @@ class ClientMPQueue(MPQueue):
 class ServerMPQueue(MPQueue):
     def __init__(
         self,
-        address: tuple[str, int],
+        address: str,
         proto: t.Callable[[], MPProtocol],
         *,
         ssl_context: ssl.SSLContext | None = None,
         cancel_token: SocketCancellationToken | None = None,
     ) -> None:
-        sock_kwargs: dict[str, t.Any] = {}
-        if address[0] == "" and socket.has_dualstack_ipv6():
-            # Allows the server to bind on both IPv4 and IPv6.
-            sock_kwargs |= {
-                "family": socket.AF_INET6,
-                "dualstack_ipv6": True,
-            }
+        parsed_addr = parse_addr_string(address)
 
-        sock = socket.create_server(
-            address,
-            # If port 0 is requested, don't set SO_REUSEPORT
-            reuse_port=address[1] != 0,
-            **sock_kwargs,
-        )
+        if isinstance(parsed_addr, str):
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            os.fchmod(sock.fileno(), 0o700)
+            sock.bind(parsed_addr)
+            sock.listen()
+
+        else:
+            sock_kwargs: dict[str, t.Any] = {}
+            if socket.has_dualstack_ipv6():  # pragma: nocover
+                # Allows the server to bind on both IPv4 and IPv6.
+                sock_kwargs |= {
+                    "family": socket.AF_INET6,
+                    "dualstack_ipv6": True,
+                }
+
+            sock = socket.create_server(
+                parsed_addr,
+                # If port 0 is requested, don't set SO_REUSEPORT
+                reuse_port=parsed_addr[1] != 0,
+                backlog=0,
+                **sock_kwargs,
+            )
 
         super().__init__(SocketHelper("server", sock), proto, cancel_token=cancel_token)
         self._ssl_context = ssl_context
 
-    def __enter__(self) -> ServerMPQueue:
-        super().__enter__()
-        return self
-
     def start(
         self,
         timeout: float = 0,
+        cancel_queue: MPQueue | None = None,
     ) -> None:
-        self._socket.accept(self._cancel_token, timeout=timeout)
+        cancel_socket = None
+        if cancel_queue:
+            cancel_socket = cancel_queue._socket
+
+        conn = self._socket.accept(
+            self._cancel_token,
+            timeout=timeout,
+            cancel_socket=cancel_socket,
+        )
+
         if self._ssl_context:
-            self._socket.wrap_tls(
-                self._ssl_context,
-                server_side=True,
-            )
+            # If the server fails to complete the TLS handshake we don't want
+            # to shutdown the socket, instead this will recreate it allowing a
+            # new client to connect. This allows an attach request to be
+            # retried if the server mandates a certificate but the client does
+            # not offer one (or is rejected).
+            while True:
+                try:
+                    conn.wrap_tls(
+                        self._ssl_context,
+                        server_side=True,
+                    )
+                    # The client will read a single byte after the handshake to
+                    # verify it was able to auth correctly. TLS 1.3 only errors
+                    # on the client side on the first recv/send call after the
+                    # handshake.
+                    conn.send(b"\x00", self._cancel_token)
+
+                except ssl.SSLError:
+                    log.exception("Server TLS handshake failed, trying again")
+                    conn.close()
+                    conn = self._socket.accept(
+                        self._cancel_token,
+                        timeout=timeout,
+                        cancel_socket=cancel_socket,
+                    )
+
+                else:
+                    break
+
+        else:
+            # The client will read a single byte after the connection to verify
+            # it is actually connected to a server and not just part of the
+            # backlog.
+            conn.send(b"\x00", self._cancel_token)
+
+        # The original server socket is no longer needed, replace it with the
+        # client connection one.
+        self._socket.close()
+        self._socket = conn
 
         super().start()
+
+    def stop(self) -> None:
+        if self._socket.family == socket.AddressFamily.AF_UNIX:
+            pathlib.Path(self._socket.getsockname()).unlink(missing_ok=True)
+
+        super().stop()

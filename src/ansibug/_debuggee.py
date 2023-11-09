@@ -14,10 +14,11 @@ import pathlib
 import queue
 import ssl
 import threading
+import traceback
 import typing as t
 
 from . import dap
-from ._mp_queue import ClientMPQueue, MPProtocol, ServerMPQueue
+from ._mp_queue import ClientMPQueue, MPProtocol, MPQueue, ServerMPQueue
 from ._singleton import Singleton
 from ._socket_helper import CancelledError, SocketCancellationToken
 
@@ -60,9 +61,7 @@ class DebugConfiguration:
 @dataclasses.dataclass(frozen=True)
 class PlaybookProcessInfo:
     pid: int
-    host: str
-    port: int
-    is_ipv6: bool
+    address: str
     use_tls: bool
     playbook_file: t.Optional[str]
 
@@ -73,9 +72,7 @@ class PlaybookProcessInfo:
     ) -> PlaybookProcessInfo:
         return PlaybookProcessInfo(
             pid=data["pid"],
-            host=data["host"],
-            port=int(data["port"]),
-            is_ipv6=data["is_ipv6"],
+            address=data["address"],
             use_tls=data["use_tls"],
             playbook_file=data["playbook_file"],
         )
@@ -83,9 +80,7 @@ class PlaybookProcessInfo:
     def to_json(self) -> dict[str, t.Any]:
         return {
             "pid": self.pid,
-            "host": self.host,
-            "port": self.port,
-            "is_ipv6": self.is_ipv6,
+            "address": self.address,
             "use_tls": self.use_tls,
             "playbook_file": self.playbook_file,
         }
@@ -97,7 +92,7 @@ def get_pid_info_path(pid: int) -> pathlib.Path:
     # so that it knows where dir and what file pattern to look for when
     # scanning for available playbooks.
     tmpdir = os.environ.get("TMPDIR", "/tmp")
-    return pathlib.Path(tmpdir) / f"ANSIBUG-{pid}"
+    return pathlib.Path(tmpdir) / f"ansibug-pid-{pid}"
 
 
 class DAProtocol(MPProtocol):
@@ -114,27 +109,29 @@ class DAProtocol(MPProtocol):
         log.info("Processing msg %r", msg)
         try:
             self._debugger.process_message(msg)
-        except Exception as e:
+        except Exception:
             log.exception("Exception while processing msg seq %d", msg.seq)
 
-            if isinstance(msg, dap.Request):
-                resp = dap.ErrorResponse(
-                    command=msg.command,
-                    request_seq=msg.seq,
-                    message=f"Unknown error: {e!r}",
-                )
-                self._debugger.send(resp)
+            # The DA Server will only ever send a Request msg here, this just
+            # satisfies mypy.
+            req = t.cast(dap.Request, msg)
+            resp = dap.ErrorResponse(
+                command=req.command,
+                request_seq=req.seq,
+                message=f"Critical Debuggee exception received\n{traceback.format_exc()}",
+            )
+            self._debugger.queue_msg(resp)
 
     def connection_closed(
         self,
         exp: Exception | None,
     ) -> None:
-        # FIXME: log exception
-        self._debugger.send(None)
+        if exp:
+            msg = "".join(traceback.format_exception(None, exp, exp.__traceback__))
+            log.info("Socket connection failed with\n%s", msg)
 
-    def connection_made(self) -> None:
-        with self._debugger._send_queue_lock:
-            self._debugger._send_queue_active = True
+        # This ensures we don't get stuck waiting for this same thread to finish.
+        self._debugger.shutdown(from_send_thread=True)
 
 
 class DebugState(t.Protocol):
@@ -214,17 +211,14 @@ class AnsibleLineBreakpoint:
 
 class AnsibleDebugger(metaclass=Singleton):
     def __init__(self) -> None:
-        self._addr = ""
-        self._addr_event = threading.Event()
         self._cancel_token = SocketCancellationToken()
-        self._debug_config: DebugConfiguration = DebugConfiguration()
-        self._recv_thread: threading.Thread | None = None
-        self._send_queue: queue.Queue[dap.ProtocolMessage | None] = queue.Queue()
-        self._send_queue_active = False
-        self._send_queue_lock = threading.Lock()
-        self._da_connected = threading.Event()
         self._configuration_done = threading.Event()
+        self._adapter_connected = False
+        self._debug_config: DebugConfiguration = DebugConfiguration()
+        self._proc_pid_file = get_pid_info_path(os.getpid())
         self._proto = DAProtocol(self)
+        self._send_queue: queue.Queue[dap.ProtocolMessage | None] = queue.Queue()
+        self._send_thread: threading.Thread | None = None
         self._strategy_connected = threading.Condition()
         self._strategy: DebugState | None = None
 
@@ -260,7 +254,6 @@ class AnsibleDebugger(metaclass=Singleton):
         #     the task that preceeds it
         #   - Won't contain the remaining lines of the file - bp checks will
         #     just have to use the last entry
-        # FIXME: Somehow detect import entries to invalidate them.
         self._source_info: dict[str, list[int | None]] = {}
 
     @contextlib.contextmanager
@@ -268,14 +261,20 @@ class AnsibleDebugger(metaclass=Singleton):
         self,
         strategy: DebugState,
     ) -> collections.abc.Generator[None, None, None]:
+        """Sets the current strategy.
+
+        Sets the current strategy that is being used by Ansible. This is used
+        as a way to route any requests to the strategy for it to handle
+        accordingly.
+
+        Args:
+            strategy: The strategy to set.
+        """
         with self._strategy_connected:
             self._strategy = strategy
             self._strategy_connected.notify_all()
 
         try:
-            if self._da_connected.is_set():
-                self._configuration_done.wait()
-
             yield
 
         finally:
@@ -303,7 +302,7 @@ class AnsibleDebugger(metaclass=Singleton):
 
     def wait_for_config_done(
         self,
-        timeout: float | None = 10.0,
+        timeout: float | None,
     ) -> None:
         """Waits until the debug config is done.
 
@@ -314,17 +313,27 @@ class AnsibleDebugger(metaclass=Singleton):
             timeout: The maximum time, in seconds, to wait until the debug
                 adapter is connected and ready.
         """
-        self._da_connected.wait(timeout=timeout)
+        self._configuration_done.wait(timeout=timeout)
 
     def get_breakpoint(
         self,
         path: str,
         line: int,
     ) -> AnsibleLineBreakpoint | None:
-        with self._send_queue_lock:
-            if not self._send_queue_active:
-                return None
+        """Gets the breakpoint for the path/line specified.
 
+        Checks to see if there is a breakpoint set for the path and line that
+        is requested. If no breakpoint is associated with the arguments then
+        None will be returned.
+
+        Args:
+            path: The path of the file to check.
+            line: The line in the file to check.
+
+        Returns:
+            Optional[AnsibleLineBreakpoint]: The breakpoint associated with the
+            args if present.
+        """
         for b in self._breakpoints.values():
             if (
                 b.actual_path == path
@@ -337,8 +346,7 @@ class AnsibleDebugger(metaclass=Singleton):
 
     def start(
         self,
-        host: str,
-        port: int,
+        addr: str,
         mode: t.Literal["connect", "listen"],
         *,
         ssl_context: ssl.SSLContext | None = None,
@@ -346,13 +354,12 @@ class AnsibleDebugger(metaclass=Singleton):
     ) -> str:
         """Start the background server thread.
 
-        Starts the background server thread which waits for an incoming request
-        on the process' Unix Domain Socket and then subsequently starts the
-        DAP server socket on the request that came in.
+        Starts the background server thread which starts the debuggee socket
+        with the debug adapter server. This will also queue up the
+        InitializedEvent to be sent to the debug adapter on connection.
 
         Args:
-            host: The socket hostname portion to connect/bind.
-            port: The socket port portion to connect/bind.
+            addr: The socket address to connect/bind.
             mode: The socket mode to use, connect will connect to the addr
                 while listen will bind to the addr and wait for a connection.
             ssl_context: Optional client SSLContext to wrap the socket
@@ -364,40 +371,99 @@ class AnsibleDebugger(metaclass=Singleton):
             str: The socket address that is being used, this is only valid when
             using listen mode.
         """
-        self._recv_thread = threading.Thread(
-            target=self._recv_task,
-            args=(host, port, mode, ssl_context, playbook_file),
+        log.info("Setting up ansible-playbook debug %s socket at '%s'", mode, addr)
+
+        queue_kwargs: dict[str, t.Any] = {
+            "address": addr,
+            "proto": lambda: self._proto,
+            "ssl_context": ssl_context,
+            "cancel_token": self._cancel_token,
+        }
+
+        mp_queue: MPQueue
+        if mode == "connect":
+            mp_queue = ClientMPQueue(**queue_kwargs)
+            addr = mp_queue.address
+
+        else:
+            mp_queue = ServerMPQueue(**queue_kwargs)
+            addr = mp_queue.address
+
+            proc_info = PlaybookProcessInfo(
+                pid=os.getpid(),
+                address=addr,
+                use_tls=ssl_context is not None,
+                playbook_file=playbook_file,
+            )
+            proc_json = json.dumps(proc_info.to_json())
+            self._proc_pid_file.write_text(proc_json)
+
+        log.debug("MPQueue set on address %s", addr)
+
+        self._send_thread = threading.Thread(
+            target=self._send_task,
+            args=(mp_queue,),
             name="ansibug-debugger",
         )
-        self._recv_thread.start()
+        self._send_thread.start()
 
-        self._addr_event.wait()
-        return self._addr
+        return addr
 
-    def shutdown(self) -> None:
-        """Shutdown the Debug Server.
+    def shutdown(
+        self,
+        from_send_thread: bool = False,
+    ) -> None:
+        """Shutdown the Debuggee.
 
-        Marks the server as completed and signals the DAP server thread to
+        Marks the debuggee as completed and signals the send thread to
         shutdown.
+
+        Args:
+            from_send_thread: The shutdown request has come from the send
+                thread.
         """
         log.debug("Shutting down DebugServer")
-        self._send_queue.join()
-        self._cancel_token.cancel()
-        if self._recv_thread:
-            self._recv_thread.join()
+
+        if not from_send_thread and self._send_thread:
+            # If we aren't connected we need to cancel the queue start method
+            # before trying to join the thread.
+            if not self._adapter_connected:
+                self._cancel_token.cancel()
+
+            self.queue_msg(None)
+            self._send_thread.join()
+            self._send_thread = None
+
+        # If the strategy is still running we don't want it to fire on any
+        # breakpoints and our debug config no longer applies
+        self._debug_config = DebugConfiguration()
+        self._breakpoints = {}
+
+        # Ensure the callback plugin isn't stuck waiting for this
+        self._configuration_done.set()
+
+        # Ensure the strategy isn't waiting for a response to anything
+        with self._strategy_connected:
+            if self._strategy:
+                self._strategy.ended()
+
+        self._proc_pid_file.unlink(missing_ok=True)
 
         log.debug("DebugServer is shutdown")
 
-    def send(
+    def queue_msg(
         self,
         msg: dap.ProtocolMessage | None,
     ) -> None:
-        with self._send_queue_lock:
-            if self._send_queue_active:
-                log.info("Sending to DA adapter - %r", msg)
-                self._send_queue.put(msg)
-            else:
-                log.info("Discarding msg to DA adapter as queue is off - %r", msg)
+        """Queues a message to send to the debug adapter.
+
+        Adds the message to the send queue for the send thread to send to the
+        debug adapter.
+
+        Args:
+            msg: The message to send.
+        """
+        self._send_queue.put(msg)
 
     def convert_to_client_path(
         self,
@@ -447,46 +513,25 @@ class AnsibleDebugger(metaclass=Singleton):
         file_lines.extend([None] * (1 + line - len(file_lines)))
         file_lines[line] = bp_type
 
-        # FIXME: Put into common location to share with SetBreakpointRequest.
         for breakpoint in self._breakpoints.values():
             if breakpoint.actual_path != path:
                 continue
 
             source_breakpoint = breakpoint.source_breakpoint
-            start_line = min(source_breakpoint.line, len(file_lines) - 1)
-            end_line = start_line + 1
-
-            line_type = file_lines[start_line]
-            while line_type is None:
-                start_line -= 1
-                line_type = file_lines[start_line]
-
-            while end_line < len(file_lines) and file_lines[end_line] is None:
-                end_line += 1
-
-            end_line = min(end_line - 1, len(file_lines))
-
-            if line_type == 0:
-                verified = False
-                bp_msg = "Breakpoint cannot be set here."
-            else:
-                verified = True
-                bp_msg = None
+            bp = self._calculate_breakpoint(
+                breakpoint.id,
+                breakpoint.source,
+                source_breakpoint.line,
+                file_lines,
+            )
 
             if (
-                breakpoint.breakpoint.verified != verified
-                or breakpoint.breakpoint.line != start_line
-                or breakpoint.breakpoint.end_line != end_line
+                breakpoint.breakpoint.verified != bp.verified
+                or breakpoint.breakpoint.line != bp.line
+                or breakpoint.breakpoint.end_line != bp.end_line
             ):
-                bp = breakpoint.breakpoint = dap.Breakpoint(
-                    id=breakpoint.id,
-                    verified=verified,
-                    message=bp_msg,
-                    source=breakpoint.source,
-                    line=start_line,
-                    end_line=end_line,
-                )
-                self.send(
+                breakpoint.breakpoint = bp
+                self.queue_msg(
                     dap.BreakpointEvent(
                         reason="changed",
                         breakpoint=bp,
@@ -497,7 +542,7 @@ class AnsibleDebugger(metaclass=Singleton):
     def _enable_debugpy(cls) -> None:  # pragma: nocover
         """This is only meant for debugging ansibug in Ansible purposes."""
         if not HAS_DEBUGPY:
-            return
+            raise Exception("Failed to enable debugging because debugpy is not installed")
 
         elif not debugpy.is_client_connected():
             debugpy.listen(("localhost", 12535))
@@ -508,125 +553,12 @@ class AnsibleDebugger(metaclass=Singleton):
             self._strategy_connected.wait_for(lambda: self._strategy is not None)
             return t.cast(DebugState, self._strategy)
 
-    def _recv_task(
-        self,
-        host: str,
-        port: int,
-        mode: t.Literal["connect", "listen"],
-        ssl_context: ssl.SSLContext | None,
-        playbook_file: str | None = None,
-    ) -> None:
-        """Background server recv task.
-
-        This is the task that continuously runs in the background waiting for
-        DAP server to exchange debug messages. Depending on the mode requested
-        the socket could be waiting for a connection or trying to connect to
-        addr requested.
-
-        In listen mode, the socket will attempt to wait for more DAP servers to
-        connect to it in order to allow multiple connections as needed. This
-        continues until the playbook is completed.
-
-        Args:
-            host: The socket hostname portion to connect/bind.
-            port: The socket port portion to connect/bind.
-            mode: The socket mode to use, connect will connect to the addr
-                while listen will bind to the addr and wait for a connection.
-            ssl_context: Optional client SSLContext to wrap the socket
-                connection with.
-            playbook_file: The file of the playbook being run, this is optional
-                info used for storing metadata with the process pid on listen.
-        """
-        log.info("Setting up ansible-playbook debug %s socket at '%s:%d'", mode, host, port)
-
-        queue_kwargs: dict[str, t.Any] = {
-            "address": (host, port),
-            "proto": lambda: self._proto,
-            "ssl_context": ssl_context,
-            "cancel_token": self._cancel_token,
-        }
-        queue_type = ClientMPQueue if mode == "connect" else ServerMPQueue
-
-        proc_pid_file = get_pid_info_path(os.getpid())
-        try:
-            while True:
-                with queue_type(**queue_kwargs) as mp_queue:
-                    if isinstance(mp_queue, ServerMPQueue):
-                        bound_host, bound_port, is_ipv6 = mp_queue.address
-                        proc_info = PlaybookProcessInfo(
-                            pid=os.getpid(),
-                            host=bound_host,
-                            port=bound_port,
-                            is_ipv6=is_ipv6,
-                            use_tls=ssl_context is not None,
-                            playbook_file=playbook_file,
-                        )
-                        proc_json = json.dumps(proc_info.to_json())
-                        proc_pid_file.write_text(proc_json)
-
-                    sock_host, sock_port, is_ipv6 = mp_queue.address
-                    if is_ipv6:
-                        self._addr = f"[{sock_host}]:{sock_port}"
-                    else:
-                        self._addr = f"{sock_host}:{sock_port}"
-                    self._addr_event.set()
-
-                    mp_queue.start()
-                    try:
-                        self._da_connected.set()
-
-                        while True:
-                            resp = self._send_queue.get()
-                            try:
-                                if not resp:
-                                    break
-                                mp_queue.send(resp)
-                            finally:
-                                self._send_queue.task_done()
-
-                    finally:
-                        self._da_connected.clear()
-
-                if mode == "connect":
-                    break
-
-        except CancelledError:
-            pass
-
-        except Exception as e:
-            log.exception(f"Unknown error in DAP thread: %s", e)
-
-        finally:
-            if proc_pid_file.exists():
-                proc_pid_file.unlink(missing_ok=True)
-
-            # Ensure the queue is seen as complete so shutdown ends
-            with self._send_queue_lock:
-                while True:
-                    try:
-                        self._send_queue.get(block=False)
-                    except queue.Empty:
-                        break
-                    else:
-                        self._send_queue.task_done()
-
-                self._send_queue_active = False
-
-        # Ensures client isn't stuck waiting for something to never come.
-        self._da_connected.set()
-        self._configuration_done.set()
-        with self._strategy_connected:
-            if self._strategy:
-                self._strategy.ended()
-
-        log.debug("DAP server thread task ended")
-
     @functools.singledispatchmethod
     def process_message(
         self,
         msg: dap.ProtocolMessage,
     ) -> None:
-        raise NotImplementedError(type(msg).__name__)  # pramga: nocover
+        raise NotImplementedError(f"Debuggee does not support the {type(msg).__name__} message")
 
     @process_message.register
     def _(
@@ -634,7 +566,7 @@ class AnsibleDebugger(metaclass=Singleton):
         msg: dap.ConfigurationDoneRequest,
     ) -> None:
         resp = dap.ConfigurationDoneResponse(request_seq=msg.seq)
-        self.send(resp)
+        self.queue_msg(resp)
         self._configuration_done.set()
 
     @process_message.register
@@ -644,7 +576,7 @@ class AnsibleDebugger(metaclass=Singleton):
     ) -> None:
         strategy = self._get_strategy()
         resp = strategy.continue_request(msg)
-        self.send(resp)
+        self.queue_msg(resp)
 
     @process_message.register
     def _(
@@ -653,7 +585,7 @@ class AnsibleDebugger(metaclass=Singleton):
     ) -> None:
         strategy = self._get_strategy()
         resp = strategy.evaluate(msg)
-        self.send(resp)
+        self.queue_msg(resp)
 
     @process_message.register
     def _(
@@ -662,7 +594,7 @@ class AnsibleDebugger(metaclass=Singleton):
     ) -> None:
         strategy = self._get_strategy()
         strategy.step_over(msg)
-        self.send(dap.NextResponse(request_seq=msg.seq))
+        self.queue_msg(dap.NextResponse(request_seq=msg.seq))
 
     @process_message.register
     def _(
@@ -671,7 +603,7 @@ class AnsibleDebugger(metaclass=Singleton):
     ) -> None:
         strategy = self._get_strategy()
         resp = strategy.get_scopes(msg)
-        self.send(resp)
+        self.queue_msg(resp)
 
     @process_message.register
     def _(
@@ -723,33 +655,11 @@ class AnsibleDebugger(metaclass=Singleton):
                 )
 
             else:
-                start_line = min(source_breakpoint.line, len(source_info) - 1)
-                end_line = start_line + 1
-
-                line_type = source_info[start_line]
-                while line_type is None:
-                    start_line -= 1
-                    line_type = source_info[start_line]
-
-                while end_line < len(source_info) and source_info[end_line] is None:
-                    end_line += 1
-
-                end_line = min(end_line - 1, len(source_info))
-
-                if line_type == 0:
-                    verified = False
-                    bp_msg = "Breakpoint cannot be set here."
-                else:
-                    verified = True
-                    bp_msg = None
-
-                bp = dap.Breakpoint(
-                    id=bp_id,
-                    verified=verified,
-                    message=bp_msg,
-                    source=msg.source,
-                    line=start_line,
-                    end_line=end_line,
+                bp = self._calculate_breakpoint(
+                    bp_id,
+                    msg.source,
+                    source_breakpoint.line,
+                    source_info,
                 )
 
             self._breakpoints[bp_id] = AnsibleLineBreakpoint(
@@ -766,7 +676,7 @@ class AnsibleDebugger(metaclass=Singleton):
             request_seq=msg.seq,
             breakpoints=breakpoint_info,
         )
-        self.send(resp)
+        self.queue_msg(resp)
 
     @process_message.register
     def _(
@@ -775,7 +685,7 @@ class AnsibleDebugger(metaclass=Singleton):
     ) -> None:
         strategy = self._get_strategy()
         resp = strategy.set_variable(msg)
-        self.send(resp)
+        self.queue_msg(resp)
 
     @process_message.register
     def _(
@@ -784,7 +694,7 @@ class AnsibleDebugger(metaclass=Singleton):
     ) -> None:
         strategy = self._get_strategy()
         resp = strategy.get_stacktrace(msg)
-        self.send(resp)
+        self.queue_msg(resp)
 
     @process_message.register
     def _(
@@ -793,7 +703,7 @@ class AnsibleDebugger(metaclass=Singleton):
     ) -> None:
         strategy = self._get_strategy()
         strategy.step_in(msg)
-        self.send(dap.StepInResponse(request_seq=msg.seq))
+        self.queue_msg(dap.StepInResponse(request_seq=msg.seq))
 
     @process_message.register
     def _(
@@ -802,7 +712,7 @@ class AnsibleDebugger(metaclass=Singleton):
     ) -> None:
         strategy = self._get_strategy()
         strategy.step_out(msg)
-        self.send(dap.StepOutResponse(request_seq=msg.seq))
+        self.queue_msg(dap.StepOutResponse(request_seq=msg.seq))
 
     @process_message.register
     def _(
@@ -811,7 +721,7 @@ class AnsibleDebugger(metaclass=Singleton):
     ) -> None:
         strategy = self._get_strategy()
         resp = strategy.get_threads(msg)
-        self.send(resp)
+        self.queue_msg(resp)
 
     @process_message.register
     def _(
@@ -820,7 +730,7 @@ class AnsibleDebugger(metaclass=Singleton):
     ) -> None:
         strategy = self._get_strategy()
         resp = strategy.get_variables(msg)
-        self.send(resp)
+        self.queue_msg(resp)
 
     @process_message.register
     def _(
@@ -835,3 +745,80 @@ class AnsibleDebugger(metaclass=Singleton):
             return
 
         self._debug_config = msg.data
+
+        # Wait until the debug adapter has sent this message before sending the
+        # InitializedEvent to the client.
+        self.queue_msg(dap.InitializedEvent())
+
+    def _calculate_breakpoint(
+        self,
+        bp_id: int,
+        bp_source: dap.Source,
+        line: int,
+        file_lines: list[int | None],
+    ) -> dap.Breakpoint:
+        """Builds a Breakpoint object based on the source provided and known file_lines."""
+        start_line = min(line, len(file_lines) - 1)
+        end_line = start_line + 1
+
+        line_type = file_lines[start_line]
+        while line_type is None:
+            start_line -= 1
+            line_type = file_lines[start_line]
+
+        while end_line < len(file_lines) and file_lines[end_line] is None:
+            end_line += 1
+
+        end_line = min(end_line - 1, len(file_lines))
+
+        if line_type == 0:
+            verified = False
+            bp_msg = "Breakpoint cannot be set here."
+        else:
+            verified = True
+            bp_msg = None
+
+        return dap.Breakpoint(
+            id=bp_id,
+            verified=verified,
+            message=bp_msg,
+            source=bp_source,
+            line=start_line,
+            end_line=end_line,
+        )
+
+    def _send_task(
+        self,
+        mp_queue: MPQueue,
+    ) -> None:
+        """Debuggee send task
+
+        This is the task that waits for the debug adapter to be connected to
+        the socket and continuously sends the queued messages back to the
+        adapter.
+
+        Args:
+            mp_queue: The queue to use for communication.
+        """
+        log.debug("Debuggee server send thread started")
+        try:
+            mp_queue.start()
+            log.debug("Debuggee socket is connected and ready for use.")
+            self._adapter_connected = True
+
+            while msg := self._send_queue.get():
+                log.info("Sending to debug adapter %r", msg)
+                mp_queue.send(msg)
+                self._send_queue.task_done()
+
+        except CancelledError:
+            pass
+
+        except Exception:
+            log.exception("Unknown error in Debuggee send thread")
+
+        finally:
+            mp_queue.stop()
+            self._adapter_connected = False
+
+        log.debug("Debuggee server send thread ended")

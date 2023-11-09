@@ -126,6 +126,7 @@ omit = ["*/ansibug/_version.py"]
 parallel = true
 
 [tool.coverage.report]
+skip_covered = true
 show_missing = true
 
 [tool.tox]
@@ -148,7 +149,7 @@ extras =
 deps:
     ansible_2.14: ansible-core >=2.14.0,<2.15.0
     ansible_2.15: ansible-core >=2.15.0,<2.16.0
-    ansible_2.16: ansible-core ==2.16.0rc1
+    ansible_2.16: ansible-core >=2.16.0,<2.17.0
     ansible_devel: https://github.com/ansible/ansible/archive/devel.tar.gz
 install_command = python -Im pip install --no-compile {opts} {packages}
 
@@ -171,7 +172,7 @@ commands =
     tests: python -m coverage run -m pytest -v {posargs:-n auto}
 
 commands_post =
-    tests: python -m coverage combine
+    tests: python -m coverage combine --quiet
     tests: python -m coverage report
     tests: python -m coverage xml
 """

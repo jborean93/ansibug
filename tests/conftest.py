@@ -18,8 +18,12 @@ from dap_client import DAPClient
 
 
 @pytest.fixture(scope="function")
-def dap_client(request: pytest.FixtureRequest) -> collections.abc.Iterator[DAPClient]:
-    with DAPClient(request.node.name) as client:
+def dap_client(
+    request: pytest.FixtureRequest,
+) -> collections.abc.Iterator[DAPClient]:
+    log_dir = None
+    # log_dir = pathlib.Path("/tmp")  # Uncomment when you want to debug the tests
+    with DAPClient(request.node.name, log_dir=log_dir) as client:
         client.send(
             dap.InitializeRequest(
                 adapter_id="ansibug",

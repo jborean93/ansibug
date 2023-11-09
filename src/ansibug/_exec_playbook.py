@@ -16,7 +16,7 @@ from ._logging import LogLevel
 
 def exec_playbook_connect(
     playbook_args: list[str],
-    addr: tuple[str, int],
+    addr: str,
     *,
     no_wait: bool = True,
     log_file: pathlib.Path | None = None,
@@ -46,15 +46,11 @@ def exec_playbook_connect(
         log_level: Set ansibug debuggee logger filter to use this level when
             logging. This only applies if log_file is also set.
     """
-    mode_env = {
-        "ANSIBUG_SOCKET_HOST": addr[0],
-        "ANSIBUG_SOCKET_PORT": str(addr[1]),
-    }
-
     _exec_playbook(
         playbook_args=playbook_args,
         mode="connect",
-        mode_env=mode_env,
+        mode_env={},
+        addr=addr,
         no_wait=no_wait,
         use_tls=False,
         log_file=log_file,
@@ -64,13 +60,14 @@ def exec_playbook_connect(
 
 def exec_playbook_listen(
     playbook_args: list[str],
+    addr: str,
     *,
-    addr: tuple[str, int] | None = None,
     no_wait: bool = True,
     use_tls: bool = False,
     tls_cert: pathlib.Path | None = None,
     tls_key: pathlib.Path | None = None,
     tls_password: str | None = None,
+    tls_client_ca: pathlib.Path | None = None,
     log_file: pathlib.Path | None = None,
     log_level: LogLevel = "info",
 ) -> None:
@@ -91,8 +88,7 @@ def exec_playbook_listen(
 
     Args:
         playbook_args: Arguments to invoke ansible-playbook with.
-        addr: The optional address to connect to, will listen on a random port
-            if not specified.
+        addr: The address to listen on.
         no_wait: Do not wait until the client has communicated with the
             ansible-playbook process and sent the configurationDone request
             before starting the playbook.
@@ -102,15 +98,14 @@ def exec_playbook_listen(
             TLS.
         tls_key: The path to the TLS key PEM encoded file to use for TLS.
         tls_password: The password for the tls_key if it is encrypted.
+        tls_client_ca: Optional CA bundle that will enforce TLS client
+            authentication with a cert signed by a CA in the bundle.
         log_file: Set ansibug debuggee logger to log to the absolute path of
             this file if set.
         log_level: Set ansibug debuggee logger filter to use this level when
             logging. This only applies if log_file is also set.
     """
     mode_env = {}
-    if addr:
-        mode_env["ANSIBUG_SOCKET_HOST"] = addr[0]
-        mode_env["ANSIBUG_SOCKET_PORT"] = str(addr[1])
 
     if tls_cert:
         mode_env["ANSIBUG_TLS_SERVER_CERTFILE"] = str(tls_cert.absolute())
@@ -119,13 +114,17 @@ def exec_playbook_listen(
         mode_env["ANSIBUG_TLS_SERVER_KEYFILE"] = str(tls_key.absolute())
 
     if tls_password:
-        # FIXME: Find a better way to share this
+        # FUTURE: Find a better way to share this
         mode_env["ANSIBUG_TLS_SERVER_KEY_PASSWORD"] = tls_password
+
+    if tls_client_ca:
+        mode_env["ANSIBUG_TLS_CLIENT_CA"] = str(tls_client_ca.absolute())
 
     _exec_playbook(
         playbook_args=playbook_args,
         mode="listen",
         mode_env=mode_env,
+        addr=addr,
         no_wait=no_wait,
         use_tls=use_tls,
         log_file=log_file,
@@ -137,6 +136,7 @@ def _exec_playbook(
     playbook_args: list[str],
     mode: t.Literal["connect", "listen"],
     mode_env: dict[str, str],
+    addr: str,
     *,
     no_wait: bool = True,
     use_tls: bool = False,
@@ -145,6 +145,7 @@ def _exec_playbook(
 ) -> None:
     """Common launch code for connect and listen modes."""
     ansible_env = os.environ | mode_env | _configure_ansible_env()
+    ansible_env["ANSIBUG_DEBUG_ADDR"] = addr
     ansible_env["ANSIBUG_MODE"] = mode
     ansible_env["ANSIBUG_NO_WAIT_FOR_CONFIG_DONE"] = str(no_wait).lower()
     ansible_env["ANSIBUG_USE_TLS"] = str(use_tls)
@@ -183,6 +184,9 @@ def _configure_ansible_env() -> dict[str, str]:
             "--format",
             "json",
         ],
+        # Explicitly set verbosity so it doesn't display version info breaking
+        # the json parsing.
+        env=os.environ | {"ANSIBLE_VERBOSITY": "0"},
         capture_output=True,
         check=True,  # FUTURE: Maybe a nicer exception would be useful
     )
