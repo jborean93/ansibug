@@ -27,4 +27,6 @@ jobs:
         run: |
           set -ex
 
-          python -c "import tempfile; print(tempfile.gettempdir())"
+          python -m pip install tox
+
+          tox -f py312 ansible_devel

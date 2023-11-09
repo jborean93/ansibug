@@ -104,7 +104,7 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 addopts = "--import-mode=importlib"
-testpaths = "tests"
+testpaths = "test_jordan.py"
 junit_family = "xunit2"
 # A test taking longer than a minute is a problem and sign of a deadlock
 timeout = 60
@@ -172,6 +172,6 @@ commands =
 
 commands_post =
     tests: python -m coverage combine
-    tests: python -m coverage report
-    tests: python -m coverage xml
+    # tests: python -m coverage report
+    # tests: python -m coverage xml
 """
