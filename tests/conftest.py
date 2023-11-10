@@ -5,16 +5,19 @@ from __future__ import annotations
 
 import collections.abc
 import pathlib
+import secrets
+import string
 import sys
-import typing as t
 
 import pytest
+from cryptography import x509
 
 import ansibug.dap as dap
 
 sys.path.append(str(pathlib.Path(__file__).parent / "utils"))
 
 from dap_client import DAPClient
+from tls_info import CertFixture, generate_cert, serialize_cert
 
 
 @pytest.fixture(scope="function")
@@ -37,3 +40,57 @@ def dap_client(
         )
 
         yield client
+
+
+@pytest.fixture(scope="session")
+def certs(tmp_path_factory: pytest.TempPathFactory) -> CertFixture:
+    ca = generate_cert(
+        "ansibug-ca",
+        extensions=[(x509.BasicConstraints(ca=True, path_length=None), True)],
+    )
+    server = generate_cert(
+        "ansibug-server",
+        issuer=ca,
+        extensions=[(x509.SubjectAlternativeName([x509.DNSName("localhost")]), False)],
+    )
+    client = generate_cert(
+        "ansibug-client",
+        issuer=ca,
+    )
+    client_self_signed = generate_cert("selfsigned-client")
+
+    cert_dir = tmp_path_factory.mktemp(basename="certificates")
+    test_certs = CertFixture(
+        ca=cert_dir / "ca.pem",
+        password="".join(secrets.choice(string.ascii_letters + string.digits) for i in range(16)),
+        client_invalid=cert_dir / "client-invalid.pem",
+        client_combined=cert_dir / "client-combined.pem",
+        client_cert_only=cert_dir / "client-cert.pem",
+        client_key_encrypted=cert_dir / "client-key-encrypted.pem",
+        client_key_plaintext=cert_dir / "client-key-plaintext.pem",
+        server_combined=cert_dir / "server-combined.pem",
+        server_cert_only=cert_dir / "server-cert.pem",
+        server_key_encrypted=cert_dir / "server-key-encrypted.pem",
+        server_key_plaintext=cert_dir / "server-key-plaintext.pem",
+    )
+
+    serialize_cert(*ca, cert_only=test_certs.ca)
+    serialize_cert(
+        *server,
+        cert_only=test_certs.server_cert_only,
+        combined=test_certs.server_combined,
+        key_encrypted=test_certs.server_key_encrypted,
+        key_plaintext=test_certs.server_key_plaintext,
+        key_password=test_certs.password,
+    )
+    serialize_cert(
+        *client,
+        cert_only=test_certs.client_cert_only,
+        combined=test_certs.client_combined,
+        key_encrypted=test_certs.client_key_encrypted,
+        key_plaintext=test_certs.client_key_plaintext,
+        key_password=test_certs.password,
+    )
+    serialize_cert(*client_self_signed, combined=test_certs.client_invalid)
+
+    return test_certs

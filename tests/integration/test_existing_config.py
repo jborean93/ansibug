@@ -25,7 +25,7 @@ def test_playbook_existing_config(
 """
     )
 
-    collections_path = pathlib.Path(__file__).parent / "data"
+    collections_path = pathlib.Path(__file__).parent.parent / "data"
     ansible_cfg = tmp_path / "ansible.cfg"
     ansible_cfg.write_text(
         rf"""[defaults]
