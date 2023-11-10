@@ -133,7 +133,7 @@ def test_meta_refresh_inventory_extra_hosts(
     inventory = tmp_path / "ns.name.inv.yml"
     inventory.write_text(json.dumps({"plugin": "ns.name.inv", "hosts_file": str(hosts_file)}))
 
-    collections_path = pathlib.Path(__file__).parent / "data"
+    collections_path = pathlib.Path(__file__).parent.parent / "data"
     ansible_cfg = tmp_path / "ansible.cfg"
     ansible_cfg.write_text(
         rf"""[defaults]
@@ -274,7 +274,7 @@ def test_meta_refresh_inventory_removed_hosts(
     inventory = tmp_path / "ns.name.inv.yml"
     inventory.write_text(json.dumps({"plugin": "ns.name.inv", "hosts_file": str(hosts_file)}))
 
-    collections_path = pathlib.Path(__file__).parent / "data"
+    collections_path = pathlib.Path(__file__).parent.parent / "data"
     ansible_cfg = tmp_path / "ansible.cfg"
     ansible_cfg.write_text(
         rf"""[defaults]
