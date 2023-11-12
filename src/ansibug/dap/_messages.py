@@ -34,6 +34,7 @@ class Command(enum.Enum):
     STACK_TRACE = "stackTrace"
     STEP_IN = "stepIn"
     STEP_OUT = "stepOut"
+    TERMINATE = "terminate"
     THREADS = "threads"
     SCOPES = "scopes"
     VARIABLES = "variables"

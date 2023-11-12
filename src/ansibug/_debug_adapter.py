@@ -286,12 +286,12 @@ class DAServer:
                 if isinstance(msg, dap.Request):
                     self._incoming_requests[msg.seq] = msg
 
-                if isinstance(msg, dap.DisconnectRequest):
-                    self.send_to_client(dap.DisconnectResponse(request_seq=msg.seq))
-                    is_connected = False
-
-                elif isinstance(msg, dap.Request) and self._debuggee:
-                    self._debuggee.send(msg)
+                if isinstance(msg, dap.Request) and self._debuggee:
+                    if isinstance(msg, dap.DisconnectRequest):
+                        is_connected = False
+                        self._send_disconnect(msg, self._debuggee)
+                    else:
+                        self._debuggee.send(msg)
 
                 else:
                     self._process_msg(msg)
@@ -312,6 +312,12 @@ class DAServer:
             from_debuggee: The stop is being called as the debuggee has
                 disconnected.
         """
+        # Ensure the DisconnectResponse is sent if there is an outstanding
+        # request.
+        for req in list(self._incoming_requests.values()):
+            if isinstance(req, dap.DisconnectRequest):
+                self.send_to_client(dap.DisconnectResponse(request_seq=req.seq))
+
         if exp:
             # For every incoming request relay the exception back to the client
             # for it to display to the end user.
@@ -356,6 +362,20 @@ class DAServer:
 
         return req_no
 
+    def _send_disconnect(
+        self,
+        msg: dap.DisconnectRequest,
+        debuggee: MPQueue,
+    ) -> None:
+        try:
+            debuggee.send(msg)
+        except OSError:
+            # The debuggee might have been disconnected during the send.
+            pass
+
+        # No response is sent back to the client, is it done as part of the
+        # shutdown to ensure it's sent before the TerminatedEvent.
+
     @functools.singledispatchmethod
     def _process_msg(self, msg: dap.ProtocolMessage) -> None:
         # This should never happen.
@@ -371,6 +391,13 @@ class DAServer:
                     supports_conditional_breakpoints=True,
                     supports_configuration_done_request=True,
                     supports_set_variable=True,
+                    # We could support suspend for debug in an attach but
+                    # launch is harder as nothing can reattach to it. I'm not
+                    # aware of any way to set this conditionally for the
+                    # request so it's kept False for now.
+                    supports_suspend_debuggee=False,
+                    supports_terminate_debuggee=True,
+                    supports_terminate_request=True,
                 ),
             )
         )

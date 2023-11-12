@@ -130,7 +130,7 @@ def test_send_with_cancel() -> None:
                 try:
                     # Even though SO_SNDBUF is set to 4 I still need to send a
                     # lot of data to have this become blocking.
-                    s.send(b"\x00" * 131072, cancel_token)
+                    s.send(b"\x00" * 666666, cancel_token)
                 except Exception as e:
                     state["exp"] = e
 
@@ -166,7 +166,7 @@ def test_send_with_broken_pipe() -> None:
                 try:
                     # Even though SO_SNDBUF is set to 4 I still need to send a
                     # lot of data to have this become blocking.
-                    s.send(b"\x00" * 131072, cancel_token)
+                    s.send(b"\x00" * 666666, cancel_token)
                 except Exception as e:
                     state["exp"] = e
 

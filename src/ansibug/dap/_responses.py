@@ -238,6 +238,13 @@ class StepOutResponse(Response):
 
 
 @dataclasses.dataclass()
+class TerminateResponse(Response):
+    """Response to a TerminateRequest."""
+
+    command = Command.TERMINATE
+
+
+@dataclasses.dataclass()
 class ThreadsResponse(Response, dap={"body": {"threads": "threads"}}):
     """Response to a ThreadsRequest.
 
