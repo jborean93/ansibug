@@ -2,12 +2,62 @@
 This library is a Python based implementation of the [Debug Adapter Protocol](https://microsoft.github.io/debug-adapter-protocol/) (DAP) from Microsoft.
 It is designed to create a universal debugger for Ansible playbooks that can be used by any client that implements DAP.
 Currently the only tested client is with `Visual Studio Code` through a custom fork of the [vscode-ansible](https://github.com/ansible/vscode-ansible) extension so this guide uses examples from that.
+There is a brief [video demo](https://youtu.be/pd2XGRbmt9A) that goes through some of the features of the debugger with Visual Studio Code.
+
+During this preview period the behavior and functionality of the debugger may change based on user feedback.
+Any changes will be documented in the changelog as new releases are pushed out.
+
+Any feedback should be provided through
+
++ [Issues](https://github.com/jborean93/ansibug/issues) for bugs
++ [Discussions](https://github.com/jborean93/ansibug/discussions) to discuss current behaviour and proposed alternatives
+
+Thanks to [ScreenToGif](https://www.screentogif.com/) which was used to create the gifs used in the documentation.
 
 # Protocol Details
 The `ansibug` library is specific a debug adapter implementation for Ansible.
 It is in charge is understanding the messages sent by the client (VSCode) and handling them inside Ansible.
 
 To understand more about `ansibug` and how it fits into the landscape of DAP see [protocol details](./protocol_details.md).
+
+# How to Use
+Installing `ansibug` by itself provides very little benefit as it is designed to be used with a DAP client like Visual Studio Code.
+At the moment the changes needed to use `ansibug` with the Ansible VSCode extension is [currently part of a PR](https://github.com/ansible/vscode-ansible/pull/1006).
+It is possible to get the `.vsix` needed to manually install the extension with the changes from the PR from the GitHub Actions Summary page for the PR.
+A copy of this file is also stored [here](./resources/ansible-ansibug.vsix) which will be available until the PR is merged and part of an official release of the extension.
+
+To install the extension and `ansibug` you can run the following:
+
+```bash
+# Installs ansibug to the current Python environment
+python -m pip install ansibug
+
+# Installs the vscode-ansible extension with ansibug integration
+wget -O ansible-ansibug.vsix https://jborean93.github.io/ansibug/resources/ansible-ansibug.vsix
+code --install-extension ansible-ansibug.vsix
+```
+
+It is important that updates are disabled for this extension which can be done through the GUI interface
+
+![disable_ext_updates](./images/disable_ext_updates.png)
+
+_Note: Failing to disable auto updates will cause the extension to be updated to the latest release without ansibug support._
+
+It is also possible to install the `vsix` file through the extension GUI.
+
+![install_ext_gui](./images/install_ext_gui.png)
+
+It is still required to disable the automatic updates when installing the extension through this method.
+Removing the extension is through the normal extension uninstallation method in VSCode.
+
+Once installed a playbook can be debugged by configuring a [Launch Configuration](https://code.visualstudio.com/docs/editor/debugging#_launch-configurations).
+There are four default samples you can use as a template, for example the `Ansible: Launch Current File` is a template that can be used to debug the current playbook file opened in the editor.
+
+![vscode_launch_configuration](./images/vscode_launch_configuration.png)
+
+See [Debug Configurations](#debug-configurations) for more information on the launch vs attach types and the options that can be specified in the configuration json settings.
+
+It is also possible to automatically launch the opened playbook file with F5 if `launch.json` does not exist or it contains no launch configurations.
 
 # Features
 Using `ansibug` with a playbook can expose the following features:
