@@ -5,6 +5,10 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/jborean93/ansibug/blob/main/LICENSE)
 
 The core component of the Ansible Debug Adapter Protocol used for debugging Ansible playbooks.
+See more documentation for `ansibug` at https://jborean93.github.io/ansibug/.
+
+Please note this library should be considered a preview.
+New features and behaviour changes should be expected during this preview period.
 
 # Debug Adapter
 This library combined with a [Debug Adapter Protocol](https://microsoft.github.io/debug-adapter-protocol/) client, like Visual Studio Code, can be used to run and debug Ansible playbook's interactively.
@@ -26,10 +30,10 @@ There are no guarantees that all features will be supported across Ansible versi
 Any such features will be explicitly called out in the documentation.
 
 # Installation
-Currently this library has not been published on PyPI and must be installed manually from source with:
+This library has been published on PyPI and can be installed with:
 
 ```bash
-python -m pip install https://github.com/jborean93/ansibug/archive/main.zip
+python -m pip install ansibug
 ```
 
 To test out the changes locally run the following:
