@@ -6,7 +6,9 @@ from __future__ import annotations
 import base64
 import collections.abc
 import contextlib
+import errno
 import logging
+import os
 import os.path
 import pathlib
 import select
@@ -93,6 +95,46 @@ def parse_addr_string(
 
     else:
         raise ValueError(f"An address must be for the tcp or uds scheme")
+
+
+def create_uds_with_mask(
+    addr: str,
+    mask: int,
+) -> socket.socket:
+    """Create a server Unix Domain Socket with mask specified.
+
+    This function can be used to create a bound Unix Domain Socket with the
+    mask specified.
+
+    Args:
+        addr: The UDS address to bind to.
+        mask: The mask to set on the UDS created.
+
+    Returns:
+        socket.socket: The bound UDS that was created.
+    """
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    original_umask = None
+    try:
+        try:
+            # Works on Linux only
+            os.fchmod(sock.fileno(), mask)
+        except OSError as e:
+            if e.errno != errno.EINVAL:  # pragma: nocover
+                raise
+
+            # fchmod doesn't work on other platforms like macOS. At this point
+            # no thread should have started so it should be safe to use the
+            # umask before binding the socket.
+            original_umask = os.umask(~mask)
+
+        sock.bind(addr)
+
+    finally:
+        if original_umask is not None:
+            os.umask(original_umask)
+
+    return sock
 
 
 class SocketHelper:
@@ -201,7 +243,15 @@ class SocketCancellationToken:
         timeout: float = 0,
         cancel_socket: socket.socket | None = None,
     ) -> tuple[socket.socket, t.Any]:
-        with self.with_cancel(lambda: sock.shutdown(socket.SHUT_RDWR)):
+        def _cancel() -> None:
+            # Using shutdown(socket.SHUT_RDWR) fails on macOS with 'Socket is
+            # not connected'. Fallback to close() if the shutdown failed.
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                sock.close()
+
+        with self.with_cancel(_cancel):
             try:
                 # When cancelled, select will detect that sock is ready for a
                 # read and accept() will raise OSError. In the rare event the
@@ -221,6 +271,7 @@ class SocketCancellationToken:
                 return rd[0].accept()
 
             except OSError:
+                # On macOS, the socket fd is closed on cancel
                 if self._cancelled:
                     raise CancelledError()
                 else:
