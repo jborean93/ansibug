@@ -1,7 +1,14 @@
 # Stepping
-When a breakpoint is hit there are 4 options that are available
+When a breakpoint is hit there are 4 options that are available.
+Depending on the debug configuration type used, the following stepping panel will look like one of the following:
 
-![stepping_options](./images/stepping_options.png)
+**Stop**
+
+![stepping_options_stop](./images/stepping_options_stop.png)
+
+**Disconnect**
+
+![stepping_options_disconnect](./images/stepping_options_disconnect.png)
 
 In order the options are:
 
@@ -16,11 +23,18 @@ In order the options are:
   + Will step out on the parent stack frame
   + For example when run in a task inside an `include_*` tasks, a step out will break on the task after the `include_*`
 + Restart
-  + Will stop the debugger for the current process and start a new identical one
-  + The existing process will still continue to run before its restarted
-+ Stop
-  + Will stop the debugger for the current process
-  + The existing process will still continue to run
+  + Currently this works just like `Stop`
++ Stop (Default for Launch)
+  + Will stop the executing `ansible-playbook` process that is being debugged
+  + No more tasks/plays will be run and the debug session will be closed.
++ Disconnect (Default for Attach)
+  + Will disconnect the debug session
+  + The `ansible-process` will continue to run in the background
+
+While the defaults for a launch and attach session is to stop or disconnect respectively, it is possible to choose the opposite by either holding down the alt key or selecting the other option in the drop down menu for that icon.
+
+Currently `ansibug` does not support disconnect with suspend or a way to reattach to a disconnected session.
+These features may be added in the future if there is demand for it.
 
 You can use the stack frames on the host list to determine the current level the task is running under.
 A step out will move back a frame and onto the next task after it.
