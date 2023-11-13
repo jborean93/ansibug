@@ -2,6 +2,7 @@
 
 [![Test workflow](https://github.com/jborean93/ansibug/actions/workflows/ci.yml/badge.svg)](https://github.com/jborean93/ansibug/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/jborean93/ansibug/graph/badge.svg?token=JHxSi6T0JJ)](https://codecov.io/gh/jborean93/ansibug)
+[![PyPI version](https://badge.fury.io/py/ansibug.svg)](https://badge.fury.io/py/ansibug)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/jborean93/ansibug/blob/main/LICENSE)
 
 The core component of the Ansible Debug Adapter Protocol used for debugging Ansible playbooks.
@@ -23,6 +24,7 @@ The following Python requirements must be met before using this library:
 
 + Python 3.9+ (dependent on `ansible-core` support)
 + `ansible-core >= 2.14.0`
++ Linux or macOS (no Windows)
 
 The debugger aims to continue to support the current `ansible-core` versions that have no reached End Of Life.
 See the [ansible-core support matrix](https://docs.ansible.com/ansible/devel/reference_appendices/release_and_maintenance.html#ansible-core-support-matrix) to see the current versions and the control node python versions for those versions.
