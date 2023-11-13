@@ -39,6 +39,7 @@ from ._requests import (
     StackTraceRequest,
     StepInRequest,
     StepOutRequest,
+    TerminateRequest,
     ThreadsRequest,
     VariablesRequest,
 )
@@ -61,6 +62,7 @@ from ._responses import (
     StackTraceResponse,
     StepInResponse,
     StepOutResponse,
+    TerminateResponse,
     ThreadsResponse,
     VariablesResponse,
 )
@@ -146,6 +148,8 @@ __all__ = [
     "StoppedEvent",
     "StoppedReason",
     "TerminatedEvent",
+    "TerminateRequest",
+    "TerminateResponse",
     "Thread",
     "ThreadEvent",
     "ThreadsRequest",

@@ -543,6 +543,23 @@ class StepOutRequest(
 
 
 @dataclasses.dataclass()
+class TerminateRequest(Request, dap={"arguments": {"restart": "restart"}}):
+    """Request to gracefully terminate the debuggee.
+
+    Request sent by the client to gracefully terminate the debuggee. This is
+    sent before a DisconnectRequest as a second attempt if the terminate didn't
+    occur.
+
+    Args:
+        restart: The request is part of a restart sequence.
+    """
+
+    command = Command.TERMINATE
+
+    restart: bool = False
+
+
+@dataclasses.dataclass()
 class ThreadsRequest(Request):
     """Request to retrieve a list of all thread.
 

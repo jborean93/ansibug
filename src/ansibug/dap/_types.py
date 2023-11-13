@@ -74,6 +74,9 @@ class Capabilities(
         "supportsGotoTargetsRequest": "supports_goto_targets_request",
         "supportsStepInTargetsRequest": "supports_step_in_targets_request",
         "supportsCompletionsRequest": "supports_completions_request",
+        "supportTerminateDebuggee": "supports_terminate_debuggee",
+        "supportSuspendDebuggee": "supports_suspend_debuggee",
+        "supportsTerminateRequest": "supports_terminate_request",
         "supportsClipboardContext": "supports_clipboard_context",
     },
 ):
@@ -103,6 +106,12 @@ class Capabilities(
             StepInTargetsRequest.
         supports_completions_request: The debug adapter supports the
             CompletionsRequest.
+        supports_terminate_debuggee: The debug adapter supports the
+            terminate_debuggee` attribute on the DisconnectRequest.
+        supports_suspend_debuggee: The debug adapter supports the
+            suspend_debuggee attribute on the DisconnectRequest.
+        supports_terminate_request: The debug adapter supports the
+            TerminateRequest.
         supports_clipboard_context: The debug adapter supports the clipboard
             context value in the evaluate request.
     """
@@ -127,14 +136,14 @@ class Capabilities(
     # supports_exception_options
     # supports_value_formatting_options
     # supports_exception_info_request
-    # support_terminate_debuggee
-    # support_suspend_debuggee
+    supports_terminate_debuggee: bool = False
+    supports_suspend_debuggee: bool = False
     # supports_delayed_stack_trace_loading
     # supports_loaded_sources_request
     # supports_log_points
     # supports_terminate_threads_request
     # supports_set_expression
-    # supports_terminate_request
+    supports_terminate_request: bool = False
     # supports_data_breakpoints
     # supports_read_memory_request
     # supports_write_memory_request

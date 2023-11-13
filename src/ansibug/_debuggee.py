@@ -95,6 +95,10 @@ def get_pid_info_path(pid: int) -> pathlib.Path:
     return pathlib.Path(tmpdir) / f"ansibug-pid-{pid}"
 
 
+class EndStrategy(Exception):
+    """Exception used to end the strategy plugin."""
+
+
 class DAProtocol(MPProtocol):
     def __init__(
         self,
@@ -135,19 +139,22 @@ class DAProtocol(MPProtocol):
 
 
 class DebugState(t.Protocol):
-    def ended(self) -> None:
-        ...  # pragma: nocover
+    def continue_request(
+        self,
+        request: dap.ContinueRequest,
+    ) -> dap.ContinueResponse:
+        raise NotImplementedError()  # pragma: nocover
+
+    def disconnect(
+        self,
+        request: dap.DisconnectRequest,
+    ) -> None:
+        raise NotImplementedError()  # pragma: nocover
 
     def evaluate(
         self,
         request: dap.EvaluateRequest,
     ) -> dap.EvaluateResponse:
-        raise NotImplementedError()  # pragma: nocover
-
-    def continue_request(
-        self,
-        request: dap.ContinueRequest,
-    ) -> dap.ContinueResponse:
         raise NotImplementedError()  # pragma: nocover
 
     def get_scopes(
@@ -221,6 +228,7 @@ class AnsibleDebugger(metaclass=Singleton):
         self._send_thread: threading.Thread | None = None
         self._strategy_connected = threading.Condition()
         self._strategy: DebugState | None = None
+        self._terminated = False
 
         self._thread_counter = 2  # 1 is always the main thread
         self._stackframe_counter = 1
@@ -426,7 +434,9 @@ class AnsibleDebugger(metaclass=Singleton):
 
         if not from_send_thread and self._send_thread:
             # If we aren't connected we need to cancel the queue start method
-            # before trying to join the thread.
+            # before trying to join the thread. If we are connected we want to
+            # add None to the queue for the thread to exit gracefully once all
+            # messages have been sent.
             if not self._adapter_connected:
                 self._cancel_token.cancel()
 
@@ -444,8 +454,14 @@ class AnsibleDebugger(metaclass=Singleton):
 
         # Ensure the strategy isn't waiting for a response to anything
         with self._strategy_connected:
-            if self._strategy:
-                self._strategy.ended()
+            if self._strategy and not self._terminated:
+                self._strategy.disconnect(
+                    dap.DisconnectRequest(
+                        restart=False,
+                        terminate_debuggee=False,
+                        suspend_debuggee=False,
+                    )
+                )
 
         self._proc_pid_file.unlink(missing_ok=True)
 
@@ -577,6 +593,14 @@ class AnsibleDebugger(metaclass=Singleton):
         strategy = self._get_strategy()
         resp = strategy.continue_request(msg)
         self.queue_msg(resp)
+
+    @process_message.register
+    def _(
+        self,
+        msg: dap.DisconnectRequest,
+    ) -> None:
+        self._disconnect(msg)
+        # The response is sent by the debug adapter.
 
     @process_message.register
     def _(
@@ -717,6 +741,15 @@ class AnsibleDebugger(metaclass=Singleton):
     @process_message.register
     def _(
         self,
+        msg: dap.TerminateRequest,
+    ) -> None:
+        self._terminated = True
+        self._disconnect(dap.DisconnectRequest(terminate_debuggee=True))
+        self.queue_msg(dap.TerminateResponse(request_seq=msg.seq))
+
+    @process_message.register
+    def _(
+        self,
         msg: dap.ThreadsRequest,
     ) -> None:
         strategy = self._get_strategy()
@@ -787,6 +820,17 @@ class AnsibleDebugger(metaclass=Singleton):
             end_line=end_line,
         )
 
+    def _disconnect(
+        self,
+        msg: dap.DisconnectRequest,
+    ) -> None:
+        self._debug_config = DebugConfiguration()
+        self._breakpoints = {}
+
+        strategy = self._get_strategy()
+        strategy.disconnect(msg)
+        self._send_queue.put(None)
+
     def _send_task(
         self,
         mp_queue: MPQueue,
@@ -809,7 +853,6 @@ class AnsibleDebugger(metaclass=Singleton):
             while msg := self._send_queue.get():
                 log.info("Sending to debug adapter %r", msg)
                 mp_queue.send(msg)
-                self._send_queue.task_done()
 
         except CancelledError:
             pass

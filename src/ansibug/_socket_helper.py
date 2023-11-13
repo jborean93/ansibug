@@ -151,7 +151,7 @@ class SocketHelper:
 
         data = bytes(buffer[:read])
         if log.isEnabledFor(logging.DEBUG):
-            log.debug("Socket %s recv(%d): %s", self.use, n, base64.b64encode(data).decode())
+            log.debug("Socket %s recv(%d): '%s'", self.use, n, base64.b64encode(data).decode())
         return data
 
     def send(
@@ -161,7 +161,7 @@ class SocketHelper:
     ) -> None:
         """Wraps send but ensures all the data is sent."""
         if log.isEnabledFor(logging.DEBUG):
-            log.debug("Socket %s send: %s", self.use, base64.b64encode(data).decode())
+            log.debug("Socket %s send: '%s'", self.use, base64.b64encode(data).decode())
         cancel_token.sendall(self._sock, data)
 
     def shutdown(

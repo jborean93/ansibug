@@ -14,7 +14,9 @@ author: Jordan Borean (@jborean93)
 """
 
 import collections.abc
+import enum
 import inspect
+import logging
 import os
 import threading
 import traceback
@@ -30,7 +32,6 @@ from ansible.parsing.dataloader import DataLoader
 from ansible.playbook.block import Block
 from ansible.playbook.conditional import Conditional
 from ansible.playbook.included_file import IncludedFile
-from ansible.playbook.play import Play
 from ansible.playbook.play_context import PlayContext
 from ansible.playbook.task import Task
 from ansible.plugins.strategy.linear import StrategyModule as LinearStrategy
@@ -39,7 +40,12 @@ from ansible.utils.display import Display
 from ansible.vars.manager import VariableManager
 
 import ansibug
-from ansibug._debuggee import AnsibleDebugger, DebugState
+from ansibug._debuggee import (
+    AnsibleDebugger,
+    AnsibleLineBreakpoint,
+    DebugState,
+    EndStrategy,
+)
 
 from ..plugin_utils._breakpoints import register_block_breakpoints
 from ..plugin_utils._repl_util import (
@@ -50,6 +56,27 @@ from ..plugin_utils._repl_util import (
 )
 
 display = Display()
+log = logging.getLogger("ansibug.strategy")
+
+
+class ThreadState(enum.Enum):
+    CONTINUE = enum.auto()
+    """Thread will continue to run until a breakpoint is hit."""
+
+    STEP_IN = enum.auto()
+    """Thread should step in and break on the next task."""
+
+    STEP_OUT = enum.auto()
+    """Thread should step out and break on the next task outside of the stack."""
+
+    STEP_OVER = enum.auto()
+    """Thread should step over and break on the next task in the same stack."""
+
+    WAIT = enum.auto()
+    """Thread has hit a breakpoint and is waiting for the client to respond."""
+
+    END = enum.auto()
+    """Thread has been requested to end and should not process any more tasks."""
 
 
 class AnsibleThread:
@@ -62,9 +89,8 @@ class AnsibleThread:
         self.id = id
         self.host = host
         self.stack_frames: list[int] = []
-
-    stepping_type: t.Literal["in", "out", "over"] | None = None
-    stepping_task: Task | None = None
+        self.state: ThreadState = ThreadState.CONTINUE
+        self._stopped_task: Task | None = None
 
     def to_dap(self) -> ansibug.dap.Thread:
         return ansibug.dap.Thread(
@@ -72,44 +98,122 @@ class AnsibleThread:
             name=self.host.get_name() if self.host else "main",
         )
 
-    def break_step_over(
+    def set_state(
+        self,
+        state: ThreadState,
+    ) -> None:
+        log.debug("Setting thread %d state to %s->%s", self.id, self.state, state)
+
+        if state == ThreadState.STEP_OUT and self._stopped_task:
+            # If a thread has been set to step out we want to make comparisons
+            # later on easier by setting the stopped task to the parent include
+            # task.
+            task = self._stopped_task
+            while task := task._parent:
+                if isinstance(task, Task) and task.action in C._ACTION_ALL_INCLUDES:
+                    break
+
+            self._stopped_task = task
+
+        elif (
+            state == ThreadState.STEP_IN
+            and self._stopped_task
+            and self._stopped_task.action not in C._ACTION_ALL_INCLUDES
+        ):
+            # If changing to STEP_IN but the stopped task was not an include,
+            # treat it like STEP_OVER.
+            state = ThreadState.STEP_OVER
+
+        self.state = state
+
+    def should_break(
+        self,
+        task: Task,
+        breakpoint: AnsibleLineBreakpoint | None,
+    ) -> ansibug.dap.StoppedEvent | None:
+        stopped_kwargs: dict[str, t.Any] = {}
+
+        if self._break_step_over(task):
+            stopped_kwargs = {
+                "reason": ansibug.dap.StoppedReason.STEP,
+                "description": "Step over",
+                "thread_id": self.id,
+            }
+            self._stopped_task = task
+
+        elif self._break_step_out(task):
+            stopped_kwargs = {
+                "reason": ansibug.dap.StoppedReason.STEP,
+                "description": "Step out",
+                "thread_id": self.id,
+            }
+
+        elif self._break_step_in():
+            stopped_kwargs = {
+                "reason": ansibug.dap.StoppedReason.STEP,
+                "description": "Step in",
+                "thread_id": self.id,
+            }
+
+        elif breakpoint and self.state != ThreadState.STEP_OUT:
+            # Breakpoints are ignored when stepping out.
+            stopped_kwargs = {
+                "reason": ansibug.dap.StoppedReason.BREAKPOINT,
+                "description": "Breakpoint hit",
+                "hit_breakpoint_ids": [breakpoint.id],
+                "thread_id": self.id,
+            }
+
+        if stopped_kwargs:
+            # Store this task so the step_* actions can use it when verifying
+            # if the requested action for this task should cause a stop.
+            self._stopped_task = task
+            self.state = ThreadState.WAIT
+            return ansibug.dap.StoppedEvent(**stopped_kwargs)
+
+        return None
+
+    def _break_step_over(
         self,
         task: Task,
     ) -> bool:
-        if self.stepping_type != "over" or not self.stepping_task:
+        if self.state != ThreadState.STEP_OVER or not self._stopped_task:
             return False
 
+        # Get the parent task of the current task being evaluated as well as
+        # the task which was resumed with step over. If they are the same then
+        # the task should stop.
+        task_parent = self._get_parent_task(task)
+        stopped_parent = self._get_parent_task(self._stopped_task)
+
+        return getattr(task_parent, "_uuid", None) == getattr(stopped_parent, "_uuid", None)
+
+    def _break_step_in(self) -> bool:
+        # If in, then the first task to call this will need to break.
+        return self.state == ThreadState.STEP_IN
+
+    def _break_step_out(
+        self,
+        task: Task,
+    ) -> bool:
+        if self.state != ThreadState.STEP_OUT or not self._stopped_task:
+            return False
+
+        # If step out, we only want to break if the current task's parent does
+        # not match the stopped task stored at state change (the include). If
+        # the parent matches it means we are still in the same include scope.
+        task_parent = self._get_parent_task(task)
+        return getattr(task_parent, "_uuid", None) != self._stopped_task._uuid
+
+    def _get_parent_task(
+        self,
+        task: Task,
+    ) -> Task | None:
         while task := task._parent:
             if isinstance(task, Task):
-                break
+                return task
 
-        stepping_task = self.stepping_task
-        while stepping_task := stepping_task._parent:
-            if isinstance(stepping_task, Task):
-                break
-
-        # If over, this should only break if the task shares the same parent as
-        # the previous stepping task.
-        return getattr(stepping_task, "_uuid", None) == getattr(task, "_uuid", None)
-
-    def break_step_in(self) -> bool:
-        # If in, then the first task to call this will need to break.
-        return self.stepping_type == "in"
-
-    def break_step_out(
-        self,
-        task: Task,
-    ) -> bool:
-        if self.stepping_type != "out" or not self.stepping_task:
-            return False
-
-        # If out, then the first task that does not have the stepping_task as
-        # its parent will need to break.
-        while task := task._parent:
-            if task._uuid == self.stepping_task._uuid:
-                return False
-
-        return True
+        return None
 
 
 class AnsibleStackFrame:
@@ -269,6 +373,8 @@ class AnsibleDictWithRawStoreVariable(AnsibleDictVariable):
 
 
 class AnsibleHostVarsVariable(AnsibleDictVariable):
+    """AnsibleDictVariable with integration into a host variable manager."""
+
     def __init__(
         self,
         id: int,
@@ -288,12 +394,26 @@ class AnsibleHostVarsVariable(AnsibleDictVariable):
 
 
 class AnsibleDebugState(DebugState):
+    """Ansible Debug State.
+
+    A class used to handle the debug state with a strategy plugin. It exposes
+    the methods needed for interaction with the ansibug debugger.
+
+    Args:
+        debugger: The debugger instance connected to the debug adapter.
+        loader: The data loader used by the strategy plugin.
+        variable_manager: The variable manager for the strategy.
+
+    Attributes:
+        threads: The debug adapter threads.
+        stackframes: The debug adapter stack frames.
+        variables: The debug adapter variables.
+    """
+
     def __init__(
         self,
         debugger: AnsibleDebugger,
         loader: DataLoader,
-        iterator: PlayIterator,
-        play: Play,
         variable_manager: VariableManager,
     ) -> None:
         self.threads: dict[int, AnsibleThread] = {1: AnsibleThread(id=1, host=None)}
@@ -302,26 +422,32 @@ class AnsibleDebugState(DebugState):
 
         self._debugger = debugger
         self._loader = loader
-        self._iterator = iterator
-        self._play = play
         self._variable_mamanger = variable_manager
-
         self._waiting_condition = threading.Condition()
-        self._waiting_threads: dict[int, t.Literal["in", "out", "over", "wait"] | None] = {}
-        self._waiting_ended = False
 
-    def process_task(
+    def start_task(
         self,
         host: Host,
         task: Task,
         task_vars: dict[str, t.Any],
-    ) -> AnsibleStackFrame:
+    ) -> None:
+        """Start a task.
+
+        Processes the Ansible task before it is run. Processing a task will
+        synchronize the stack frames by adding or removing the frames needed
+        as well as check if a stopped even should be triggered.
+
+        Args:
+            host: The inventory host for the task.
+            task: The task to process.
+            task_vars: The task variables.
+        """
         thread: AnsibleThread | None = next(
             iter([t for t in self.threads.values() if t.host == host]),
             None,
         )
         if not thread:
-            thread = self.add_thread(host)
+            thread = self._add_thread(host)
 
         if thread.stack_frames:
             # The parent is the implicit block and we want the parent of that.
@@ -367,7 +493,6 @@ class AnsibleDebugState(DebugState):
         with self._waiting_condition:
             tid = thread.id
 
-            stopped_kwargs: dict[str, t.Any] = {}
             line_breakpoint = self._debugger.get_breakpoint(path, line)
             if line_breakpoint and line_breakpoint.source_breakpoint.condition:
                 cond = Conditional(loader=self._loader)
@@ -380,71 +505,31 @@ class AnsibleDebugState(DebugState):
                     # Treat a broken template as a false condition result.
                     line_breakpoint = None
 
-            if thread.break_step_over(task):
-                stopped_kwargs = {
-                    "reason": ansibug.dap.StoppedReason.STEP,
-                    "description": "Step over",
-                }
+            stopped_event = thread.should_break(task, line_breakpoint)
 
-            elif thread.break_step_out(task):
-                stopped_kwargs = {
-                    "reason": ansibug.dap.StoppedReason.STEP,
-                    "description": "Step out",
-                }
-
-            elif thread.break_step_in():
-                stopped_kwargs = {
-                    "reason": ansibug.dap.StoppedReason.STEP,
-                    "description": "Step in",
-                }
-
-            # Breakpoints are ignored when in step out mode.
-            elif thread.stepping_type != "out" and line_breakpoint:
-                stopped_kwargs = {
-                    "reason": ansibug.dap.StoppedReason.BREAKPOINT,
-                    "description": "Breakpoint hit",
-                    "hit_breakpoint_ids": [line_breakpoint.id],
-                }
-
-            if stopped_kwargs:
-                stopped_event = ansibug.dap.StoppedEvent(
-                    thread_id=tid,
-                    **stopped_kwargs,
-                )
-                self._waiting_threads[tid] = "wait"
+            if stopped_event:
                 self._debugger.queue_msg(stopped_event)
-                self._waiting_condition.wait_for(lambda: self._waiting_ended or self._waiting_threads[tid] != "wait")
-                if self._waiting_ended:
-                    # ended() was called and the connection has been closed, do
-                    # not try and process the result.
-                    return sf
+                self._waiting_condition.wait_for(lambda: self.threads[tid].state != ThreadState.WAIT)
 
-                stepping_type = self._waiting_threads.pop(tid)
-                assert stepping_type != "wait"  # This should never happen due to the condition above
-                if stepping_type == "in" and task.action not in C._ACTION_ALL_INCLUDES:
-                    stepping_type = "over"
+                # If thread is marked as end then the client has requested us
+                # to terminate the debuggee.
+                if thread.state == ThreadState.END:
+                    raise EndStrategy()
 
-                if stepping_type:
-                    thread.stepping_type = stepping_type
-
-                    stepping_task = task
-                    if stepping_type == "out":
-                        while stepping_task := stepping_task._parent:
-                            if isinstance(stepping_task, Task) and stepping_task.action in C._ACTION_ALL_INCLUDES:
-                                break
-
-                    thread.stepping_task = stepping_task
-                else:
-                    thread.stepping_type = None
-                    thread.stepping_task = None
-
-        return sf
-
-    def process_task_result(
+    def end_task(
         self,
         host: Host,
         task: Task,
     ) -> None:
+        """Ends a task.
+
+        Marks the task on the host specified as complete adjusting the stack
+        frames for that host as needed.
+
+        Args:
+            host: The inventory host for the task.
+            task: The task to process.
+        """
         thread = next(iter([t for t in self.threads.values() if t.host == host]))
 
         if task.action not in C._ACTION_ALL_INCLUDES:
@@ -453,65 +538,127 @@ class AnsibleDebugState(DebugState):
             for variable_id in sf.variables:
                 del self.variables[variable_id]
 
-    def add_thread(
-        self,
-        host: Host,
-    ) -> AnsibleThread:
-        tid = self._debugger.next_thread_id()
+    def exit_threads(self) -> None:
+        """Exits all active threads.
 
-        thread = self.threads[tid] = AnsibleThread(
-            id=tid,
-            host=host,
-        )
-        self._debugger.queue_msg(
-            ansibug.dap.ThreadEvent(
-                reason="started",
-                thread_id=tid,
+        Exits all active threads and passes along the exit event to the debug
+        adapter. This is used by the strategy plugin when the inventory has
+        been refreshed or the strategy is complete.
+        """
+        for tid in list(self.threads.keys()):
+            if tid == 1:
+                continue
+
+            del self.threads[tid]
+            self._debugger.queue_msg(
+                ansibug.dap.ThreadEvent(
+                    reason="exited",
+                    thread_id=tid,
+                )
             )
-        )
 
-        return thread
-
-    def add_variable(
+    def continue_request(
         self,
-        stackframe: AnsibleStackFrame,
-        value: collections.abc.Mapping[t.Any, t.Any] | collections.abc.Sequence[t.Any],
-        var_factory: t.Callable[[int], AnsibleVariable] | None = None,
-    ) -> AnsibleVariable:
-        var_id = self._debugger.next_variable_id()
-
-        if var_factory:
-            var = var_factory(var_id)
-
-        elif isinstance(value, collections.abc.Mapping):
-            var = AnsibleDictVariable(var_id, stackframe, value)
-
+        request: ansibug.dap.ContinueRequest,
+    ) -> ansibug.dap.ContinueResponse:
+        if request.single_thread:
+            self._resume_threads([request.thread_id], ThreadState.CONTINUE)
+            all_threads_continued = False
         else:
-            var = AnsibleListVariable(var_id, stackframe, value)
+            self._resume_threads(self.threads.keys(), ThreadState.CONTINUE)
+            all_threads_continued = True
 
-        self.variables[var_id] = var
-        stackframe.variables.append(var_id)
-
-        return var
-
-    def remove_thread(
-        self,
-        tid: int,
-    ) -> None:
-        self.threads.pop(tid, None)
-
-        self._debugger.queue_msg(
-            ansibug.dap.ThreadEvent(
-                reason="exited",
-                thread_id=tid,
-            )
+        return ansibug.dap.ContinueResponse(
+            request_seq=request.seq,
+            all_threads_continued=all_threads_continued,
         )
 
-    def ended(self) -> None:
-        with self._waiting_condition:
-            self._waiting_ended = True
-            self._waiting_threads = {}
-            self._waiting_condition.notify_all()
+    def disconnect(
+        self,
+        request: ansibug.dap.DisconnectRequest,
+    ) -> None:
+        state = ThreadState.END if request.terminate_debuggee else ThreadState.CONTINUE
+        self._resume_threads(list(self.threads.keys()), state)
+
+    def get_scopes(
+        self,
+        request: ansibug.dap.ScopesRequest,
+    ) -> ansibug.dap.ScopesResponse:
+        sf = self.stackframes[request.frame_id]
+
+        # This is a very basic templating of the args and doesn't handle loops.
+        templar = Templar(loader=self._loader, variables=sf.task_vars)
+        task_args = templar.template(sf.task.args, fail_on_undefined=False)
+        module_opts = self._add_variable(
+            sf,
+            task_args,
+            # Any changes to our templated var also needs to reflect back onto
+            # the raw datastore so use a custom variable class.
+            var_factory=lambda i: AnsibleDictWithRawStoreVariable(i, sf, task_args, sf.task.args),
+        )
+        sf.variables_options_id = module_opts.id
+
+        task_vars = self._add_variable(sf, sf.task_vars)
+        sf.variables_taskvar_id = task_vars.id
+
+        # We use the hostvars but for simplicity sake we also overlay the task
+        # vars that might be set as these will contain things like play/task
+        # vars. The hostvars are a more persistent set of vars that last beyond
+        # this task so is important to give the user a way to set these
+        # persistently in the debugger.
+        host_vars_amalgamated = {k: v for k, v in sf.task_vars["hostvars"][sf.task_vars["inventory_hostname"]].items()}
+        for k, v in task_vars.get():
+            if k not in host_vars_amalgamated:
+                host_vars_amalgamated[k] = v
+
+        host_vars = self._add_variable(
+            sf,
+            host_vars_amalgamated,
+            var_factory=lambda i: AnsibleHostVarsVariable(
+                i, sf, host_vars_amalgamated, sf.task_vars["inventory_hostname"], self._variable_mamanger
+            ),
+        )
+        sf.variables_hostvars_id = host_vars.id
+
+        global_vars = self._add_variable(sf, sf.task_vars["vars"])
+
+        scopes: list[ansibug.dap.Scope] = [
+            # Options for the module itself
+            ansibug.dap.Scope(
+                name="Module Options",
+                variables_reference=module_opts.id,
+                named_variables=module_opts.named_variables,
+                indexed_variables=module_opts.indexed_variables,
+            ),
+            # Variables sent to the worker, complete snapshot for the task.
+            ansibug.dap.Scope(
+                name="Task Variables",
+                variables_reference=task_vars.id,
+                named_variables=task_vars.named_variables,
+                indexed_variables=task_vars.indexed_variables,
+            ),
+            # Scoped task vars but for the current host
+            ansibug.dap.Scope(
+                name="Host Variables",
+                variables_reference=host_vars.id,
+                named_variables=host_vars.named_variables,
+                indexed_variables=host_vars.indexed_variables,
+                expensive=True,
+            ),
+            # Scoped task vars but the full vars dict
+            ansibug.dap.Scope(
+                name="Global Variables",
+                variables_reference=global_vars.id,
+                named_variables=global_vars.named_variables,
+                indexed_variables=global_vars.indexed_variables,
+                expensive=True,
+            ),
+        ]
+
+        return ansibug.dap.ScopesResponse(
+            request_seq=request.seq,
+            scopes=scopes,
+        )
 
     def evaluate(
         self,
@@ -583,102 +730,6 @@ class AnsibleDebugState(DebugState):
             type=value_type,
         )
 
-    def continue_request(
-        self,
-        request: ansibug.dap.ContinueRequest,
-    ) -> ansibug.dap.ContinueResponse:
-        if request.single_thread:
-            self._continue([request.thread_id], None)
-            all_threads_continued = False
-        else:
-            self._continue(self._waiting_threads.keys(), None)
-            all_threads_continued = True
-
-        return ansibug.dap.ContinueResponse(
-            request_seq=request.seq,
-            all_threads_continued=all_threads_continued,
-        )
-
-    def get_scopes(
-        self,
-        request: ansibug.dap.ScopesRequest,
-    ) -> ansibug.dap.ScopesResponse:
-        sf = self.stackframes[request.frame_id]
-
-        # This is a very basic templating of the args and doesn't handle loops.
-        templar = Templar(loader=self._loader, variables=sf.task_vars)
-        task_args = templar.template(sf.task.args, fail_on_undefined=False)
-        module_opts = self.add_variable(
-            sf,
-            task_args,
-            # Any changes to our templated var also needs to reflect back onto
-            # the raw datastore so use a custom variable class.
-            var_factory=lambda i: AnsibleDictWithRawStoreVariable(i, sf, task_args, sf.task.args),
-        )
-        sf.variables_options_id = module_opts.id
-
-        task_vars = self.add_variable(sf, sf.task_vars)
-        sf.variables_taskvar_id = task_vars.id
-
-        # We use the hostvars but for simplicity sake we also overlay the task
-        # vars that might be set as these will contain things like play/task
-        # vars. The hostvars are a more persistent set of vars that last beyond
-        # this task so is important to give the user a way to set these
-        # persistently in the debugger.
-        host_vars_amalgamated = {k: v for k, v in sf.task_vars["hostvars"][sf.task_vars["inventory_hostname"]].items()}
-        for k, v in task_vars.get():
-            if k not in host_vars_amalgamated:
-                host_vars_amalgamated[k] = v
-
-        host_vars = self.add_variable(
-            sf,
-            host_vars_amalgamated,
-            var_factory=lambda i: AnsibleHostVarsVariable(
-                i, sf, host_vars_amalgamated, sf.task_vars["inventory_hostname"], self._variable_mamanger
-            ),
-        )
-        sf.variables_hostvars_id = host_vars.id
-
-        global_vars = self.add_variable(sf, sf.task_vars["vars"])
-
-        scopes: list[ansibug.dap.Scope] = [
-            # Options for the module itself
-            ansibug.dap.Scope(
-                name="Module Options",
-                variables_reference=module_opts.id,
-                named_variables=module_opts.named_variables,
-                indexed_variables=module_opts.indexed_variables,
-            ),
-            # Variables sent to the worker, complete snapshot for the task.
-            ansibug.dap.Scope(
-                name="Task Variables",
-                variables_reference=task_vars.id,
-                named_variables=task_vars.named_variables,
-                indexed_variables=task_vars.indexed_variables,
-            ),
-            # Scoped task vars but for the current host
-            ansibug.dap.Scope(
-                name="Host Variables",
-                variables_reference=host_vars.id,
-                named_variables=host_vars.named_variables,
-                indexed_variables=host_vars.indexed_variables,
-                expensive=True,
-            ),
-            # Scoped task vars but the full vars dict
-            ansibug.dap.Scope(
-                name="Global Variables",
-                variables_reference=global_vars.id,
-                named_variables=global_vars.named_variables,
-                indexed_variables=global_vars.indexed_variables,
-                expensive=True,
-            ),
-        ]
-
-        return ansibug.dap.ScopesResponse(
-            request_seq=request.seq,
-            scopes=scopes,
-        )
-
     def get_stacktrace(
         self,
         request: ansibug.dap.StackTraceRequest,
@@ -714,7 +765,7 @@ class AnsibleDebugState(DebugState):
         for name, value in variable.get():
             child_var: AnsibleVariable | None = None
             if isinstance(value, (collections.abc.Mapping, collections.abc.Sequence)) and not isinstance(value, str):
-                child_var = self.add_variable(variable.stackframe, value)
+                child_var = self._add_variable(variable.stackframe, value)
 
             variables.append(
                 ansibug.dap.Variable(
@@ -745,7 +796,7 @@ class AnsibleDebugState(DebugState):
         if isinstance(new_value, (collections.abc.Mapping, collections.abc.Sequence)) and not isinstance(
             new_value, str
         ):
-            new_container = self.add_variable(variable.stackframe, new_value)
+            new_container = self._add_variable(variable.stackframe, new_value)
 
         return ansibug.dap.SetVariableResponse(
             request_seq=request.seq,
@@ -760,28 +811,69 @@ class AnsibleDebugState(DebugState):
         self,
         request: ansibug.dap.StepInRequest,
     ) -> None:
-        self._continue([request.thread_id], "in")
+        self._resume_threads([request.thread_id], ThreadState.STEP_IN)
 
     def step_out(
         self,
         request: ansibug.dap.StepOutRequest,
     ) -> None:
-        self._continue([request.thread_id], "out")
+        self._resume_threads([request.thread_id], ThreadState.STEP_OUT)
 
     def step_over(
         self,
         request: ansibug.dap.NextRequest,
     ) -> None:
-        self._continue([request.thread_id], "over")
+        self._resume_threads([request.thread_id], ThreadState.STEP_OVER)
 
-    def _continue(
+    def _add_thread(
+        self,
+        host: Host,
+    ) -> AnsibleThread:
+        tid = self._debugger.next_thread_id()
+
+        thread = self.threads[tid] = AnsibleThread(
+            id=tid,
+            host=host,
+        )
+        self._debugger.queue_msg(
+            ansibug.dap.ThreadEvent(
+                reason="started",
+                thread_id=tid,
+            )
+        )
+
+        return thread
+
+    def _add_variable(
+        self,
+        stackframe: AnsibleStackFrame,
+        value: collections.abc.Mapping[t.Any, t.Any] | collections.abc.Sequence[t.Any],
+        var_factory: t.Callable[[int], AnsibleVariable] | None = None,
+    ) -> AnsibleVariable:
+        var_id = self._debugger.next_variable_id()
+
+        if var_factory:
+            var = var_factory(var_id)
+
+        elif isinstance(value, collections.abc.Mapping):
+            var = AnsibleDictVariable(var_id, stackframe, value)
+
+        else:
+            var = AnsibleListVariable(var_id, stackframe, value)
+
+        self.variables[var_id] = var
+        stackframe.variables.append(var_id)
+
+        return var
+
+    def _resume_threads(
         self,
         thread_ids: collections.abc.Iterable[int],
-        action: t.Literal["in", "out", "over"] | None,
+        thread_state: ThreadState,
     ) -> None:
         with self._waiting_condition:
             for tid in thread_ids:
-                self._waiting_threads[tid] = action
+                self.threads[tid].set_state(thread_state)
 
             self._waiting_condition.notify_all()
 
@@ -848,7 +940,7 @@ class StrategyModule(LinearStrategy):
         # locals.
 
         task_vars = inspect.currentframe().f_back.f_locals["task_vars"]  # type: ignore[union-attr]  # I know this is bad
-        self._debug_state.process_task(target_host, task, task_vars)
+        self._debug_state.start_task(target_host, task, task_vars)
         res = super()._execute_meta(task, play_context, iterator, target_host)
 
         meta_action = task.args.get("_raw_params", None)
@@ -857,15 +949,12 @@ class StrategyModule(LinearStrategy):
             # need to mark the existing threads as exited so the next run will
             # pick up the correct changes. It will automatically start those
             # threads as they run.
-            for tid in list(self._debug_state.threads.keys()):
-                if tid == 1:
-                    continue
-                self._debug_state.remove_thread(tid)
+            self._debug_state.exit_threads()
 
         else:
             # Needed to ensure the stackframe is removed as these meta tasks
             # have no results for _process_pending_results to handle.
-            self._debug_state.process_task_result(target_host, task)
+            self._debug_state.end_task(target_host, task)
 
         return res
 
@@ -890,7 +979,7 @@ class StrategyModule(LinearStrategy):
         play_context: PlayContext,
     ) -> None:
         """Called just as a task is about to be queue"""
-        self._debug_state.process_task(host, task, task_vars)
+        self._debug_state.start_task(host, task, task_vars)
 
         return super()._queue_task(host, task, task_vars, play_context)
 
@@ -905,7 +994,7 @@ class StrategyModule(LinearStrategy):
         res = super()._process_pending_results(iterator, one_pass=one_pass, max_passes=max_passes)
 
         for task_res in res:
-            self._debug_state.process_task_result(task_res._host, task_res._task)
+            self._debug_state.end_task(task_res._host, task_res._task)
 
         return res
 
@@ -924,15 +1013,15 @@ class StrategyModule(LinearStrategy):
         self._debug_state = AnsibleDebugState(
             debugger,
             self._loader,
-            iterator,
-            iterator._play,
             self._variable_manager,
         )
-        with debugger.with_strategy(self._debug_state):
-            try:
-                return super().run(iterator, play_context)
-            finally:
-                for tid in list(self._debug_state.threads.keys()):
-                    if tid == 1:
-                        continue
-                    self._debug_state.remove_thread(tid)
+        try:
+            with debugger.with_strategy(self._debug_state):
+                try:
+                    return super().run(iterator, play_context)
+                finally:
+                    self._debug_state.exit_threads()
+
+        except EndStrategy:
+            display.display("Debugger has requested the process to terminate")
+            return TaskQueueManager.RUN_FAILED_BREAK_PLAY
