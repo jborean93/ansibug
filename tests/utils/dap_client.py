@@ -187,7 +187,7 @@ class DAPClient:
         )
 
         pid_path = get_pid_info_path(proc.pid)
-        for _ in range(10):
+        for _ in range(20):
             if pid_path.exists():
                 break
             elif (rc := proc.poll()) is not None:
@@ -208,6 +208,10 @@ class DAPClient:
             proc_info = {"processId": proc.pid}
 
         attach_arguments = (attach_options or {}) | proc_info
+        if "connectTimeout" not in attach_arguments:
+            # macOS in CI is quite slow, bump the timeout to 20
+            attach_arguments["connectTimeout"] = 20.0
+
         self.send(dap.AttachRequest(arguments=attach_arguments), dap.AttachResponse)
         self.wait_for_message(dap.InitializedEvent)
 
@@ -231,6 +235,10 @@ class DAPClient:
         if self._log_dir and "logFile" not in launch_args:
             launch_args["logFile"] = str((self._log_dir / f"ansibug-{self._test_name}-debuggee.log").absolute())
             launch_args["logLevel"] = "debug"
+
+        if "connectTimeout" not in launch_args:
+            # macOS in CI is quite slow, bump the timeout to 20
+            launch_args["connectTimeout"] = 20.0
 
         self.send(dap.LaunchRequest(arguments=launch_args))
         resp = self.wait_for_message(dap.RunInTerminalRequest)

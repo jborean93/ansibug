@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import pathlib
 import pickle
 import socket
@@ -17,6 +16,7 @@ from ._socket_helper import (
     CancelledError,
     SocketCancellationToken,
     SocketHelper,
+    create_uds_with_mask,
     parse_addr_string,
 )
 from .dap import ProtocolMessage
@@ -153,9 +153,14 @@ class ClientMPQueue(MPQueue):
         if isinstance(self._address, str):
             hostname = self._address
             addr_info = [(socket.AF_UNIX, socket.SOCK_STREAM, -1, "", self._address)]
+            # Python's ssl handling doesn't like hostnames greater than 63
+            # characters. Using SSL with a UDS should only really happen in
+            # testing so we can safely truncate this.
+            ssl_hostname = hostname[:63]
 
         else:
             hostname, port = self._address
+            ssl_hostname = hostname
             addr_info = socket.getaddrinfo(hostname, port, 0, socket.SOCK_STREAM)
 
         sock = None
@@ -180,7 +185,7 @@ class ClientMPQueue(MPQueue):
             self._socket.wrap_tls(
                 self._ssl_context,
                 server_side=False,
-                server_hostname=hostname,
+                server_hostname=ssl_hostname,
             )
             # TLS 1.3 won't validate their cert was accepted until its first
             # read. This ensures the connection is validated before it is
@@ -205,10 +210,10 @@ class ServerMPQueue(MPQueue):
     ) -> None:
         parsed_addr = parse_addr_string(address)
 
+        self._uds_path: str | None = None
         if isinstance(parsed_addr, str):
-            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            os.fchmod(sock.fileno(), 0o700)
-            sock.bind(parsed_addr)
+            self._uds_path = parsed_addr
+            sock = create_uds_with_mask(parsed_addr, 0o700)
             sock.listen()
 
         else:
@@ -290,7 +295,7 @@ class ServerMPQueue(MPQueue):
         super().start()
 
     def stop(self) -> None:
-        if self._socket.family == socket.AddressFamily.AF_UNIX:
-            pathlib.Path(self._socket.getsockname()).unlink(missing_ok=True)
+        if self._uds_path:
+            pathlib.Path(self._uds_path).unlink(missing_ok=True)
 
         super().stop()

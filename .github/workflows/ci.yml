@@ -61,7 +61,8 @@ jobs:
       fail-fast: false
       matrix:
         os:
-          - ubuntu-latest
+        - ubuntu-latest
+        - macos-latest
         ansible-version:
         - "2.14"
         - "2.15"
@@ -74,6 +75,7 @@ jobs:
         - "3.12"
 
         exclude:
+        # Exclude Python/Ansible versions that aren't compatible.
         - ansible-version: "2.14"
           python-version: "3.12"
         - ansible-version: "2.15"
@@ -82,6 +84,13 @@ jobs:
           python-version: "3.9"
         - ansible-version: devel
           python-version: "3.9"
+        # Limit macOS tests to the bare essentials (2.16 only)
+        - os: macos-latest
+          ansible-version: "2.14"
+        - os: macos-latest
+          ansible-version: "2.15"
+        - os: macos-latest
+          ansible-version: devel
 
     steps:
       - uses: actions/checkout@v3

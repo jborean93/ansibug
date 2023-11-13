@@ -23,6 +23,6 @@ def test_connect_failure_refused() -> None:
         server.bind(("127.0.0.1", 0))
         addr = server.getsockname()
 
-        with mpq.ClientMPQueue(f"tcp://{addr[0]}:{addr[1]}", mpq.MPProtocol) as client:
-            with pytest.raises(OSError, match="Connection refused"):
-                client.start()
+    with mpq.ClientMPQueue(f"tcp://{addr[0]}:{addr[1]}", mpq.MPProtocol) as client:
+        with pytest.raises(OSError, match="Connection refused"):
+            client.start()

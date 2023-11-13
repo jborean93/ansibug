@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import platform
 import socket
 import tempfile
 import threading
@@ -42,9 +43,44 @@ def test_send_with_precancelled_cancelled_token() -> None:
             cancel_token.sendall(client, b"data")
 
 
-def test_connect_with_cancel() -> None:
+@pytest.mark.skipif(platform.system() != "Darwin", reason="Socket blocking behaviour is different")
+def test_connect_with_cancel_macos() -> None:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
-        # The docs are a bit vague but listen 0 includes 1 in the backlog
+        # On macOS a socket that is not listening will cause the connect to
+        # block until there is one.
+        server.bind(("127.0.0.1", 0))
+        server_port = server.getsockname()[1]
+
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
+            cancel_token = sh.SocketCancellationToken()
+
+            def client_connect(s: socket.socket, cancel_token: sh.SocketCancellationToken, state: dict) -> None:
+                try:
+                    cancel_token.connect(s, ("localhost", server_port))
+                except Exception as e:
+                    state["exp"] = e
+
+            state: dict = {}
+            connect_thread = threading.Thread(
+                target=client_connect,
+                args=(client, cancel_token, state),
+                daemon=True,
+            )
+            connect_thread.start()
+
+            time.sleep(1)
+            cancel_token.cancel()
+
+            connect_thread.join()
+            assert "exp" in state
+            assert isinstance(state["exp"], sh.CancelledError)
+
+
+@pytest.mark.skipif(platform.system() != "Linux", reason="Socket blocking behaviour is different")
+def test_connect_with_cancel_linux() -> None:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
+        # To simulate a blocked connect on Linux we need to connect 1 client
+        # and try again with another client.
         server.bind(("127.0.0.1", 0))
         server.listen(0)
         server_port = server.getsockname()[1]
@@ -185,12 +221,31 @@ def test_send_with_broken_pipe() -> None:
             send_thread.join()
             assert "exp" in state
             assert isinstance(state["exp"], OSError)
-            assert "Connection reset by peer" in str(state["exp"])
+            if platform.system() == "Darwin":
+                assert "Broken pipe" in str(state["exp"])
+            else:
+                assert "Connection reset by peer" in str(state["exp"])
 
 
-def test_connect_with_timeout() -> None:
+@pytest.mark.skipif(platform.system() != "Darwin", reason="Socket blocking behaviour is different")
+def test_connect_with_timeout_macos() -> None:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
-        # The docs are a bit vague but listen 0 includes 1 in the backlog
+        # On macOS the client will block until the server is listening to the
+        # bound socket.
+        server.bind(("127.0.0.1", 0))
+        server_port = server.getsockname()[1]
+
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
+            cancel_token = sh.SocketCancellationToken()
+            with pytest.raises(TimeoutError):
+                cancel_token.connect(client, ("localhost", server_port), timeout=0.5)
+
+
+@pytest.mark.skipif(platform.system() != "Linux", reason="Socket blocking behaviour is different")
+def test_connect_with_timeout_linux() -> None:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
+        # On Linux the client will only block if there is already listen + 1
+        # number of clients connected.
         server.bind(("127.0.0.1", 0))
         server.listen(0)
         server_port = server.getsockname()[1]
@@ -255,3 +310,8 @@ def test_parse_addr_invalid_scheme() -> None:
 def test_parse_addr_tcp_invalid_port() -> None:
     with pytest.raises(ValueError, match="Port could not be cast to integer value as 'port'"):
         sh.parse_addr_string("tcp://hostname:port")
+
+
+def test_fail_to_create_uds_invalid_path() -> None:
+    with pytest.raises(FileNotFoundError):
+        sh.create_uds_with_mask("/invalid/path/uds", 0o700)

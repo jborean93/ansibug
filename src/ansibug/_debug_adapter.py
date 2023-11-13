@@ -496,6 +496,7 @@ rm -f "$0"
             ansibug_args=" ".join(shlex.quote(c) for c in ansibug_args),
         )
 
+        # Default permissions are 0o600, we need the executable bit.
         launch_fd, launch_file = tempfile.mkstemp(prefix="ansibug-launch-")
         os.fchmod(launch_fd, 0o700)
         with os.fdopen(launch_fd, mode="w") as launch_writer:
