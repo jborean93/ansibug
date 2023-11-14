@@ -80,6 +80,8 @@ class ThreadState(enum.Enum):
 
 
 class AnsibleThread:
+    _SCOPED_TASKS = C._ACTION_ALL_PROPER_INCLUDE_IMPORT_ROLES + C._ACTION_ALL_PROPER_INCLUDE_IMPORT_TASKS
+
     def __init__(
         self,
         *,
@@ -110,7 +112,7 @@ class AnsibleThread:
             # task.
             task = self._stopped_task
             while task := task._parent:
-                if isinstance(task, Task) and task.action in C._ACTION_ALL_INCLUDES:
+                if isinstance(task, Task) and task.action in AnsibleThread._SCOPED_TASKS:
                     break
 
             self._stopped_task = task
@@ -118,7 +120,7 @@ class AnsibleThread:
         elif (
             state == ThreadState.STEP_IN
             and self._stopped_task
-            and self._stopped_task.action not in C._ACTION_ALL_INCLUDES
+            and self._stopped_task.action not in AnsibleThread._SCOPED_TASKS
         ):
             # If changing to STEP_IN but the stopped task was not an include,
             # treat it like STEP_OVER.
@@ -230,8 +232,8 @@ class AnsibleStackFrame:
         self.task_vars = task_vars
         self.scopes: list[int] = []
         self.variables: list[int] = []
-        self.variables_options_id = 0
-        self.variables_taskvar_id = 0
+        self.variables_options_id: int | None = None
+        self.variables_taskvar_id: int | None = None
         self.variables_hostvars_id = 0
 
         self._debugger = debugger
@@ -586,20 +588,42 @@ class AnsibleDebugState(DebugState):
     ) -> ansibug.dap.ScopesResponse:
         sf = self.stackframes[request.frame_id]
 
-        # This is a very basic templating of the args and doesn't handle loops.
-        templar = Templar(loader=self._loader, variables=sf.task_vars)
-        task_args = templar.template(sf.task.args, fail_on_undefined=False)
-        module_opts = self._add_variable(
-            sf,
-            task_args,
-            # Any changes to our templated var also needs to reflect back onto
-            # the raw datastore so use a custom variable class.
-            var_factory=lambda i: AnsibleDictWithRawStoreVariable(i, sf, task_args, sf.task.args),
-        )
-        sf.variables_options_id = module_opts.id
+        scopes: list[ansibug.dap.Scope] = []
+        if sf.task.action not in C._ACTION_IMPORT_ROLE + C._ACTION_IMPORT_TASKS:
+            # This is a very basic templating of the args and doesn't handle loops.
+            templar = Templar(loader=self._loader, variables=sf.task_vars)
+            task_args = templar.template(sf.task.args, fail_on_undefined=False)
 
-        task_vars = self._add_variable(sf, sf.task_vars)
-        sf.variables_taskvar_id = task_vars.id
+            module_opts = self._add_variable(
+                sf,
+                task_args,
+                # Any changes to our templated var also needs to reflect back
+                # onto the raw datastore so use a custom variable class.
+                var_factory=lambda i: AnsibleDictWithRawStoreVariable(i, sf, task_args, sf.task.args),
+            )
+            sf.variables_options_id = module_opts.id
+
+            task_vars = self._add_variable(sf, sf.task_vars)
+            sf.variables_taskvar_id = task_vars.id
+
+            scopes.extend(
+                [
+                    # Options for the module itself
+                    ansibug.dap.Scope(
+                        name="Module Options",
+                        variables_reference=module_opts.id,
+                        named_variables=module_opts.named_variables,
+                        indexed_variables=module_opts.indexed_variables,
+                    ),
+                    # Variables sent to the worker, complete snapshot for the task.
+                    ansibug.dap.Scope(
+                        name="Task Variables",
+                        variables_reference=task_vars.id,
+                        named_variables=task_vars.named_variables,
+                        indexed_variables=task_vars.indexed_variables,
+                    ),
+                ]
+            )
 
         # We use the hostvars but for simplicity sake we also overlay the task
         # vars that might be set as these will contain things like play/task
@@ -607,7 +631,7 @@ class AnsibleDebugState(DebugState):
         # this task so is important to give the user a way to set these
         # persistently in the debugger.
         host_vars_amalgamated = {k: v for k, v in sf.task_vars["hostvars"][sf.task_vars["inventory_hostname"]].items()}
-        for k, v in task_vars.get():
+        for k, v in sf.task_vars.items():
             if k not in host_vars_amalgamated:
                 host_vars_amalgamated[k] = v
 
@@ -615,45 +639,37 @@ class AnsibleDebugState(DebugState):
             sf,
             host_vars_amalgamated,
             var_factory=lambda i: AnsibleHostVarsVariable(
-                i, sf, host_vars_amalgamated, sf.task_vars["inventory_hostname"], self._variable_mamanger
+                i,
+                sf,
+                host_vars_amalgamated,
+                sf.task_vars["inventory_hostname"],
+                self._variable_mamanger,
             ),
         )
         sf.variables_hostvars_id = host_vars.id
 
         global_vars = self._add_variable(sf, sf.task_vars["vars"])
 
-        scopes: list[ansibug.dap.Scope] = [
-            # Options for the module itself
-            ansibug.dap.Scope(
-                name="Module Options",
-                variables_reference=module_opts.id,
-                named_variables=module_opts.named_variables,
-                indexed_variables=module_opts.indexed_variables,
-            ),
-            # Variables sent to the worker, complete snapshot for the task.
-            ansibug.dap.Scope(
-                name="Task Variables",
-                variables_reference=task_vars.id,
-                named_variables=task_vars.named_variables,
-                indexed_variables=task_vars.indexed_variables,
-            ),
-            # Scoped task vars but for the current host
-            ansibug.dap.Scope(
-                name="Host Variables",
-                variables_reference=host_vars.id,
-                named_variables=host_vars.named_variables,
-                indexed_variables=host_vars.indexed_variables,
-                expensive=True,
-            ),
-            # Scoped task vars but the full vars dict
-            ansibug.dap.Scope(
-                name="Global Variables",
-                variables_reference=global_vars.id,
-                named_variables=global_vars.named_variables,
-                indexed_variables=global_vars.indexed_variables,
-                expensive=True,
-            ),
-        ]
+        scopes.extend(
+            [
+                # Scoped task vars but for the current host
+                ansibug.dap.Scope(
+                    name="Host Variables",
+                    variables_reference=host_vars.id,
+                    named_variables=host_vars.named_variables,
+                    indexed_variables=host_vars.indexed_variables,
+                    expensive=True,
+                ),
+                # Scoped task vars but the full vars dict
+                ansibug.dap.Scope(
+                    name="Global Variables",
+                    variables_reference=global_vars.id,
+                    named_variables=global_vars.named_variables,
+                    indexed_variables=global_vars.indexed_variables,
+                    expensive=True,
+                ),
+            ]
+        )
 
         return ansibug.dap.ScopesResponse(
             request_seq=request.seq,
@@ -695,19 +711,27 @@ class AnsibleDebugState(DebugState):
                 value, value_type = self._safe_evaluate_expression(repl_command.expression, sf.task_vars)
 
             elif isinstance(repl_command, RemoveVarCommand):
-                ansible_var = self.variables[sf.variables_options_id]
-                ansible_var.remove(repl_command.name)
+                if sf.variables_options_id is None:
+                    value = f"Removing a module option for {sf.task.action} is not possible"
+                else:
+                    ansible_var = self.variables[sf.variables_options_id]
+                    ansible_var.remove(repl_command.name)
 
             elif isinstance(repl_command, SetVarCommand):
                 new_value = self._template(repl_command.expression, sf.task_vars)
 
                 var_ids = []
                 if repl_command.command == "set_option":
-                    var_ids += [sf.variables_options_id]
+                    if sf.variables_options_id is None:
+                        value = f"Setting a module option for {sf.task.action} is not possible"
+                    else:
+                        var_ids += [sf.variables_options_id]
                 else:
                     # We want to have changing hostvars also apply to the task
-                    # vars
-                    var_ids += [sf.variables_taskvar_id, sf.variables_hostvars_id]
+                    # vars if they are available.
+                    if sf.variables_taskvar_id is not None:
+                        var_ids.append(sf.variables_taskvar_id)
+                    var_ids.append(sf.variables_hostvars_id)
 
                 for vid in var_ids:
                     ansible_var = self.variables[vid]
