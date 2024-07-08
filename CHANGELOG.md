@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.2.0 - TBD
+
 ## 0.1.1 - 2024-07-08
 
 + Officially support Ansible 2.17
