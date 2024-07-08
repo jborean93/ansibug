@@ -199,7 +199,9 @@ def _configure_ansible_env() -> dict[str, str]:
 
     to_check = {"CALLBACKS_ENABLED", "COLLECTIONS_PATHS"}
     for config_entry in config_dump:
-        name = config_entry["name"]
+        name = config_entry.get("name", None)
+        if not name:
+            continue
 
         if name == "CALLBACKS_ENABLED":
             to_check.remove("CALLBACKS_ENABLED")

@@ -17,9 +17,9 @@ jobs:
     name: run sanity checks
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
 
-    - uses: actions/setup-python@v4
+    - uses: actions/setup-python@v5
       with:
         python-version: "3.12"
         cache: pip
@@ -41,7 +41,7 @@ jobs:
 
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
 
     - name: build sdist and wheel
       run: |
@@ -50,7 +50,7 @@ jobs:
         python -m pip install build
         python -m build
 
-    - uses: actions/upload-artifact@v3
+    - uses: actions/upload-artifact@v4
       with:
         name: artifact
         path: ./dist/*
@@ -71,6 +71,7 @@ jobs:
         - "2.14"
         - "2.15"
         - "2.16"
+        - "2.17"
         - devel
         python-version:
         - "3.9"
@@ -86,27 +87,33 @@ jobs:
           python-version: "3.12"
         - ansible-version: "2.16"
           python-version: "3.9"
+        - ansible-version: "2.17"
+          python-version: "3.9"
         - ansible-version: devel
           python-version: "3.9"
-        # Limit macOS tests to the bare essentials (2.16 only)
+        - ansible-version: devel
+          python-version: "3.10"
+        # Limit macOS tests to the bare essentials (2.17 only)
         - os: macos-latest
           ansible-version: "2.14"
         - os: macos-latest
           ansible-version: "2.15"
         - os: macos-latest
+          ansible-version: "2.16"
+        - os: macos-latest
           ansible-version: devel
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
           cache-dependency-path: |
             pyproject.toml
 
-      - uses: actions/download-artifact@v3
+      - uses: actions/download-artifact@v4
         with:
           name: artifact
           path: ./dist
@@ -135,24 +142,25 @@ jobs:
 
       - name: Upload Test Results
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: Unit Test Results (${{ matrix.os }} ${{ matrix.python-version }} ansible_${{ matrix.ansible-version }})
           path: ./junit/test-results.xml
 
       - name: Upload Coverage Results
         if: always() && !startsWith(github.ref, 'refs/tags/v')
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: Coverage Results (${{ matrix.os }} ${{ matrix.python-version }} ansible_${{ matrix.ansible-version }})
           path: ./coverage.xml
 
       - name: Upload Coverage to codecov
         if: always()
-        uses: codecov/codecov-action@v3
+        uses: codecov/codecov-action@v4
         with:
           files: ./coverage.xml
           flags: ${{ env.OS }},py${{ matrix.python-version }},ansible_${{ matrix.ansible-version }}
+          token: ${{ secrets.CODECOV_TOKEN }}
 
   publish:
     name: publish
@@ -164,7 +172,7 @@ jobs:
       id-token: write
 
     steps:
-    - uses: actions/download-artifact@v3
+    - uses: actions/download-artifact@v4
       with:
         name: artifact
         path: ./dist

@@ -57,7 +57,7 @@ The following factors are available in tox
 
 + `sanity`
 + `py3{9,10,11,12}`
-+ `ansible_{2.14,2.15,2.16,devel}`
++ `ansible_{2.14,2.15,2.16,2.17,devel}`
 
 Here are some example factors that can be invoked with tox:
 

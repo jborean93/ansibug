@@ -960,11 +960,10 @@ class StrategyModule(LinearStrategy):
 
     def _load_included_file(
         self,
-        included_file: IncludedFile,
-        iterator: PlayIterator,
-        is_handler: bool = False,
+        *args: t.Any,
+        **kwargs: t.Any,
     ) -> list[Block]:
-        included_blocks = super()._load_included_file(included_file, iterator, is_handler)
+        included_blocks = super()._load_included_file(*args, **kwargs)
 
         # Need to register these blocks as valid breakpoints and update the client bps
         register_block_breakpoints(self._debug_state._debugger, included_blocks)
@@ -985,13 +984,11 @@ class StrategyModule(LinearStrategy):
 
     def _process_pending_results(
         self,
-        iterator: PlayIterator,
-        one_pass: bool = False,
-        max_passes: int | None = None,
-        do_handlers: bool = False,
+        *args: t.Any,
+        **kwargs: t.Any,
     ) -> list[TaskResult]:
         """Called when gathering the results of a queued task."""
-        res = super()._process_pending_results(iterator, one_pass=one_pass, max_passes=max_passes)
+        res = super()._process_pending_results(*args, **kwargs)
 
         for task_res in res:
             self._debug_state.end_task(task_res._host, task_res._task)
