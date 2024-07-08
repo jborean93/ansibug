@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.1 - TBD
+## 0.1.1 - 2024-07-08
 
 + Officially support Ansible 2.17
 + Fix support for `include_*` tasks with Ansible 2.17+

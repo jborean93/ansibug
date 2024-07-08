@@ -156,6 +156,7 @@ deps:
 install_command = python -Im pip install --no-compile {opts} {packages}
 
 passenv =
+    GITHUB_ACTIONS
     PYTEST_ADDOPTS
 set_env =
     # Needed for testing coverage
