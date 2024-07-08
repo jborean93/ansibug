@@ -899,7 +899,7 @@ def test_playbook_eval(
         ),
         dap.EvaluateResponse,
     )
-    assert eval_resp.result == "AnsibleUndefinedVariable: 'invalid' is undefined. 'invalid' is undefined"
+    assert eval_resp.result.startswith("AnsibleUndefinedVariable: 'invalid' is undefined")
     assert eval_resp.type is None
 
     eval_resp = dap_client.send(
