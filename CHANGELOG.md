@@ -1,6 +1,8 @@
 # Changelog
 
-## 0.2.0 - TBD
+## 0.1.2 - TBD
+
++ Fix properly setting `COLLECTIONS_PATHS` for an `ansibug` run when no explicit config value was provided
 
 ## 0.1.1 - 2024-07-08
 
