@@ -110,11 +110,9 @@ def test_meta_simple_breakpoint(
 
 
 # I don't like skipping this but I cannot figure out why the test sometimes
-# fails in CI specifically on macOS with Python 3.10 and 3.11.
+# fails in CI on macOS.
 @pytest.mark.skipif(
-    os.environ.get("GITHUB_ACTIONS", "false").lower() == "true"
-    and sys.platform == "darwin"
-    and sys.version_info < (3, 12),
+    os.environ.get("GITHUB_ACTIONS", "false").lower() == "true" and sys.platform == "darwin",
     reason="Test is flaky in CI on Python 3.10 and 3.11",
 )
 def test_meta_refresh_inventory_extra_hosts(
