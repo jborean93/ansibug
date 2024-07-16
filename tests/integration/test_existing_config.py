@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import pathlib
+import shutil
 
 from dap_client import DAPClient
 
@@ -72,6 +73,72 @@ collections_path = {collections_path.absolute()!s}
         raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
 
     assert result_file.exists()
+
+
+def test_playbook_default_collections_path(
+    dap_client: DAPClient,
+    tmp_path: pathlib.Path,
+) -> None:
+    playbook = tmp_path / "main.yml"
+    playbook.write_text(
+        r"""
+- hosts: localhost
+  gather_facts: false
+  tasks:
+  - name: ping test
+    ansibug.temp.ping:
+"""
+    )
+
+    ping_src = (
+        pathlib.Path(__file__).parent.parent
+        / "data"
+        / "ansible_collections"
+        / "ns"
+        / "name"
+        / "plugins"
+        / "modules"
+        / "ping.py"
+    )
+    temp_collection_root = pathlib.Path("~/.ansible/collections/ansible_collections/ansibug").expanduser()
+    temp_collection_module_dir = temp_collection_root / "temp" / "plugins" / "modules"
+    temp_collection_module_dir.mkdir(parents=True)
+    try:
+        shutil.copy(ping_src, temp_collection_module_dir / "ping.py")
+
+        proc = dap_client.launch(
+            playbook,
+            playbook_dir=tmp_path,
+        )
+
+        dap_client.send(
+            dap.SetBreakpointsRequest(
+                source=dap.Source(
+                    name="main.yml",
+                    path=str(playbook.absolute()),
+                ),
+                lines=[5],
+                breakpoints=[dap.SourceBreakpoint(line=5)],
+                source_modified=False,
+            ),
+            dap.SetBreakpointsResponse,
+        )
+
+        dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
+
+        thread_event = dap_client.wait_for_message(dap.ThreadEvent)
+        dap_client.wait_for_message(dap.StoppedEvent)
+        dap_client.send(dap.ContinueRequest(thread_id=thread_event.thread_id), dap.ContinueResponse)
+        dap_client.wait_for_message(dap.ThreadEvent)
+        dap_client.wait_for_message(dap.TerminatedEvent)
+
+        play_out = proc.communicate()
+
+    finally:
+        shutil.rmtree(temp_collection_root)
+
+    if rc := proc.returncode:
+        raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
 
 
 def test_ansible_config_verbosity(

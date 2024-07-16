@@ -180,7 +180,6 @@ def _configure_ansible_env() -> dict[str, str]:
             "ansible",
             "config",
             "dump",
-            "--only-changed",
             "--format",
             "json",
         ],
