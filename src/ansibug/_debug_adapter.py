@@ -269,7 +269,7 @@ class DAServer:
         by the client. This continues until the client has sent the disconnect
         message.
         """
-        stdin = sys.stdin.buffer.raw  # type: ignore[attr-defined]  # This is defined
+        stdin = sys.stdin.buffer.raw  # type: ignore[union-attr]
         adapter = self._adapter
 
         is_connected = True

@@ -10,8 +10,7 @@ import typing as t
 from typing import IO
 
 
-class ReturnErrorMessage(Exception):
-    ...
+class ReturnErrorMessage(Exception): ...
 
 
 class ErrorCapturingParser(argparse.ArgumentParser):

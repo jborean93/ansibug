@@ -2,6 +2,9 @@
 
 ## 0.2.0 - TBD
 
++ Officially support Ansible 2.18 and Python 3.13
++ Drop support for Ansible 2.14 and 2.15 now they are end of life
+
 ## 0.1.2 - 2024-07-16
 
 + Fix properly setting `COLLECTIONS_PATHS` for an `ansibug` run when no explicit config value was provided

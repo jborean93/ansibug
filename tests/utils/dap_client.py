@@ -104,12 +104,10 @@ class DAPClient:
         self._stderr_thread.join()
 
     @t.overload
-    def send(self, msg: dap.ProtocolMessage) -> None:
-        ...
+    def send(self, msg: dap.ProtocolMessage) -> None: ...
 
     @t.overload
-    def send(self, msg: dap.ProtocolMessage, return_type: type[ResponseMessage]) -> ResponseMessage:
-        ...
+    def send(self, msg: dap.ProtocolMessage, return_type: type[ResponseMessage]) -> ResponseMessage: ...
 
     def send(
         self,

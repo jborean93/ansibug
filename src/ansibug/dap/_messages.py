@@ -217,7 +217,7 @@ class DAPObjectMeta(type):
         dap = getattr(cls, "_dap", {})
         type_info = dap.get("__types", {})
         if not type_info and dataclasses.is_dataclass(cls):
-            field_info = dataclasses.fields(cls)
+            field_info = dataclasses.fields(cls)  # type: ignore[unreachable]
 
             type_info = {}
             cls_fields = {}
