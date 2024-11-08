@@ -71,6 +71,7 @@ def generate_cert(
         .serial_number(x509.random_serial_number())
         .not_valid_before(now)
         .not_valid_after(now + datetime.timedelta(days=365))
+        .add_extension(x509.SubjectKeyIdentifier.from_public_key(private_key.public_key()), critical=False)
     )
     if extensions:
         for ext, critical in extensions:

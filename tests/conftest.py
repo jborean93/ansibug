@@ -44,18 +44,38 @@ def dap_client(
 
 @pytest.fixture(scope="session")
 def certs(tmp_path_factory: pytest.TempPathFactory) -> CertFixture:
+    ca_key_usage = x509.KeyUsage(
+        digital_signature=True,
+        content_commitment=False,
+        key_encipherment=False,
+        data_encipherment=False,
+        key_agreement=False,
+        key_cert_sign=True,
+        crl_sign=True,
+        encipher_only=False,
+        decipher_only=False,
+    )
     ca = generate_cert(
         "ansibug-ca",
-        extensions=[(x509.BasicConstraints(ca=True, path_length=None), True)],
+        extensions=[
+            (x509.BasicConstraints(ca=True, path_length=None), True),
+            (ca_key_usage, True),
+        ],
     )
+    ca_aki = x509.AuthorityKeyIdentifier.from_issuer_public_key(ca[0].public_key())  # type: ignore[arg-type]
+
     server = generate_cert(
         "ansibug-server",
         issuer=ca,
-        extensions=[(x509.SubjectAlternativeName([x509.DNSName("localhost")]), False)],
+        extensions=[
+            (x509.SubjectAlternativeName([x509.DNSName("localhost")]), False),
+            (ca_aki, False),
+        ],
     )
     client = generate_cert(
         "ansibug-client",
         issuer=ca,
+        extensions=[(ca_aki, False)],
     )
     client_self_signed = generate_cert("selfsigned-client")
 
