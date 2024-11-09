@@ -125,6 +125,8 @@ def test_meta_refresh_inventory_extra_hosts(
 - hosts: all
   gather_facts: false
   tasks:
+  - meta: noop
+
   - meta: refresh_inventory
 
   - meta: noop
@@ -166,8 +168,8 @@ inventory = ns.name.inv.yml
                 name="main.yml",
                 path=str(playbook.absolute()),
             ),
-            lines=[5, 7, 12],
-            breakpoints=[dap.SourceBreakpoint(line=5), dap.SourceBreakpoint(line=7), dap.SourceBreakpoint(line=12)],
+            lines=[7, 9, 14],
+            breakpoints=[dap.SourceBreakpoint(line=7), dap.SourceBreakpoint(line=9), dap.SourceBreakpoint(line=14)],
             source_modified=False,
         ),
         dap.SetBreakpointsResponse,
@@ -225,27 +227,26 @@ inventory = ns.name.inv.yml
     assert thread_event.reason == "started"
     host1_tid = thread_event.thread_id
 
+    stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
+    assert stopped_event.thread_id == host1_tid
+    dap_client.send(dap.ContinueRequest(thread_id=stopped_event.thread_id), dap.ContinueResponse)
+
     thread_event = dap_client.wait_for_message(dap.ThreadEvent)
     assert thread_event.reason == "started"
     host2_tid = thread_event.thread_id
+
+    stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
+    assert stopped_event.thread_id == host2_tid
+    dap_client.send(dap.ContinueRequest(thread_id=stopped_event.thread_id), dap.ContinueResponse)
 
     thread_event = dap_client.wait_for_message(dap.ThreadEvent)
     assert thread_event.reason == "started"
     host3_tid = thread_event.thread_id
 
     stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
-    assert stopped_event.thread_id == host1_tid
-    dap_client.send(dap.ContinueRequest(thread_id=stopped_event.thread_id), dap.ContinueResponse)
-
-    stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
-    assert stopped_event.thread_id == host2_tid
-    dap_client.send(dap.ContinueRequest(thread_id=stopped_event.thread_id), dap.ContinueResponse)
-
-    stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
     assert stopped_event.thread_id == host3_tid
     dap_client.send(dap.ContinueRequest(thread_id=stopped_event.thread_id), dap.ContinueResponse)
 
-    dap_client.send(dap.ContinueRequest(thread_id=stopped_event.thread_id), dap.ContinueResponse)
     dap_client.wait_for_message(dap.ThreadEvent)
     dap_client.wait_for_message(dap.ThreadEvent)
     dap_client.wait_for_message(dap.ThreadEvent)
@@ -266,6 +267,8 @@ def test_meta_refresh_inventory_removed_hosts(
 - hosts: all
   gather_facts: false
   tasks:
+  - meta: noop
+
   - meta: refresh_inventory
 
   - meta: noop
@@ -307,8 +310,8 @@ inventory = ns.name.inv.yml
                 name="main.yml",
                 path=str(playbook.absolute()),
             ),
-            lines=[5, 7, 12],
-            breakpoints=[dap.SourceBreakpoint(line=5), dap.SourceBreakpoint(line=7), dap.SourceBreakpoint(line=12)],
+            lines=[7, 9, 14],
+            breakpoints=[dap.SourceBreakpoint(line=7), dap.SourceBreakpoint(line=9), dap.SourceBreakpoint(line=14)],
             source_modified=False,
         ),
         dap.SetBreakpointsResponse,
@@ -317,6 +320,7 @@ inventory = ns.name.inv.yml
     dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
     thread_event = dap_client.wait_for_message(dap.ThreadEvent)
     host1_tid = thread_event.thread_id
+
     thread_event = dap_client.wait_for_message(dap.ThreadEvent)
     host2_tid = thread_event.thread_id
 
@@ -413,15 +417,15 @@ host2 ansible_host=127.0.0.1 ansible_connection=local ansible_python_interpreter
     thread_event = dap_client.wait_for_message(dap.ThreadEvent)
     host1_tid = thread_event.thread_id
 
-    thread_event = dap_client.wait_for_message(dap.ThreadEvent)
-    host2_tid = thread_event.thread_id
-
     stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
     assert stopped_event.reason == dap.StoppedReason.BREAKPOINT
     assert stopped_event.thread_id == host1_tid
     assert stopped_event.hit_breakpoint_ids == [bp_resp.breakpoints[0].id]
 
     dap_client.send(dap.ContinueRequest(thread_id=stopped_event.thread_id), dap.ContinueResponse)
+
+    thread_event = dap_client.wait_for_message(dap.ThreadEvent)
+    host2_tid = thread_event.thread_id
 
     stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
     assert stopped_event.reason == dap.StoppedReason.BREAKPOINT
@@ -492,15 +496,15 @@ host2 ansible_host=127.0.0.1 ansible_connection=local ansible_python_interpreter
     thread_event = dap_client.wait_for_message(dap.ThreadEvent)
     host1_tid = thread_event.thread_id
 
-    thread_event = dap_client.wait_for_message(dap.ThreadEvent)
-    host2_tid = thread_event.thread_id
-
     stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
     assert stopped_event.reason == dap.StoppedReason.BREAKPOINT
     assert stopped_event.thread_id == host1_tid
     assert stopped_event.hit_breakpoint_ids == [bp_resp.breakpoints[0].id]
 
     dap_client.send(dap.ContinueRequest(thread_id=stopped_event.thread_id), dap.ContinueResponse)
+
+    thread_event = dap_client.wait_for_message(dap.ThreadEvent)
+    host2_tid = thread_event.thread_id
 
     stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
     assert stopped_event.reason == dap.StoppedReason.BREAKPOINT
