@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0 - TBD
+## 0.2.0 - 2024-11-10
 
 + Officially support Ansible 2.18 and Python 3.13
 + Drop support for Ansible 2.14 and 2.15 now they are end of life
