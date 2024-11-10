@@ -67,10 +67,6 @@ host2 ansible_host=127.0.0.1 ansible_connection=local ansible_python_interpreter
     assert thread_event.reason == "started"
     host1_tid = thread_event.thread_id
 
-    thread_event = dap_client.wait_for_message(dap.ThreadEvent)
-    assert thread_event.reason == "started"
-    host2_tid = thread_event.thread_id
-
     stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
     assert stopped_event.reason == dap.StoppedReason.BREAKPOINT
     assert stopped_event.thread_id == host1_tid
@@ -137,8 +133,11 @@ host2 ansible_host=127.0.0.1 ansible_connection=local ansible_python_interpreter
     )
     assert "host1" in [v.name for v in global_host_vars.variables]
     assert "host2" in [v.name for v in global_host_vars.variables]
-
     dap_client.send(dap.ContinueRequest(thread_id=stopped_event.thread_id), dap.ContinueResponse)
+
+    thread_event = dap_client.wait_for_message(dap.ThreadEvent)
+    assert thread_event.reason == "started"
+    host2_tid = thread_event.thread_id
 
     stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
     assert stopped_event.reason == dap.StoppedReason.BREAKPOINT

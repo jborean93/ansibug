@@ -48,7 +48,14 @@ def register_block_breakpoints(
                 register_block_breakpoints(debugger, [task])
 
             else:
-                task_path, task_line = _split_task_path(task.get_path())
+                # 2.19 changed how the play's flush_handlers and implicit
+                # no-op tasks are setup. It no longer has the loader path and
+                # play details so skip registering these if not set.
+                raw_task_path = task.get_path()
+                if not raw_task_path:
+                    continue
+
+                task_path, task_line = _split_task_path(raw_task_path)
                 debugger.register_path_breakpoint(task_path, task_line, 1)
 
 

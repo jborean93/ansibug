@@ -8,7 +8,7 @@ build-backend = "setuptools.build_meta"
 name = "ansibug"
 description = "Ansible Debug Adapter Protocol Implementation"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = { file = "LICENSE" }
 authors = [{ name = "Jordan Borean", email = "jborean93@gmail.com" }]
 keywords = ["ansible", "debug", "lsp", "dap"]
@@ -16,10 +16,10 @@ classifiers = [
     "Development Status :: 4 - Beta",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
 ]
 dynamic = ["version"]
 
@@ -28,14 +28,14 @@ homepage = "https://github.com/jborean93/ansibug"
 
 [project.optional-dependencies]
 dev = [
-    "ansible-core >= 2.14.0",
+    "ansible-core >= 2.16.0",
     "argcomplete",
     # Support for source_pkgs
     "coverage[toml] >= 5.3",
     "cryptography",
-    "black == 23.9.1",
-    "isort == 5.12.0",
-    "mypy == 1.6.0",
+    "black == 24.10.0",
+    "isort == 5.13.2",
+    "mypy == 1.13.0",
     "pre-commit",
     "pytest",
     "pytest-timeout",
@@ -134,11 +134,10 @@ legacy_tox_ini = """
 [tox]
 env_list =
     sanity
-    py3{9,10,11}-ansible_2.14-tests
-    py3{9,10,11}-ansible_2.15-tests
     py3{10,11,12}-ansible_2.16-tests
     py3{10,11,12}-ansible_2.17-tests
-    py3{11,12}-ansible_devel-tests
+    py3{11,12,13}-ansible_2.18-tests
+    py3{11,12,13}-ansible_devel-tests
 min_version = 4.0
 
 [testenv]
@@ -148,10 +147,9 @@ wheel_build_env = .pkg
 extras =
     dev
 deps:
-    ansible_2.14: ansible-core >=2.14.0,<2.15.0
-    ansible_2.15: ansible-core >=2.15.0,<2.16.0
     ansible_2.16: ansible-core >=2.16.0,<2.17.0
     ansible_2.17: ansible-core >=2.17.0,<2.18.0
+    ansible_2.18: ansible-core >=2.18.0,<2.19.0
     ansible_devel: https://github.com/ansible/ansible/archive/devel.tar.gz
 install_command = python -Im pip install --no-compile {opts} {packages}
 

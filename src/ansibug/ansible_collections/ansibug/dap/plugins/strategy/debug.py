@@ -483,7 +483,12 @@ class AnsibleDebugState(DebugState):
         )
         thread.stack_frames.insert(0, sfid)
 
+        # Some implicit meta tasks are added without a loader so won't have
+        # a path. We can't set breakpoints on these tasks so skip the check.
         task_path = task.get_path()
+        if not task_path:
+            return
+
         path_and_line = task_path.rsplit(":", 1)
         path = path_and_line[0]
         line = int(path_and_line[1])

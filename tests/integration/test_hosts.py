@@ -55,16 +55,16 @@ host2 ansible_host=127.0.0.1 ansible_connection=local ansible_python_interpreter
     assert thread_event.reason == "started"
     host1_tid = thread_event.thread_id
 
-    thread_event = dap_client.wait_for_message(dap.ThreadEvent)
-    assert thread_event.reason == "started"
-    host2_tid = thread_event.thread_id
-
     stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
     assert stopped_event.reason == dap.StoppedReason.BREAKPOINT
     assert stopped_event.thread_id == host1_tid
     assert stopped_event.hit_breakpoint_ids == [bid]
 
     dap_client.send(dap.ContinueRequest(thread_id=stopped_event.thread_id), dap.ContinueResponse)
+
+    thread_event = dap_client.wait_for_message(dap.ThreadEvent)
+    assert thread_event.reason == "started"
+    host2_tid = thread_event.thread_id
 
     stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
     assert stopped_event.reason == dap.StoppedReason.BREAKPOINT
@@ -170,19 +170,6 @@ host1 ansible_host=127.0.0.1 ansible_connection=local ansible_python_interpreter
     assert stopped_event.thread_id == host1_tid
     assert stopped_event.hit_breakpoint_ids == []
 
-    # Stepping again will trigger the flush_handlers end task for the first play
-    dap_client.send(dap.StepInRequest(thread_id=stopped_event.thread_id), dap.StepInResponse)
-
-    stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
-    assert stopped_event.reason == dap.StoppedReason.STEP
-    assert stopped_event.thread_id == host1_tid
-    assert stopped_event.hit_breakpoint_ids == []
-
-    st_resp = dap_client.send(dap.StackTraceRequest(thread_id=host1_tid), dap.StackTraceResponse)
-    assert len(st_resp.stack_frames) == 1
-    assert st_resp.stack_frames[0].name == "meta"
-    assert st_resp.stack_frames[0].line == 2
-
     dap_client.send(dap.ContinueRequest(thread_id=stopped_event.thread_id), dap.ContinueResponse)
 
     thread_event = dap_client.wait_for_message(dap.ThreadEvent)
@@ -193,10 +180,6 @@ host1 ansible_host=127.0.0.1 ansible_connection=local ansible_python_interpreter
     assert thread_event.reason == "started"
     host1_tid = thread_event.thread_id
 
-    thread_event = dap_client.wait_for_message(dap.ThreadEvent)
-    assert thread_event.reason == "started"
-    host2_tid = thread_event.thread_id
-
     stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
     assert stopped_event.thread_id == host1_tid
     assert stopped_event.hit_breakpoint_ids == [bp_resp.breakpoints[1].id]
@@ -206,6 +189,10 @@ host1 ansible_host=127.0.0.1 ansible_connection=local ansible_python_interpreter
     assert st_resp.stack_frames[0].name == "ping test"
 
     dap_client.send(dap.ContinueRequest(thread_id=stopped_event.thread_id), dap.ContinueResponse)
+
+    thread_event = dap_client.wait_for_message(dap.ThreadEvent)
+    assert thread_event.reason == "started"
+    host2_tid = thread_event.thread_id
 
     stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
     assert stopped_event.thread_id == host2_tid

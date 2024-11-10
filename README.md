@@ -22,8 +22,8 @@ More information about the debug adapter and debugging experience of Ansible can
 # Requirements
 The following Python requirements must be met before using this library:
 
-+ Python 3.9+ (dependent on `ansible-core` support)
-+ `ansible-core >= 2.14.0`
++ Python 3.10+ (dependent on `ansible-core` support)
++ `ansible-core >= 2.16.0`
 + Linux or macOS (no Windows)
 
 The debugger aims to continue to support the current `ansible-core` versions that have no reached End Of Life.
@@ -56,8 +56,8 @@ As the support matrix for this library can take some time to run it might be ben
 The following factors are available in tox
 
 + `sanity`
-+ `py3{9,10,11,12}`
-+ `ansible_{2.14,2.15,2.16,2.17,devel}`
++ `py3{10,11,12,13}`
++ `ansible_{2.16,2.17,2.18,devel}`
 
 Here are some example factors that can be invoked with tox:
 

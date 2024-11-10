@@ -85,9 +85,10 @@ def test_connect_with_cancel_linux() -> None:
         server.listen(0)
         server_port = server.getsockname()[1]
 
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client1, socket.socket(
-            socket.AF_INET, socket.SOCK_STREAM
-        ) as client2:
+        with (
+            socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client1,
+            socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client2,
+        ):
             # The first client will connect without any troubles and stays in
             # the backlog
             client1.connect(("localhost", server_port))
@@ -250,9 +251,10 @@ def test_connect_with_timeout_linux() -> None:
         server.listen(0)
         server_port = server.getsockname()[1]
 
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client1, socket.socket(
-            socket.AF_INET, socket.SOCK_STREAM
-        ) as client2:
+        with (
+            socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client1,
+            socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client2,
+        ):
             # The first client will connect without any troubles and stays in
             # the backlog
             client1.connect(("localhost", server_port))
