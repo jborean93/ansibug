@@ -600,6 +600,7 @@ class AnsibleDebugger(metaclass=Singleton):
         msg: dap.DisconnectRequest,
     ) -> None:
         self._disconnect(msg)
+        self._send_queue.put(None)
         # The response is sent by the debug adapter.
 
     @process_message.register
@@ -746,6 +747,7 @@ class AnsibleDebugger(metaclass=Singleton):
         self._terminated = True
         self._disconnect(dap.DisconnectRequest(terminate_debuggee=True))
         self.queue_msg(dap.TerminateResponse(request_seq=msg.seq))
+        self._send_queue.put(None)
 
     @process_message.register
     def _(
@@ -829,7 +831,6 @@ class AnsibleDebugger(metaclass=Singleton):
 
         strategy = self._get_strategy()
         strategy.disconnect(msg)
-        self._send_queue.put(None)
 
     def _send_task(
         self,

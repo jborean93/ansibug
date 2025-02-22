@@ -357,6 +357,7 @@ def test_attach_with_terminate(
     dap_client.wait_for_message(dap.StoppedEvent)
     dap_client.send(dap.TerminateRequest())
 
+    dap_client.wait_for_message(dap.TerminateResponse)
     dap_client.wait_for_message(dap.TerminatedEvent)
 
     play_out = proc.communicate()
@@ -420,6 +421,7 @@ def test_attach_with_terminate_multiple_plays(
     dap_client.wait_for_message(dap.StoppedEvent)
     dap_client.send(dap.TerminateRequest())
 
+    dap_client.wait_for_message(dap.TerminateResponse)
     dap_client.wait_for_message(dap.TerminatedEvent)
 
     play_out = proc.communicate()
