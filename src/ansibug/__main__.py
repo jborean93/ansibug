@@ -150,6 +150,19 @@ def parse_args(
         help="Start an executable Debug Adapter Protocol process",
     )
     _add_log_args(dap)
+    dap.add_argument(
+        "--temp-dir",
+        action="store",
+        default=None,
+        # default="/tmp/abc",
+        type=_parse_path,
+        help="The temporary directory to use for storing the launch scripts "
+        "used when starting an ansible-playbook process. If not set, the "
+        "temporary directory will be created in the system's temporary "
+        "directory as returned by tempfile.mkstemp(). This directory must "
+        "be writable by the user running the DAP process and not have the "
+        "NOEXEC flag.",
+    )
 
     # Listen
 
@@ -197,7 +210,7 @@ def main() -> None:
     args = parse_args(sys.argv[1:])
 
     if args.action == "dap":
-        start_dap(args.log_file, args.log_level)
+        start_dap(args.log_file, args.log_level, args.temp_dir)
         return
 
     if args.action == "connect":

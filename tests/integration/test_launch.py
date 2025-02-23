@@ -295,3 +295,53 @@ def test_launch_with_terminate_multiple_plays(
     assert "ok=1" in stdout
 
     assert "Unknown error in Debuggee send thread" not in stderr
+
+
+def test_launch_with_tempdir(
+    request: pytest.FixtureRequest,
+    tmp_path: pathlib.Path,
+) -> None:
+    with DAPClient(request.node.name, temp_dir=tmp_path) as client:
+        client.send(
+            dap.InitializeRequest(
+                adapter_id="ansibug",
+                client_id="ansibug",
+                client_name="Ansibug Conftest",
+                locale="en",
+                supports_variable_type=True,
+                supports_run_in_terminal_request=True,
+            ),
+            dap.InitializeResponse,
+        )
+
+        playbook = tmp_path / "main.yml"
+        playbook.write_text(
+            r"""
+- hosts: localhost
+  gather_facts: false
+  tasks:
+  - name: ping test
+    ping:
+"""
+        )
+
+        def check_launch(request: dap.RunInTerminalRequest) -> None:
+            launch_found = False
+            for file in tmp_path.iterdir():
+                if file.name.startswith("ansibug-launch-"):
+                    assert str(file.absolute()) == request.args[0]
+                    launch_found = True
+                    break
+
+            assert launch_found
+
+        proc = client.launch(playbook, playbook_dir=tmp_path, check_request=check_launch)
+
+        client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
+        client.wait_for_message(dap.ThreadEvent)
+        client.wait_for_message(dap.ThreadEvent)
+        client.wait_for_message(dap.TerminatedEvent)
+
+        play_out = proc.communicate()
+        if rc := proc.returncode:
+            raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
