@@ -23,7 +23,7 @@ In order the options are:
   + Will step out on the parent stack frame
   + For example when run in a task inside an `include_*` tasks, a step out will break on the task after the `include_*`
 + Restart
-  + Currently this works just like `Stop`
+  + Will stop the current process and re-launch it, this will only work for the Launch configuration and will fail with an Attach configuration
 + Stop (Default for Launch)
   + Will stop the executing `ansible-playbook` process that is being debugged
   + No more tasks/plays will be run and the debug session will be closed.
