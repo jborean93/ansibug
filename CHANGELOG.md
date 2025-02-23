@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.0 - TBD
+
++ Stop deprecation message about custom strategy plugins introduced in Ansible 2.19
+
 ## 0.2.0 - 2024-11-10
 
 + Officially support Ansible 2.18 and Python 3.13

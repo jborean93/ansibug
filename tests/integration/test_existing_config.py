@@ -6,6 +6,7 @@ from __future__ import annotations
 import pathlib
 import shutil
 
+import pytest
 from dap_client import DAPClient
 
 import ansibug.dap as dap
@@ -197,3 +198,85 @@ verbosity = 3
     play_out = proc.communicate()
     if rc := proc.returncode:
         raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
+
+
+@pytest.mark.parametrize("deprecation_warnings", [True, False])
+def test_allow_deprecation_message(
+    dap_client: DAPClient,
+    tmp_path: pathlib.Path,
+    deprecation_warnings: bool,
+) -> None:
+    playbook = tmp_path / "main.yml"
+    playbook.write_text(
+        r"""
+- hosts: localhost
+  gather_facts: false
+  tasks:
+  - name: deprecation test
+    ansibug.temp.deprecation:
+"""
+    )
+
+    ansible_cfg = tmp_path / "ansible.cfg"
+    ansible_cfg.write_text(
+        rf"""[defaults]
+deprecation_warnings = {deprecation_warnings}
+"""
+    )
+
+    deprecation_src = (
+        pathlib.Path(__file__).parent.parent
+        / "data"
+        / "ansible_collections"
+        / "ns"
+        / "name"
+        / "plugins"
+        / "modules"
+        / "deprecation.py"
+    )
+    temp_collection_root = tmp_path / "collections" / "ansible_collections" / "ansibug"
+    temp_collection_module_dir = temp_collection_root / "temp" / "plugins" / "modules"
+    temp_collection_module_dir.mkdir(parents=True)
+    try:
+        shutil.copy(deprecation_src, temp_collection_module_dir / "deprecation.py")
+
+        proc = dap_client.launch(
+            playbook,
+            playbook_dir=tmp_path,
+        )
+
+        dap_client.send(
+            dap.SetBreakpointsRequest(
+                source=dap.Source(
+                    name="main.yml",
+                    path=str(playbook.absolute()),
+                ),
+                lines=[5],
+                breakpoints=[dap.SourceBreakpoint(line=5)],
+                source_modified=False,
+            ),
+            dap.SetBreakpointsResponse,
+        )
+
+        dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
+
+        thread_event = dap_client.wait_for_message(dap.ThreadEvent)
+        dap_client.wait_for_message(dap.StoppedEvent)
+        dap_client.send(dap.ContinueRequest(thread_id=thread_event.thread_id), dap.ContinueResponse)
+        dap_client.wait_for_message(dap.ThreadEvent)
+        dap_client.wait_for_message(dap.TerminatedEvent)
+
+        play_out = proc.communicate()
+
+    finally:
+        shutil.rmtree(temp_collection_root)
+
+    if rc := proc.returncode:
+        raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
+
+    stderr = play_out[1].decode()
+
+    if deprecation_warnings:
+        assert "Test deprecation" in stderr, f"Failed to find deprecation msg in {stderr}"
+    else:
+        assert "Test deprecation" not in stderr, f"Found deprecation msg in {stderr}"
