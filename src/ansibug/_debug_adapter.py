@@ -373,6 +373,8 @@ class DAServer:
             # The debuggee might have been disconnected during the send.
             pass
 
+        debuggee.stop()
+
         # No response is sent back to the client, is it done as part of the
         # shutdown to ensure it's sent before the TerminatedEvent.
 
