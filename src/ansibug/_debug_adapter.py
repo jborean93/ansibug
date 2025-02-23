@@ -204,13 +204,14 @@ class _RunInTerminalDetails:
 def start_dap(
     log_file: pathlib.Path | None = None,
     log_level: LogLevel = "info",
+    temp_dir: pathlib.Path | None = None,
 ) -> None:
     if log_file:
         configure_file_logging(str(log_file.absolute()), log_level)
 
     log.info("DAP starting")
     try:
-        with DAServer() as da:
+        with DAServer(temp_dir) as da:
             da.start()
     except:
         log.exception("Exception when running DA Server")
@@ -240,7 +241,10 @@ class DAProtocol(MPProtocol):
 
 
 class DAServer:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        temp_dir: pathlib.Path | None = None,
+    ) -> None:
         self._adapter = dap.DebugAdapterConnection()
 
         self._proto = DAProtocol(self)
@@ -248,6 +252,7 @@ class DAServer:
         self._launch_queue: MPQueue | None = None
         self._incoming_requests: dict[int, dap.Request] = {}
         self._run_in_response_data: dict[int, _RunInTerminalDetails] = {}
+        self._temp_dir = temp_dir
         self._terminated_sent = False
 
     def __enter__(self) -> DAServer:
@@ -499,7 +504,7 @@ rm -f "$0"
         )
 
         # Default permissions are 0o600, we need the executable bit.
-        launch_fd, launch_file = tempfile.mkstemp(prefix="ansibug-launch-")
+        launch_fd, launch_file = tempfile.mkstemp(prefix="ansibug-launch-", dir=self._temp_dir)
         os.fchmod(launch_fd, 0o700)
         with os.fdopen(launch_fd, mode="w") as launch_writer:
             launch_writer.write(launch_script)

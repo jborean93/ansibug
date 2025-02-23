@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import collections.abc
 import io
 import json
 import os
@@ -36,7 +37,8 @@ class DAPClient:
     def __init__(
         self,
         test_name: str,
-        log_dir: pathlib.Path | None,
+        log_dir: pathlib.Path | None = None,
+        temp_dir: pathlib.Path | None = None,
     ) -> None:
         self._client = dap.DebugAdapterConnection()
         self._log_dir = log_dir
@@ -56,6 +58,13 @@ class DAPClient:
                     str((log_dir / f"ansibug-{test_name}-dap.log").absolute()),
                     "--log-level",
                     "debug",
+                ]
+            )
+        if temp_dir:
+            dap_args.extend(
+                [
+                    "--temp-dir",
+                    str(temp_dir.absolute()),
                 ]
             )
 
@@ -223,6 +232,7 @@ class DAPClient:
         launch_options: dict[str, t.Any] | None = None,
         do_not_launch: bool = False,
         expected_terminated: bool = False,
+        check_request: collections.abc.Callable[[dap.RunInTerminalRequest], None] | None = None,
     ) -> subprocess.Popen:
         launch_args: dict[str, t.Any] = (launch_options or {}) | {"playbook": str(playbook)}
         if playbook_args:
@@ -240,6 +250,9 @@ class DAPClient:
 
         self.send(dap.LaunchRequest(arguments=launch_args))
         resp = self.wait_for_message(dap.RunInTerminalRequest)
+
+        if check_request:
+            check_request(resp)
 
         new_environment = get_test_env()
         if resp.env:
