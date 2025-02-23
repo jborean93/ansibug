@@ -31,7 +31,6 @@ from ansible.inventory.host import Host
 from ansible.parsing.dataloader import DataLoader
 from ansible.playbook.block import Block
 from ansible.playbook.conditional import Conditional
-from ansible.playbook.included_file import IncludedFile
 from ansible.playbook.play_context import PlayContext
 from ansible.playbook.task import Task
 from ansible.plugins.strategy.linear import StrategyModule as LinearStrategy
@@ -932,6 +931,12 @@ class StrategyModule(LinearStrategy):
         # Set in run()
         self._debug_state: AnsibleDebugState
 
+        # 2.19 has deprecated custom strategy plugins. To avoid alarming end
+        # users we will suppress the warning for this plugin and turn it back
+        # on when run() is called. The aim is to introduce an official API for
+        # this plugin to use before the deprecation turns into a removal.
+        C.DEPRECATION_WARNINGS = False
+
     def _execute_meta(
         self,
         task: Task,
@@ -1011,6 +1016,13 @@ class StrategyModule(LinearStrategy):
         step is to associate the current strategy with the debuggee adapter so
         it can respond to breakpoint and other information.
         """
+        # Reset deprecation warnings once the strategy plugin has been loaded
+        # so the user defined value is respected.
+        C.DEPRECATION_WARNINGS = C.config.get_config_value(
+            "DEPRECATION_WARNINGS",
+            variables={},
+        )
+
         debugger = AnsibleDebugger()
         self._debug_state = AnsibleDebugState(
             debugger,
