@@ -2,6 +2,7 @@
 
 ## 0.3.0 - TBD
 
++ Added support for restart with a `Launch` configuration, trying to restart an `Attach` configuration will stop the process but fail to re-attach
 + Stop deprecation message about custom strategy plugins introduced in Ansible 2.19
 
 ## 0.2.0 - 2024-11-10
