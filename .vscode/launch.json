@@ -4,7 +4,7 @@
         {
             // See _debuggee.py::AnsibleDebugger._enable_debugpy()
             "name": "Python: Attach to ansibug Ansible process",
-            "type": "python",
+            "type": "debugpy",
             "request": "attach",
             "debugServer": 12535,
             "justMyCode": false
@@ -12,7 +12,7 @@
         {
             // For the VSCode Python test runner subProcess setting
             "name": "Python: Debug Tests",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
             "program": "${file}",
             "purpose": [

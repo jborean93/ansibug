@@ -15,6 +15,77 @@ def _split_task_path(task_path: str) -> tuple[str, int]:
     return split[0], int(split[1])
 
 
+def get_on_failed_details(
+    result: dict[str, object],
+) -> tuple[str, str]:
+    """Get failed task details.
+
+    Gets the message and details of a failed task.
+
+    Args:
+        result: The result of the failed task.
+
+    Returns:
+        tuple[str, str]: A tuple containing the message and details of the
+        failed task.
+    """
+    msg = "Task failed"
+    details = str(result.get("msg", result.get("stdout", "Unknown error")))
+
+    text = f"{msg}\n{details}"
+    if exc := result.get("exception"):
+        text += f"\n\n{exc}"
+
+    return msg, text
+
+
+def get_on_unreachable_details(
+    result: dict[str, object],
+) -> tuple[str, str]:
+    """Get unreachable task details.
+
+    Gets the message and details of an unreachable task.
+
+    Args:
+        result: The result of the unreachable task.
+
+    Returns:
+        tuple[str, str]: A tuple containing the message and details of the
+        unreachable task.
+    """
+    msg = "Host unreachable"
+    details = str(result.get("msg", result.get("stdout", "Unknown error")))
+
+    text = f"{msg}\n{details}"
+    if exc := result.get("exception"):
+        text += f"\n\n{exc}"
+
+    return msg, text
+
+
+def get_on_skipped_details(
+    result: dict[str, object],
+) -> tuple[str, str]:
+    """Get skipped task details.
+
+    Gets the message and details of a skipped task.
+
+    Args:
+        result: The result of the skipped task.
+
+    Returns:
+        tuple[str, str]: A tuple containing the message and details of the
+        skipped task.
+    """
+    msg = "Task skipped"
+    text = f"{msg}\n{result.get('skip_reason', 'Unknown reason')}"
+
+    if (false_condition := result.get("false_condition", None)) is not None:
+        text += f"\n\nFalse condition: {false_condition}"
+
+    return msg, text
+
+
 def register_block_breakpoints(
     debugger: AnsibleDebugger,
     blocks: list[Block],

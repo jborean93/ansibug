@@ -4,6 +4,10 @@
 
 + Added support for restart with a `Launch` configuration, trying to restart an `Attach` configuration will stop the process but fail to re-attach
 + Added `--temp-dir` option for `python -m ansibug dap ...` to control the temporary directory used for storing the Ansible launch script
++ Added exception breakpoints for:
+  + `Uncaught Failures` - Fired when an error is raised in Ansible but is not ignored or rescued
+  + `Unreachable Hosts` - Fired when a host is marked as unreachable
+  + `Skipped Tasks` - Fired when a task is skipped
 + Stop deprecation message about custom strategy plugins introduced in Ansible 2.19
 
 ## 0.2.0 - 2024-11-10

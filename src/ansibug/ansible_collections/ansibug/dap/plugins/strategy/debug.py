@@ -46,7 +46,12 @@ from ansibug._debuggee import (
     EndStrategy,
 )
 
-from ..plugin_utils._breakpoints import register_block_breakpoints
+from ..plugin_utils._breakpoints import (
+    get_on_failed_details,
+    get_on_skipped_details,
+    get_on_unreachable_details,
+    register_block_breakpoints,
+)
 from ..plugin_utils._repl_util import (
     RemoveVarCommand,
     SetVarCommand,
@@ -172,6 +177,49 @@ class AnsibleThread:
 
         return None
 
+    def should_stop_on_exception(
+        self,
+        result: TaskResult,
+        should_stop_on_error: bool = False,
+        should_stop_on_unreachable: bool = False,
+        should_stop_on_skipped: bool = False,
+    ) -> ansibug.dap.StoppedEvent | None:
+        details: tuple[str, str] | None = None
+
+        if result.is_failed() and not result._task_fields.get("ignore_errors", None):
+            is_rescued = False
+
+            task = result._task
+            while task := task._parent:
+                if isinstance(task, Block) and task.rescue:
+                    is_rescued = True
+                    break
+
+            if should_stop_on_error and not is_rescued:
+                details = get_on_failed_details(result._result)
+
+        elif result.is_unreachable() and not result._task_fields.get("ignore_unreachable", None):
+            if should_stop_on_unreachable:
+                details = get_on_unreachable_details(result._result)
+
+        elif result.is_skipped():
+            if should_stop_on_skipped:
+                details = get_on_skipped_details(result._result)
+
+        if details:
+            self.state = ThreadState.WAIT
+            return ansibug.dap.StoppedEvent(
+                reason=ansibug.dap.StoppedReason.EXCEPTION,
+                description=details[0],
+                thread_id=self.id,
+                preserve_focus_hint=False,
+                text=details[1],
+                all_threads_stopped=False,
+                hit_breakpoint_ids=[],
+            )
+
+        return None
+
     def _break_step_over(
         self,
         task: Task,
@@ -232,6 +280,7 @@ class AnsibleStackFrame:
         self.variables_options_id = 0
         self.variables_taskvar_id = 0
         self.variables_hostvars_id = 0
+        self.variables_result_id = 0
 
         self._debugger = debugger
 
@@ -522,19 +571,40 @@ class AnsibleDebugState(DebugState):
 
     def end_task(
         self,
-        host: Host,
-        task: Task,
+        result: TaskResult,
     ) -> None:
         """Ends a task.
 
         Marks the task on the host specified as complete adjusting the stack
-        frames for that host as needed.
+        frames for that host as needed. This will also check if an exception
+        stop event should be fired.
 
         Args:
-            host: The inventory host for the task.
-            task: The task to process.
+            result: The task result to process.
         """
+        host = result._host
+        task = result._task
         thread = next(iter([t for t in self.threads.values() if t.host == host]))
+
+        with self._waiting_condition:
+            stopped_event = thread.should_stop_on_exception(
+                result,
+                should_stop_on_error=self._debugger.should_stop_on_error,
+                should_stop_on_unreachable=self._debugger.should_stop_on_unreachable,
+                should_stop_on_skipped=self._debugger.should_stop_on_skipped,
+            )
+            if stopped_event:
+                sf_id = thread.stack_frames[0]
+                sf = self.stackframes[sf_id]
+
+                result_variable = self._add_variable(sf, result._result)
+                sf.variables_result_id = result_variable.id
+
+                self._debugger.queue_msg(stopped_event)
+                self._waiting_condition.wait_for(lambda: self.threads[thread.id].state != ThreadState.WAIT)
+
+            if thread.state == ThreadState.END:
+                raise EndStrategy()
 
         if task.action not in C._ACTION_ALL_INCLUDES:
             sfid = thread.stack_frames.pop(0)
@@ -658,6 +728,18 @@ class AnsibleDebugState(DebugState):
                 expensive=True,
             ),
         ]
+
+        if sf.variables_result_id:
+            result_variables = self.variables[sf.variables_result_id]
+            scopes.insert(
+                0,
+                ansibug.dap.Scope(
+                    name="Module Result",
+                    variables_reference=sf.variables_result_id,
+                    named_variables=result_variables.named_variables,
+                    indexed_variables=result_variables.indexed_variables,
+                ),
+            )
 
         return ansibug.dap.ScopesResponse(
             request_seq=request.seq,
@@ -964,7 +1046,7 @@ class StrategyModule(LinearStrategy):
         else:
             # Needed to ensure the stackframe is removed as these meta tasks
             # have no results for _process_pending_results to handle.
-            self._debug_state.end_task(target_host, task)
+            self._debug_state.end_task(TaskResult(target_host, task, {}))
 
         return res
 
@@ -1001,7 +1083,7 @@ class StrategyModule(LinearStrategy):
         res = super()._process_pending_results(*args, **kwargs)
 
         for task_res in res:
-            self._debug_state.end_task(task_res._host, task_res._task)
+            self._debug_state.end_task(task_res)
 
         return res
 

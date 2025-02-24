@@ -6,6 +6,7 @@ from __future__ import annotations
 import collections.abc
 import contextlib
 import dataclasses
+import enum
 import functools
 import json
 import logging
@@ -30,6 +31,14 @@ except Exception:  # pragma: nocover
     HAS_DEBUGPY = False
 
 log = logging.getLogger(__name__)
+
+
+class ExceptionBreakpointType(enum.Enum):
+    """Known exception breakpoint filter type ids."""
+
+    ON_ERROR = "on_error"
+    ON_UNREACHABLE = "on_unreachable"
+    ON_SKIPPED = "on_skipped"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -235,6 +244,7 @@ class AnsibleDebugger(metaclass=Singleton):
         self._variable_counter = 1
 
         # Stores all the client breakpoints, key is the breakpoint number/id
+        self._breakpoint_exceptions: dict[str, bool] = {}
         self._breakpoints: dict[int, AnsibleLineBreakpoint] = {}
         self._breakpoint_counter = 1
 
@@ -263,6 +273,18 @@ class AnsibleDebugger(metaclass=Singleton):
         #   - Won't contain the remaining lines of the file - bp checks will
         #     just have to use the last entry
         self._source_info: dict[str, list[int | None]] = {}
+
+    @property
+    def should_stop_on_error(self) -> bool:
+        return self._breakpoint_exceptions.get(ExceptionBreakpointType.ON_ERROR.value, False)
+
+    @property
+    def should_stop_on_unreachable(self) -> bool:
+        return self._breakpoint_exceptions.get(ExceptionBreakpointType.ON_UNREACHABLE.value, False)
+
+    @property
+    def should_stop_on_skipped(self) -> bool:
+        return self._breakpoint_exceptions.get(ExceptionBreakpointType.ON_SKIPPED.value, False)
 
     @contextlib.contextmanager
     def with_strategy(
@@ -628,6 +650,18 @@ class AnsibleDebugger(metaclass=Singleton):
     ) -> None:
         strategy = self._get_strategy()
         resp = strategy.get_scopes(msg)
+        self.queue_msg(resp)
+
+    @process_message.register
+    def _(
+        self,
+        msg: dap.SetExceptionBreakpointsRequest,
+    ) -> None:
+        self._breakpoint_exceptions = {}
+        for breakpoint_type in msg.filters:
+            self._breakpoint_exceptions[breakpoint_type] = True
+
+        resp = dap.SetExceptionBreakpointsResponse(request_seq=msg.seq)
         self.queue_msg(resp)
 
     @process_message.register
