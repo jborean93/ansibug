@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.0 - TBD
+## 0.3.0 - 2025-02-24
 
 + Added support for restart with a `Launch` configuration, trying to restart an `Attach` configuration will stop the process but fail to re-attach
 + Added `--temp-dir` option for `python -m ansibug dap ...` to control the temporary directory used for storing the Ansible launch script
