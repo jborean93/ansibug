@@ -68,6 +68,7 @@ class Capabilities(
         "supportsConditionalBreakpoints": "supports_conditional_breakpoints",
         "supportsHitConditionalBreakpoints": "supports_hit_conditional_breakpoints",
         "supportsEvaluateForHovers": "supports_evaluate_for_hovers",
+        "exceptionBreakpointFilters": "exception_breakpoints_filters",
         "supportsStepBack": "supports_step_back",
         "supportsSetVariable": "supports_set_variable",
         "supportsRestartFrame": "supports_restart_frame",
@@ -95,6 +96,8 @@ class Capabilities(
             breakpoints that break execution after a specified number of hits.
         supports_evaluate_for_hovers: THe debug adapter supports evaluate
             request for data hovers.
+        exception_breakpoints_filters: Available filters for setting exception
+            breakpoints.
         supports_step_back: The debug adapter supports stepping back via the
             StepBackRequest and ReverseContinueRequest.
         supports_set_variable: The debug adapter supports setting a variable to
@@ -121,7 +124,7 @@ class Capabilities(
     supports_conditional_breakpoints: bool = False
     supports_hit_conditional_breakpoints: bool = False
     supports_evaluate_for_hovers: bool = False
-    # exception_breakpoint_filters
+    exception_breakpoints_filters: list[ExceptionBreakpointsFilter] = dataclasses.field(default_factory=list)
     supports_step_back: bool = False
     supports_set_variable: bool = False
     supports_restart_frame: bool = False
@@ -171,6 +174,43 @@ class Checksum(metaclass=DAPObjectMeta, dap={"algorithm": "algorithm", "checksum
 
     algorithm: t.Literal["MD5", "SHA1", "SHA256", "timestamp"]
     checksum: str
+
+
+@dataclasses.dataclass()
+class ExceptionBreakpointsFilter(
+    metaclass=DAPObjectMeta,
+    dap={
+        "filter": "filter",
+        "label": "label",
+        "description": "description",
+        "default": "default",
+        "supportsCondition": "supports_condition",
+        "conditionDescription": "condition_description",
+    },
+):
+    """Exception breakpoints filter.
+
+    An ExceptionBreakpointsFilter is shown in the UI as an filter option for
+    configuring how exceptions are dealt with.
+
+    Args:
+        filter: The internal ID of the filter option.
+        label: The name of the filter option.
+        description: A help text providing additional information about the
+            exception filter.
+        default: Initial value of the filter option.
+        supports_condition: Controls whether a condition can be specified for
+            this filter option.
+        condition_description: A help text providing information about the
+            condition.
+    """
+
+    filter: str
+    label: str
+    description: str | None = None
+    default: bool = False
+    supports_condition: bool = False
+    condition_description: str | None = None
 
 
 @dataclasses.dataclass()

@@ -20,6 +20,7 @@ import typing as t
 from . import dap as dap
 from ._debuggee import (
     DebugConfiguration,
+    ExceptionBreakpointType,
     PathMapping,
     PlaybookProcessInfo,
     get_pid_info_path,
@@ -394,6 +395,26 @@ class DAServer:
             dap.InitializeResponse(
                 request_seq=msg.seq,
                 capabilities=dap.Capabilities(
+                    exception_breakpoints_filters=[
+                        dap.ExceptionBreakpointsFilter(
+                            filter=ExceptionBreakpointType.ON_ERROR.value,
+                            label="Uncaught Failures",
+                            description="Break when the play will fail due to an unhandled failure.",
+                            default=True,
+                        ),
+                        dap.ExceptionBreakpointsFilter(
+                            filter=ExceptionBreakpointType.ON_UNREACHABLE.value,
+                            label="Unreachable Hosts",
+                            description="Break when the play will fail due to an unreachable host error.",
+                            default=True,
+                        ),
+                        dap.ExceptionBreakpointsFilter(
+                            filter=ExceptionBreakpointType.ON_SKIPPED.value,
+                            label="Skipped Tasks",
+                            description="Break when the preceding task was skipped",
+                            default=False,
+                        ),
+                    ],
                     supports_clipboard_context=True,
                     supports_conditional_breakpoints=True,
                     supports_configuration_done_request=True,
