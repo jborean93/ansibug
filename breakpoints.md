@@ -1,5 +1,14 @@
 # Breakpoints
-The first step to debugging a playbook is to place a breakpoint on the task you wish to stop at.
+Ansibug supports the following types of breakpoints:
+
++ [Line Breakpoints](#line-breakpoints)
++ [Exception Breakpoints](#exception-breakpoints)
+  + Uncaught Failures
+  + Unreachable Hosts
+  + Skipped Tasks
+
+## Line Breakpoints
+For a line breakpoint the first step to debugging a playbook is to place a breakpoint on the task you wish to stop at.
 
 ![set_breakpoint](./images/set_breakpoint.gif)
 
@@ -21,7 +30,7 @@ Otherwise for tasks dynamically loaded at runtime, with something like `include_
 
 The breakpoints will always move to the first line of the previous task that is known to the debugger.
 
-## Limitations
+### Limitations
 The following playbook/tasks entries cannot have a breakpoint set on them.
 
 + Play roles under `roles`
@@ -70,3 +79,25 @@ Setting it on `rescue` or `always` will count as the previous task and will auto
 
 This is a limitation with the current breakpoint validation behavior as these entries are not seen by the debug code.
 The only thing it can do is treat it as a line as part of the preceding task.
+
+## Exception Breakpoints
+By default `ansibug` will enable the `Uncaught Failures` and `Unreachable Hosts` breakpoint which will trigger when a task has failred or a host was marked as unreachable respectively.
+It is also possible to enable the `Skipped Tasks` exception breakpoint which will trigger when a task was skipped based on the `is skipped` test.
+Enabled or disabling these types of exception breakpoints is done through the `BREAKPOINTS` pane (typically in the bottom left hand section) of the debugger:
+
+![exception_breakpoints](./images/exception_breakpoints.png)
+
+It is important to note that `Uncaught Failures` will not trigger when:
+
++ The `ignore_errors: true` directive is set on the task
++ The task is contained within a block with a `rescue` section
++ The task failed due to an unreachable host, this will trigger `Unreachable Hosts` instead
+
+The `Unreachable Hosts` breakpoint will not trigger if the `ignore_unreachable: true` directory is set on the task.
+
+When a breakpoint is hit, the UI will focus on the task that triggered the breakpoint and the variables pane will include a new scope called `Module Results` that contains the results of the task.
+You can use this pane to get more information about the task and interest with it in the debug console.
+
+![exception_breakpoints_fired](./images/exception_breakpoints_fired.png)
+
+While the UI will allow you to set the variables in this scope, it will not be persisted when the breakpoint continues.
