@@ -11,7 +11,7 @@ from ansibug.ansible_collections.ansibug.dap.plugins.plugin_utils._breakpoints i
 
 
 def test_get_failed_details_all_fields() -> None:
-    expected = "Task failed\nfailed\n\nfoo"
+    expected = "failed\n\nfoo"
     actual_msg, actual_details = get_on_failed_details(
         {
             "msg": "failed",
@@ -25,7 +25,7 @@ def test_get_failed_details_all_fields() -> None:
 
 
 def test_get_failed_details_no_msg() -> None:
-    expected = "Task failed\nfailed\n\nfoo"
+    expected = "failed\n\nfoo"
     actual_msg, actual_details = get_on_failed_details(
         {
             "stdout": "failed",
@@ -38,7 +38,7 @@ def test_get_failed_details_no_msg() -> None:
 
 
 def test_get_failed_details_no_msg_or_stdout() -> None:
-    expected = "Task failed\nUnknown error\n\nfoo"
+    expected = "Unknown error\n\nfoo"
     actual_msg, actual_details = get_on_failed_details(
         {
             "exception": "foo",
@@ -50,7 +50,7 @@ def test_get_failed_details_no_msg_or_stdout() -> None:
 
 
 def test_get_failed_details_no_exception() -> None:
-    expected = "Task failed\nfailed"
+    expected = "failed"
     actual_msg, actual_details = get_on_failed_details(
         {
             "msg": "failed",
@@ -62,7 +62,7 @@ def test_get_failed_details_no_exception() -> None:
 
 
 def test_get_unreachable_details_all_fields() -> None:
-    expected = "Host unreachable\nfailed\n\nfoo"
+    expected = "failed\n\nfoo"
     actual_msg, actual_details = get_on_unreachable_details(
         {
             "msg": "failed",
@@ -76,7 +76,7 @@ def test_get_unreachable_details_all_fields() -> None:
 
 
 def test_get_unreachable_details_no_msg() -> None:
-    expected = "Host unreachable\nfailed\n\nfoo"
+    expected = "failed\n\nfoo"
     actual_msg, actual_details = get_on_unreachable_details(
         {
             "stdout": "failed",
@@ -89,7 +89,7 @@ def test_get_unreachable_details_no_msg() -> None:
 
 
 def test_get_unreachable_details_no_msg_or_stdout() -> None:
-    expected = "Host unreachable\nUnknown error\n\nfoo"
+    expected = "Unknown error\n\nfoo"
     actual_msg, actual_details = get_on_unreachable_details(
         {
             "exception": "foo",
@@ -101,7 +101,7 @@ def test_get_unreachable_details_no_msg_or_stdout() -> None:
 
 
 def test_get_unreachable_details_no_exception() -> None:
-    expected = "Host unreachable\nfailed"
+    expected = "failed"
     actual_msg, actual_details = get_on_unreachable_details(
         {
             "msg": "failed",

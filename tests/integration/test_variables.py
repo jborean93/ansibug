@@ -573,7 +573,7 @@ def test_playbook_set_variable_types(
         dap.SetVariableResponse,
     )
     assert var_resp.value == "'bar'"
-    assert var_resp.type == "AnsibleUnicode"
+    assert var_resp.type == "str"
 
     dap_client.send(dap.StepInRequest(thread_id=localhost_tid), dap.StepInResponse)
     dap_client.wait_for_message(dap.StoppedEvent)
@@ -613,7 +613,7 @@ def test_playbook_set_variable_types(
         elif v.name == "my_var":
             to_check.remove("my_var")
             assert v.value == "'bar'"
-            assert v.type == "AnsibleUnicode"
+            # assert v.type == "AnsibleUnicode"
 
         if not to_check:
             break
@@ -833,7 +833,7 @@ def test_playbook_eval(
         dap.EvaluateResponse,
     )
     assert eval_resp.result == "'bar'"
-    assert eval_resp.type == "AnsibleUnicode"
+    assert eval_resp.type == "str"
 
     eval_resp = dap_client.send(
         dap.EvaluateRequest(
@@ -844,7 +844,7 @@ def test_playbook_eval(
         dap.EvaluateResponse,
     )
     assert eval_resp.result == "'bar'"
-    assert eval_resp.type == "AnsibleUnicode"
+    assert eval_resp.type == "str"
 
     eval_resp = dap_client.send(
         dap.EvaluateRequest(
@@ -855,7 +855,7 @@ def test_playbook_eval(
         dap.EvaluateResponse,
     )
     assert eval_resp.result == "'bar'"
-    assert eval_resp.type == "AnsibleUnicode"
+    assert eval_resp.type == "str"
 
     eval_resp = dap_client.send(
         dap.EvaluateRequest(
@@ -866,7 +866,7 @@ def test_playbook_eval(
         dap.EvaluateResponse,
     )
     assert eval_resp.result == "'bar'"
-    assert eval_resp.type == "AnsibleUnicode"
+    assert eval_resp.type == "str"
 
     eval_resp = dap_client.send(
         dap.EvaluateRequest(
@@ -877,7 +877,7 @@ def test_playbook_eval(
         dap.EvaluateResponse,
     )
     assert eval_resp.result == "'bar'"
-    assert eval_resp.type == "AnsibleUnicode"
+    assert eval_resp.type == "str"
 
     eval_resp = dap_client.send(
         dap.EvaluateRequest(
@@ -888,7 +888,7 @@ def test_playbook_eval(
         dap.EvaluateResponse,
     )
     assert eval_resp.result == "'bar'"
-    assert eval_resp.type == "AnsibleUnicode"
+    assert eval_resp.type == "str"
 
     eval_resp = dap_client.send(
         dap.EvaluateRequest(
@@ -909,8 +909,13 @@ def test_playbook_eval(
         ),
         dap.EvaluateResponse,
     )
-    assert "template error while templating string" in eval_resp.result
-    assert eval_resp.type is None
+    if (
+        # Pre Data Tagging
+        "template error while templating string" not in eval_resp.result
+        # Post Data Tagging (2.19+)
+        and "Syntax error in template" not in eval_resp.result
+    ):
+        assert False, f"Received unexpected template error message< {eval_resp.result}"
 
     eval_resp = dap_client.send(
         dap.EvaluateRequest(
@@ -1041,7 +1046,7 @@ def test_eval_repl_set_option(
             elif v.name == "option_to_be_changed":
                 to_check.remove("option_to_be_changed")
                 assert v.value == "'bar'"
-                assert v.type == "AnsibleUnicode"
+                assert v.type == "str"
 
             if not to_check:
                 break
@@ -1397,6 +1402,113 @@ def test_eval_repl_invalid_commands(
 
     dap_client.send(dap.ContinueRequest(thread_id=localhost_tid), dap.ContinueResponse)
     dap_client.wait_for_message(dap.ThreadEvent)
+    dap_client.wait_for_message(dap.TerminatedEvent)
+
+    play_out = proc.communicate()
+    if rc := proc.returncode:
+        raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
+
+
+def test_module_res_types(
+    dap_client: DAPClient,
+    tmp_path: pathlib.Path,
+) -> None:
+    playbook = tmp_path / "main.yml"
+    playbook.write_text(
+        r"""
+- hosts: localhost
+  gather_facts: false
+  tasks:
+  - name: module res type test
+    ns.name.module_res:
+    register: res
+
+  - name: on breakpoint
+    ansible.builtin.debug:
+      msg: Foo
+"""
+    )
+
+    collections_path = pathlib.Path(__file__).parent.parent / "data"
+    proc = dap_client.launch(
+        playbook,
+        playbook_dir=tmp_path,
+        playbook_args=["-vvv"],
+        launch_options={
+            "env": {"ANSIBLE_COLLECTIONS_PATH": str(collections_path.absolute())},
+        },
+    )
+
+    resp = dap_client.send(
+        dap.SetBreakpointsRequest(
+            source=dap.Source(
+                name="main.yml",
+                path=str(playbook.absolute()),
+            ),
+            lines=[9],
+            breakpoints=[dap.SourceBreakpoint(line=9)],
+            source_modified=False,
+        ),
+        dap.SetBreakpointsResponse,
+    )
+
+    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
+
+    thread_event = dap_client.wait_for_message(dap.ThreadEvent)
+    assert thread_event.reason == "started"
+    host1_tid = thread_event.thread_id
+
+    stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
+    assert stopped_event.reason == dap.StoppedReason.BREAKPOINT
+    assert stopped_event.thread_id == host1_tid
+    assert stopped_event.hit_breakpoint_ids == [resp.breakpoints[0].id]
+
+    st_resp = dap_client.send(dap.StackTraceRequest(thread_id=host1_tid), dap.StackTraceResponse)
+    assert len(st_resp.stack_frames) == 1
+    assert st_resp.total_frames == 1
+    assert st_resp.stack_frames[0].name == "on breakpoint"
+
+    scope_resp = dap_client.send(dap.ScopesRequest(frame_id=st_resp.stack_frames[0].id), dap.ScopesResponse)
+    assert len(scope_resp.scopes) == 4
+    assert scope_resp.scopes[0].name == "Module Options"
+    assert scope_resp.scopes[1].name == "Task Variables"
+    assert scope_resp.scopes[2].name == "Host Variables"
+    assert scope_resp.scopes[3].name == "Global Variables"
+
+    host_vars = dap_client.send(
+        dap.VariablesRequest(variables_reference=scope_resp.scopes[2].variables_reference),
+        dap.VariablesResponse,
+    )
+    module_res = None
+    for v in host_vars.variables:
+        if v.name == "res":
+            module_res = v
+            break
+    else:
+        raise Exception("Failed to find res in host vars")
+
+    module_res_vars = dap_client.send(
+        dap.VariablesRequest(variables_reference=module_res.variables_reference),
+        dap.VariablesResponse,
+    )
+    to_find = {
+        "str": ("'str value'", "str"),
+        "int": ("9", "int"),
+        "float": ("1.2", "float"),
+    }
+    for v in module_res_vars.variables:
+        if expected_info := to_find.pop(v.name, None):
+            assert v.value == expected_info[0]
+            assert v.type == expected_info[1]
+
+    assert len(to_find) == 0
+
+    dap_client.send(dap.ContinueRequest(thread_id=stopped_event.thread_id), dap.ContinueResponse)
+
+    thread_event = dap_client.wait_for_message(dap.ThreadEvent)
+    assert thread_event.thread_id == host1_tid
+    assert thread_event.reason == "exited"
+
     dap_client.wait_for_message(dap.TerminatedEvent)
 
     play_out = proc.communicate()

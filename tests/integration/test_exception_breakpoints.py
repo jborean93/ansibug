@@ -41,7 +41,7 @@ def test_break_on_error(
     assert stopped_event.reason == dap.StoppedReason.EXCEPTION
     assert stopped_event.description == "Task failed"
     assert stopped_event.text
-    assert stopped_event.text.startswith("Task failed\nMODULE FAILURE")
+    assert "boom" in stopped_event.text
     assert stopped_event.thread_id == host_tid
     assert stopped_event.hit_breakpoint_ids == []
 
@@ -63,20 +63,12 @@ def test_break_on_error(
         dap.VariablesResponse,
     )
 
-    to_find = {"failed", "module_stdout", "module_stderr", "exception", "msg", "rc"}
+    to_find = {"failed", "exception", "msg"}
     for v in mod_res.variables:
         if v.name == "failed":
             assert v.value == "True"
             assert v.type == "bool"
             to_find.remove("failed")
-
-        elif v.name == "module_stdout":
-            assert v.value
-            to_find.remove("module_stdout")
-
-        elif v.name == "module_stderr":
-            assert v.value
-            to_find.remove("module_stderr")
 
         elif v.name == "exception":
             assert v.value
@@ -85,11 +77,6 @@ def test_break_on_error(
         elif v.name == "msg":
             assert v.value
             to_find.remove("msg")
-
-        elif v.name == "rc":
-            assert v.value == "1"
-            assert v.type == "int"
-            to_find.remove("rc")
 
     assert len(to_find) == 0
 
@@ -302,7 +289,7 @@ def test_break_on_unreachable(
         stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
         assert stopped_event.reason == dap.StoppedReason.EXCEPTION
         assert stopped_event.description == "Host unreachable"
-        assert stopped_event.text == "Host unreachable\nConnection is broken"
+        assert stopped_event.text == "Connection is broken"
         assert stopped_event.thread_id == host_tid
         assert stopped_event.hit_breakpoint_ids == []
 

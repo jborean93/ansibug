@@ -14,6 +14,7 @@ author: Jordan Borean (@jborean93)
 """
 
 import collections.abc
+import dataclasses
 import enum
 import inspect
 import logging
@@ -34,9 +35,24 @@ from ansible.playbook.conditional import Conditional
 from ansible.playbook.play_context import PlayContext
 from ansible.playbook.task import Task
 from ansible.plugins.strategy.linear import StrategyModule as LinearStrategy
-from ansible.template import AnsibleNativeEnvironment, Templar
+from ansible.template import Templar
 from ansible.utils.display import Display
+from ansible.vars.hostvars import HostVars
 from ansible.vars.manager import VariableManager
+
+# Data Tagging was introduced in 2.19, this can be removed once 2.19 is the
+# minimum supported version.
+POST_DATATAGGING = False
+try:
+    from ansible.errors import AnsibleBrokenConditionalError
+    from ansible.template import trust_as_template
+    from ansible.utils.display import _DeferredWarningContext
+
+    POST_DATATAGGING = True
+except ImportError:
+    from ansible.template import AnsibleNativeEnvironment
+
+    pass
 
 import ansibug
 from ansibug._debuggee import (
@@ -58,6 +74,7 @@ from ..plugin_utils._repl_util import (
     TemplateCommand,
     parse_repl_args,
 )
+from ..plugin_utils._variables import get_canonicalized_variable_type
 
 display = Display()
 log = logging.getLogger("ansibug.strategy")
@@ -543,20 +560,37 @@ class AnsibleDebugState(DebugState):
 
         templar = Templar(loader=self._loader, variables=sf.task_vars)
 
+        if POST_DATATAGGING:
+
+            def eval_condition(condition: str) -> bool:
+                template = trust_as_template(condition)
+
+                try:
+                    return templar.evaluate_conditional(template)
+                except (AnsibleBrokenConditionalError, AnsibleUndefinedVariable):
+                    return False
+
+        else:
+
+            def eval_condition(condition: str) -> bool:
+                cond = Conditional(loader=self._loader)
+                cond.when = [condition]
+
+                try:
+                    return cond.evaluate_conditional(templar, templar.available_variables)
+                except AnsibleError:
+                    return False
+
         with self._waiting_condition:
             tid = thread.id
 
             line_breakpoint = self._debugger.get_breakpoint(path, line)
-            if line_breakpoint and line_breakpoint.source_breakpoint.condition:
-                cond = Conditional(loader=self._loader)
-                cond.when = [line_breakpoint.source_breakpoint.condition]
-
-                try:
-                    if not cond.evaluate_conditional(templar, templar.available_variables):
-                        line_breakpoint = None
-                except AnsibleError:
-                    # Treat a broken template as a false condition result.
-                    line_breakpoint = None
+            if (
+                line_breakpoint
+                and line_breakpoint.source_breakpoint.condition
+                and not eval_condition(line_breakpoint.source_breakpoint.condition)
+            ):
+                line_breakpoint = None
 
             stopped_event = thread.should_break(task, line_breakpoint)
 
@@ -852,12 +886,25 @@ class AnsibleDebugState(DebugState):
             child_var: AnsibleVariable | None = None
             if isinstance(value, (collections.abc.Mapping, collections.abc.Sequence)) and not isinstance(value, str):
                 child_var = self._add_variable(variable.stackframe, value)
+            elif dataclasses.is_dataclass(value) and not isinstance(value, type):
+                child_var = self._add_variable(variable.stackframe, dataclasses.asdict(value))
+
+            value_repr: str
+            if isinstance(value, HostVars):
+                # Data Tagging (2.19) removed the repr for HostVars so we just
+                # manually create the repr.
+                hostvars = {}
+                for inventory_host in value:
+                    hostvars[inventory_host] = value.get(inventory_host)
+                value_repr = repr(hostvars)
+            else:
+                value_repr = repr(value)
 
             variables.append(
                 ansibug.dap.Variable(
                     name=name,
-                    value=repr(value),
-                    type=type(value).__name__,
+                    value=value_repr,
+                    type=get_canonicalized_variable_type(value),
                     named_variables=child_var.named_variables if child_var else 0,
                     indexed_variables=child_var.indexed_variables if child_var else 0,
                     variables_reference=child_var.id if child_var else 0,
@@ -887,7 +934,7 @@ class AnsibleDebugState(DebugState):
         return ansibug.dap.SetVariableResponse(
             request_seq=request.seq,
             value=repr(new_value),
-            type=type(new_value).__name__,
+            type=get_canonicalized_variable_type(new_value),
             variables_reference=new_container.id if new_container else 0,
             named_variables=new_container.named_variables if new_container else 0,
             indexed_variables=new_container.indexed_variables if new_container else 0,
@@ -978,7 +1025,7 @@ class AnsibleDebugState(DebugState):
             value = traceback.format_exc()
         else:
             value = repr(templated_value)
-            value_type = type(templated_value).__name__
+            value_type = get_canonicalized_variable_type(templated_value)
 
         return value, value_type
 
@@ -988,14 +1035,16 @@ class AnsibleDebugState(DebugState):
         variables: dict[t.Any, t.Any],
     ) -> t.Any:
         templar = Templar(loader=self._loader, variables=variables)
-
-        # Always use native types even if the config has not been enabled as it
-        # allows expressions like `1` to be returned as an int and keeps things
-        # consistent.
-        if not C.DEFAULT_JINJA2_NATIVE:
-            templar = templar.copy_with_new_env(environment_class=AnsibleNativeEnvironment)
-
         expression = "{{ %s }}" % value
+
+        if POST_DATATAGGING:
+            expression = trust_as_template(expression)
+
+        elif not C.DEFAULT_JINJA2_NATIVE:
+            # Always use native types even if the config has not been enabled as
+            # it allows expressions like `1` to be returned as an int and keeps
+            # things consistent.
+            templar = templar.copy_with_new_env(environment_class=AnsibleNativeEnvironment)
 
         return templar.template(expression)
 
@@ -1013,11 +1062,15 @@ class StrategyModule(LinearStrategy):
         # Set in run()
         self._debug_state: AnsibleDebugState
 
-        # 2.19 has deprecated custom strategy plugins. To avoid alarming end
-        # users we will suppress the warning for this plugin and turn it back
-        # on when run() is called. The aim is to introduce an official API for
-        # this plugin to use before the deprecation turns into a removal.
-        C.DEPRECATION_WARNINGS = False
+        # Ansible 2.19 has deprecated custom strategy plugins with no end date.
+        # While we should migrate to a supported API, once implemented, we will
+        # capture any deprecation warnings to avoid confusing the user. 2.19
+        # also introduces Data Tagging so we will use that to silence any
+        # warnings. The run() method will unset the deferred warning context.
+        self._warning_ctx = None
+        if POST_DATATAGGING:
+            self._warning_ctx = _DeferredWarningContext(variables={})
+            self._warning_ctx.__enter__()
 
     def _execute_meta(
         self,
@@ -1098,12 +1151,9 @@ class StrategyModule(LinearStrategy):
         step is to associate the current strategy with the debuggee adapter so
         it can respond to breakpoint and other information.
         """
-        # Reset deprecation warnings once the strategy plugin has been loaded
-        # so the user defined value is respected.
-        C.DEPRECATION_WARNINGS = C.config.get_config_value(
-            "DEPRECATION_WARNINGS",
-            variables={},
-        )
+        if self._warning_ctx:
+            self._warning_ctx.__exit__(None, None, None)
+            self._warning_ctx = None
 
         debugger = AnsibleDebugger()
         self._debug_state = AnsibleDebugState(
