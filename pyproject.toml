@@ -1,6 +1,6 @@
 [build-system]
 requires = [
-    "setuptools >= 61.0.0", # Support for setuptools config in pyproject.toml
+    "setuptools >= 77.0.0", # license and license-files alignment
 ]
 build-backend = "setuptools.build_meta"
 
@@ -9,12 +9,12 @@ name = "ansibug"
 description = "Ansible Debug Adapter Protocol Implementation"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { file = "LICENSE" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "Jordan Borean", email = "jborean93@gmail.com" }]
 keywords = ["ansible", "debug", "lsp", "dap"]
 classifiers = [
     "Development Status :: 4 - Beta",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",

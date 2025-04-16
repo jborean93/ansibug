@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.1 - TBD
+
++ Added support for Ansible 2.19 which introduced Data Tagging
+
 ## 0.3.0 - 2025-02-24
 
 + Added support for restart with a `Launch` configuration, trying to restart an `Attach` configuration will stop the process but fail to re-attach

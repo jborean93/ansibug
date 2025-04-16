@@ -7,7 +7,29 @@ from ansible.playbook.block import Block
 from ansible.playbook.play import Play
 from ansible.playbook.task import Task
 
+HAS_FORMAT_MESSAGE = False
+try:
+    from ansible.module_utils.common.messages import ErrorSummary
+    from ansible.utils.display import format_message
+
+    HAS_FORMAT_MESSAGE = True
+except ImportError:
+    pass
+
 from ansibug._debuggee import AnsibleDebugger
+
+
+def _format_exception(message: str, result: dict) -> str:
+    text = str(result.get("msg", result.get("stdout", "Unknown error")))
+
+    if exc := result.get("exception"):
+        # Data Tagging has special method to format the exception tuple
+        if HAS_FORMAT_MESSAGE and isinstance(exc, ErrorSummary):
+            return format_message(exc)
+
+        text += f"\n\n{exc}"
+
+    return text
 
 
 def _split_task_path(task_path: str) -> tuple[str, int]:
@@ -30,13 +52,8 @@ def get_on_failed_details(
         failed task.
     """
     msg = "Task failed"
-    details = str(result.get("msg", result.get("stdout", "Unknown error")))
 
-    text = f"{msg}\n{details}"
-    if exc := result.get("exception"):
-        text += f"\n\n{exc}"
-
-    return msg, text
+    return msg, _format_exception(msg, result)
 
 
 def get_on_unreachable_details(
@@ -54,13 +71,8 @@ def get_on_unreachable_details(
         unreachable task.
     """
     msg = "Host unreachable"
-    details = str(result.get("msg", result.get("stdout", "Unknown error")))
 
-    text = f"{msg}\n{details}"
-    if exc := result.get("exception"):
-        text += f"\n\n{exc}"
-
-    return msg, text
+    return msg, _format_exception(msg, result)
 
 
 def get_on_skipped_details(

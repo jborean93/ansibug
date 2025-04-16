@@ -276,6 +276,10 @@ deprecation_warnings = {deprecation_warnings}
 
     stderr = play_out[1].decode()
 
+    assert (
+        "Use of strategy plugins not included in ansible.builtin are deprecated" not in stderr
+    ), f"Strategy plugin msg was found in {stderr}"
+
     if deprecation_warnings:
         assert "Test deprecation" in stderr, f"Failed to find deprecation msg in {stderr}"
     else:
