@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.1 - 2025-04-22
+## 0.3.1 - TBD
 
 + Added support for Ansible 2.19 which introduced Data Tagging
 
