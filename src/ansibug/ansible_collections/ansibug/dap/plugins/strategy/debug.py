@@ -1099,7 +1099,13 @@ class StrategyModule(LinearStrategy):
         else:
             # Needed to ensure the stackframe is removed as these meta tasks
             # have no results for _process_pending_results to handle.
-            self._debug_state.end_task(TaskResult(target_host, task, {}))
+            task_res = TaskResult(
+                host=target_host,
+                task=task,
+                return_data={},
+                task_fields=None,
+            )
+            self._debug_state.end_task(task_res)
 
         return res
 
