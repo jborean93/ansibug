@@ -203,6 +203,8 @@ class AnsibleThread:
     ) -> ansibug.dap.StoppedEvent | None:
         details: tuple[str, str] | None = None
 
+        # 2.19 changed the property to _return_data
+        task_result = result._return_data if hasattr(result, "_return_data") else result._result
         if result.is_failed() and not result._task_fields.get("ignore_errors", None):
             is_rescued = False
 
@@ -213,15 +215,15 @@ class AnsibleThread:
                     break
 
             if should_stop_on_error and not is_rescued:
-                details = get_on_failed_details(result._result)
+                details = get_on_failed_details(task_result)
 
         elif result.is_unreachable() and not result._task_fields.get("ignore_unreachable", None):
             if should_stop_on_unreachable:
-                details = get_on_unreachable_details(result._result)
+                details = get_on_unreachable_details(task_result)
 
         elif result.is_skipped():
             if should_stop_on_skipped:
-                details = get_on_skipped_details(result._result)
+                details = get_on_skipped_details(task_result)
 
         if details:
             self.state = ThreadState.WAIT
@@ -618,6 +620,8 @@ class AnsibleDebugState(DebugState):
         """
         host = result._host
         task = result._task
+        # 2.19 changed the property to _return_data
+        task_result = result._return_data if hasattr(result, "_return_data") else result._result
         thread = next(iter([t for t in self.threads.values() if t.host == host]))
 
         with self._waiting_condition:
@@ -631,7 +635,7 @@ class AnsibleDebugState(DebugState):
                 sf_id = thread.stack_frames[0]
                 sf = self.stackframes[sf_id]
 
-                result_variable = self._add_variable(sf, result._result)
+                result_variable = self._add_variable(sf, task_result)
                 sf.variables_result_id = result_variable.id
 
                 self._debugger.queue_msg(stopped_event)
