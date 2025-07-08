@@ -289,7 +289,7 @@ def test_break_on_unreachable(
         stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
         assert stopped_event.reason == dap.StoppedReason.EXCEPTION
         assert stopped_event.description == "Host unreachable"
-        assert stopped_event.text == "Connection is broken"
+        assert "Connection is broken" in str(stopped_event.text)
         assert stopped_event.thread_id == host_tid
         assert stopped_event.hit_breakpoint_ids == []
 
@@ -319,7 +319,7 @@ def test_break_on_unreachable(
                 to_find.remove("unreachable")
 
             elif v.name == "msg":
-                assert v.value == "'Connection is broken'"
+                assert "Connection is broken" in v.value
                 to_find.remove("msg")
 
             elif v.name == "changed":

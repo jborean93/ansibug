@@ -9,8 +9,8 @@ from ansible.playbook.task import Task
 
 HAS_FORMAT_MESSAGE = False
 try:
-    from ansible.module_utils.common.messages import ErrorSummary
-    from ansible.utils.display import format_message
+    from ansible.module_utils._internal._messages import ErrorSummary
+    from ansible.utils.display import _format_message
 
     HAS_FORMAT_MESSAGE = True
 except ImportError:
@@ -19,13 +19,13 @@ except ImportError:
 from ansibug._debuggee import AnsibleDebugger
 
 
-def _format_exception(message: str, result: dict) -> str:
+def _format_exception(result: dict) -> str:
     text = str(result.get("msg", result.get("stdout", "Unknown error")))
 
     if exc := result.get("exception"):
         # Data Tagging has special method to format the exception tuple
         if HAS_FORMAT_MESSAGE and isinstance(exc, ErrorSummary):
-            return format_message(exc)
+            return _format_message(exc, False)
 
         text += f"\n\n{exc}"
 
@@ -53,7 +53,7 @@ def get_on_failed_details(
     """
     msg = "Task failed"
 
-    return msg, _format_exception(msg, result)
+    return msg, _format_exception(result)
 
 
 def get_on_unreachable_details(
@@ -72,7 +72,7 @@ def get_on_unreachable_details(
     """
     msg = "Host unreachable"
 
-    return msg, _format_exception(msg, result)
+    return msg, _format_exception(result)
 
 
 def get_on_skipped_details(
