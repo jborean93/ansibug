@@ -46,7 +46,15 @@ POST_DATATAGGING = False
 try:
     from ansible.errors import AnsibleBrokenConditionalError
     from ansible.template import trust_as_template
-    from ansible.utils.display import _DeferredWarningContext
+
+    # This import was moved in 2.20
+    try:
+        from ansible._internal._display_utils import (
+            DeferredWarningContext as _DeferredWarningContext,
+        )
+    except ImportError:
+        # Used for Ansible 2.19
+        from ansible.utils.display import _DeferredWarningContext
 
     POST_DATATAGGING = True
 except ImportError:
