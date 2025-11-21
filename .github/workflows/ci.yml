@@ -72,34 +72,56 @@ jobs:
         - "2.17"
         - "2.18"
         - "2.19"
+        - "2.20"
         - devel
         python-version:
         - "3.10"
         - "3.11"
         - "3.12"
         - "3.13"
+        - "3.14"
 
         exclude:
         # Exclude Python/Ansible versions that aren't compatible.
         - ansible-version: "2.16"
           python-version: "3.13"
+        - ansible-version: "2.16"
+          python-version: "3.14"
+
         - ansible-version: "2.17"
           python-version: "3.13"
+        - ansible-version: "2.17"
+          python-version: "3.14"
+
         - ansible-version: "2.18"
           python-version: "3.10"
+        - ansible-version: "2.18"
+          python-version: "3.14"
+
         - ansible-version: "2.19"
           python-version: "3.10"
+        - ansible-version: "2.19"
+          python-version: "3.14"
+
+        - ansible-version: "2.20"
+          python-version: "3.10"
+        - ansible-version: "2.20"
+          python-version: "3.11"
+
         - ansible-version: devel
           python-version: "3.10"
         - ansible-version: devel
           python-version: "3.11"
-        # Limit macOS tests to the latest release only (2.19 only)
+
+        # Limit macOS tests to the latest release only (2.20 only)
         - os: macos-latest
           ansible-version: "2.16"
         - os: macos-latest
           ansible-version: "2.17"
         - os: macos-latest
           ansible-version: "2.18"
+        - os: macos-latest
+          ansible-version: "2.19"
         - os: macos-latest
           ansible-version: devel
 

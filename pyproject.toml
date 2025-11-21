@@ -20,6 +20,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
 ]
 dynamic = ["version"]
 
@@ -78,7 +79,7 @@ profile = "black"
 [tool.mypy]
 exclude = "docs/|build/"
 mypy_path = "$MYPY_CONFIG_FILE_DIR/src:$MYPY_CONFIG_FILE_DIR/tests/utils"
-python_version = "3.9"
+python_version = "3.10"
 explicit_package_bases = true
 show_error_codes = true
 show_column_numbers = true
@@ -138,7 +139,8 @@ env_list =
     py3{10,11,12}-ansible_2.17-tests
     py3{11,12,13}-ansible_2.18-tests
     py3{11,12,13}-ansible_2.19-tests
-    py3{12,13}-ansible_devel-tests
+    py3{12,13,14}-ansible_2.20-tests
+    py3{12,13,14}-ansible_devel-tests
 min_version = 4.0
 
 [testenv]
@@ -152,6 +154,7 @@ deps:
     ansible_2.17: ansible-core >=2.17.0,<2.18.0
     ansible_2.18: ansible-core >=2.18.0,<2.19.0
     ansible_2.19: ansible-core >=2.19.0,<2.20.0
+    ansible_2.20: ansible-core >=2.20.0,<2.21.0
     ansible_devel: https://github.com/ansible/ansible/archive/devel.tar.gz
 install_command = python -Im pip install --no-compile {opts} {packages}
 

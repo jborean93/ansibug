@@ -56,8 +56,8 @@ As the support matrix for this library can take some time to run it might be ben
 The following factors are available in tox
 
 + `sanity`
-+ `py3{10,11,12,13}`
-+ `ansible_{2.16,2.17,2.18,devel}`
++ `py3{10,11,12,13,14}`
++ `ansible_{2.16,2.17,2.18,2.19,2.20,devel}`
 
 Here are some example factors that can be invoked with tox:
 
