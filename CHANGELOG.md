@@ -1,8 +1,9 @@
 # Changelog
 
-## 0.3.2 - TBD
+## 0.3.2 - 2025-11-22
 
 + Bugfixes to work with internal changes introduced with the upcoming Ansible 2.20 release
++ Added support for Ansible 2.20
 
 ## 0.3.1 - 2025-07-08
 
