@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import pathlib
 
+import ansible
 import pytest
 from dap_client import DAPClient
 
@@ -1509,6 +1510,91 @@ def test_module_res_types(
     assert thread_event.thread_id == host1_tid
     assert thread_event.reason == "exited"
 
+    dap_client.wait_for_message(dap.TerminatedEvent)
+
+    play_out = proc.communicate()
+    if rc := proc.returncode:
+        raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
+
+
+def test_get_undefined_variable(
+    dap_client: DAPClient,
+    tmp_path: pathlib.Path,
+) -> None:
+    playbook = tmp_path / "main.yml"
+    playbook.write_text(
+        r"""
+- hosts: localhost
+  gather_facts: false
+  tasks:
+  - name: ping test
+    ping:
+"""
+    )
+
+    inventory = tmp_path / "inventory.ini"
+    inventory.write_text(
+        r"""
+localhost ansible_connection=local ansible_python_interpreter={{ansible_playbook_python}} my_var={{undefined_var}}
+"""
+    )
+
+    proc = dap_client.launch("main.yml", playbook_dir=tmp_path, playbook_args=["-i", "inventory.ini"])
+
+    dap_client.send(
+        dap.SetBreakpointsRequest(
+            source=dap.Source(
+                name="main.yml",
+                path=str(playbook.absolute()),
+            ),
+            lines=[5],
+            breakpoints=[dap.SourceBreakpoint(line=5)],
+            source_modified=False,
+        ),
+        dap.SetBreakpointsResponse,
+    )
+
+    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
+
+    thread_event = dap_client.wait_for_message(dap.ThreadEvent)
+    localhost_tid = thread_event.thread_id
+
+    dap_client.wait_for_message(dap.StoppedEvent)
+
+    st_resp = dap_client.send(dap.StackTraceRequest(thread_id=localhost_tid), dap.StackTraceResponse)
+    scope_resp = dap_client.send(dap.ScopesRequest(frame_id=st_resp.stack_frames[0].id), dap.ScopesResponse)
+
+    scope_resp = dap_client.send(dap.ScopesRequest(frame_id=st_resp.stack_frames[0].id), dap.ScopesResponse)
+    assert len(scope_resp.scopes) == 4
+    assert scope_resp.scopes[0].name == "Module Options"
+    assert scope_resp.scopes[1].name == "Task Variables"
+    assert scope_resp.scopes[2].name == "Host Variables"
+    assert scope_resp.scopes[3].name == "Global Variables"
+
+    task_vars = dap_client.send(
+        dap.VariablesRequest(variables_reference=scope_resp.scopes[1].variables_reference),
+        dap.VariablesResponse,
+    )
+    for v in task_vars.variables:
+        if v.name == "my_var":
+            assert v.value == "'{{undefined_var}}'"
+            break
+    else:
+        raise Exception("Failed to find my_var in task vars")
+
+    host_vars = dap_client.send(
+        dap.VariablesRequest(variables_reference=scope_resp.scopes[2].variables_reference),
+        dap.VariablesResponse,
+    )
+    for v in host_vars.variables:
+        if v.name == "my_var":
+            assert v.value == "'{{undefined_var}}'"
+            break
+    else:
+        raise Exception("Failed to find my_var in host vars")
+
+    dap_client.send(dap.ContinueRequest(thread_id=localhost_tid), dap.ContinueResponse)
+    dap_client.wait_for_message(dap.ThreadEvent)
     dap_client.wait_for_message(dap.TerminatedEvent)
 
     play_out = proc.communicate()

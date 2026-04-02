@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.3 - TBD
+
++ Catch `AnsibleUndefinedVariable` when enumerating templated host variables using an undefined variable, the raw templated string will be returned
+
 ## 0.3.2 - 2025-11-22
 
 + Bugfixes to work with internal changes introduced with the upcoming Ansible 2.20 release
