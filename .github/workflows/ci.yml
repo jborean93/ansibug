@@ -17,22 +17,19 @@ jobs:
     name: run sanity checks
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
 
-    - uses: actions/setup-python@v5
+    - uses: actions/setup-python@v6
       with:
         python-version: "3.12"
-        cache: pip
-        cache-dependency-path: |
-          pyproject.toml
 
     - name: Run sanity tests
       shell: bash
       run: |
         set -ex
 
-        python -Im pip install tox
-        python -Im tox run -f sanity
+        python -Im pip install uv
+        uv run tox run -f sanity
 
   build:
     name: build sdist and wheel
@@ -41,7 +38,7 @@ jobs:
 
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
 
     - name: build sdist and wheel
       run: |
@@ -50,7 +47,7 @@ jobs:
         python -m pip install build
         python -m build
 
-    - uses: actions/upload-artifact@v4
+    - uses: actions/upload-artifact@v7
       with:
         name: artifact
         path: ./dist/*
@@ -126,16 +123,16 @@ jobs:
           ansible-version: devel
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
           cache-dependency-path: |
             pyproject.toml
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: artifact
           path: ./dist
@@ -155,8 +152,8 @@ jobs:
         run: |
           set -ex
 
-          python -Im pip install tox
-          python -Im tox run \
+          python -Im pip install uv
+          uv run tox run \
               -f ${{ env.TOX_PYTHON }} ansible_${{ matrix.ansible-version }} \
               --installpkg dist/*.whl
         env:
@@ -164,21 +161,21 @@ jobs:
 
       - name: Upload Test Results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: Unit Test Results (${{ matrix.os }} ${{ matrix.python-version }} ansible_${{ matrix.ansible-version }})
           path: ./junit/test-results.xml
 
       - name: Upload Coverage Results
         if: always() && !startsWith(github.ref, 'refs/tags/v')
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: Coverage Results (${{ matrix.os }} ${{ matrix.python-version }} ansible_${{ matrix.ansible-version }})
           path: ./coverage.xml
 
       - name: Upload Coverage to codecov
         if: always()
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v6
         with:
           files: ./coverage.xml
           flags: ${{ env.OS }},py${{ matrix.python-version }},ansible_${{ matrix.ansible-version }}
@@ -194,7 +191,7 @@ jobs:
       id-token: write
 
     steps:
-    - uses: actions/download-artifact@v4
+    - uses: actions/download-artifact@v8
       with:
         name: artifact
         path: ./dist

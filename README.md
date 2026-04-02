@@ -42,7 +42,7 @@ To test out the changes locally run the following:
 ```bash
 git clone https://github.com/jborean93/ansibug.git
 
-python -m pip install -e .[dev]
+uv sync
 pre-commit install
 ```
 
