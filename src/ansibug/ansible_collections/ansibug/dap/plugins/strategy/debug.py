@@ -727,11 +727,14 @@ class AnsibleDebugState(DebugState):
         # this task so is important to give the user a way to set these
         # persistently in the debugger.
         host_vars_amalgamated: dict[str, t.Any] = {}
-        for k, v in sf.task_vars["hostvars"][sf.task_vars["inventory_hostname"]].items():
+
+        inventory_hostvars = sf.task_vars["hostvars"][sf.task_vars["inventory_hostname"]]
+        for k in inventory_hostvars.keys():
             try:
-                host_vars_amalgamated[k] = v
+                value = inventory_hostvars[k]
+                host_vars_amalgamated[k] = value
             except AnsibleUndefinedVariable:
-                host_vars_amalgamated[k] = "<undefined>"
+                host_vars_amalgamated[k] = sf.task_vars.get(k, "<undefined>")
         for k, v in task_vars.get():
             if k not in host_vars_amalgamated:
                 host_vars_amalgamated[k] = v
