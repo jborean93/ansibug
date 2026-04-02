@@ -412,166 +412,163 @@ def test_breakpoint_stepping(
     # Continue - 'task 2'
     # Step out - 'final ping'
     # Step out - finished
-    proc = dap_client.launch(playbook, playbook_dir=tmp_path)
-
-    bp_resp = dap_client.send(
-        dap.SetBreakpointsRequest(
-            source=dap.Source(
-                name="tasks.yml",
-                path=str(tasks.absolute()),
+    with dap_client.launch2(playbook, playbook_dir=tmp_path) as proc:
+        bp_resp = dap_client.send(
+            dap.SetBreakpointsRequest(
+                source=dap.Source(
+                    name="tasks.yml",
+                    path=str(tasks.absolute()),
+                ),
+                lines=[5, 8],
+                breakpoints=[dap.SourceBreakpoint(line=5), dap.SourceBreakpoint(line=8)],
+                source_modified=False,
             ),
-            lines=[5, 8],
-            breakpoints=[dap.SourceBreakpoint(line=5), dap.SourceBreakpoint(line=8)],
-            source_modified=False,
-        ),
-        dap.SetBreakpointsResponse,
-    )
+            dap.SetBreakpointsResponse,
+        )
 
-    # They won't be verified until include_tasks was run
-    assert len(bp_resp.breakpoints) == 2
-    assert not bp_resp.breakpoints[0].verified
-    assert bp_resp.breakpoints[0].line == 5
-    assert bp_resp.breakpoints[0].message == "File has not been loaded by Ansible, cannot detect breakpoints yet."
+        # They won't be verified until include_tasks was run
+        assert len(bp_resp.breakpoints) == 2
+        assert not bp_resp.breakpoints[0].verified
+        assert bp_resp.breakpoints[0].line == 5
+        assert bp_resp.breakpoints[0].message == "File has not been loaded by Ansible, cannot detect breakpoints yet."
 
-    assert not bp_resp.breakpoints[1].verified
-    assert bp_resp.breakpoints[1].line == 8
-    assert bp_resp.breakpoints[1].message == "File has not been loaded by Ansible, cannot detect breakpoints yet."
+        assert not bp_resp.breakpoints[1].verified
+        assert bp_resp.breakpoints[1].line == 8
+        assert bp_resp.breakpoints[1].message == "File has not been loaded by Ansible, cannot detect breakpoints yet."
 
-    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
+        dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
 
-    thread_event = dap_client.wait_for_message(dap.ThreadEvent)
-    localhost_tid = thread_event.thread_id
+        thread_event = dap_client.wait_for_message(dap.ThreadEvent)
+        localhost_tid = thread_event.thread_id
 
-    # Once running it'll run include_tasks which then validates the breakpoints
-    # This is a complicated step as the debuggee is building the source map
-    # based on the tasks found in order so it'll send multiple breakpoints
-    # update events.
+        # Once running it'll run include_tasks which then validates the breakpoints
+        # This is a complicated step as the debuggee is building the source map
+        # based on the tasks found in order so it'll send multiple breakpoints
+        # update events.
 
-    # First task processed, both breakpoints are updated with the new lines
-    bp_event1 = dap_client.wait_for_message(dap.BreakpointEvent)
-    assert bp_event1.breakpoint.id == bp_resp.breakpoints[0].id
-    assert bp_event1.breakpoint.line == 2
-    assert bp_event1.breakpoint.end_line == 2
+        # First task processed, both breakpoints are updated with the new lines
+        bp_event1 = dap_client.wait_for_message(dap.BreakpointEvent)
+        assert bp_event1.breakpoint.id == bp_resp.breakpoints[0].id
+        assert bp_event1.breakpoint.line == 2
+        assert bp_event1.breakpoint.end_line == 2
 
-    bp_event2 = dap_client.wait_for_message(dap.BreakpointEvent)
-    assert bp_event2.breakpoint.id == bp_resp.breakpoints[1].id
-    assert bp_event2.breakpoint.line == 2
-    assert bp_event2.breakpoint.end_line == 2
+        bp_event2 = dap_client.wait_for_message(dap.BreakpointEvent)
+        assert bp_event2.breakpoint.id == bp_resp.breakpoints[1].id
+        assert bp_event2.breakpoint.line == 2
+        assert bp_event2.breakpoint.end_line == 2
 
-    # Middle task is processed, both breakpoints are updated with the new lines
-    bp_event3 = dap_client.wait_for_message(dap.BreakpointEvent)
-    assert bp_event3.breakpoint.id == bp_resp.breakpoints[0].id
-    assert bp_event3.breakpoint.line == 5
-    assert bp_event3.breakpoint.end_line == 5
+        # Middle task is processed, both breakpoints are updated with the new lines
+        bp_event3 = dap_client.wait_for_message(dap.BreakpointEvent)
+        assert bp_event3.breakpoint.id == bp_resp.breakpoints[0].id
+        assert bp_event3.breakpoint.line == 5
+        assert bp_event3.breakpoint.end_line == 5
 
-    bp_event4 = dap_client.wait_for_message(dap.BreakpointEvent)
-    assert bp_event4.breakpoint.id == bp_resp.breakpoints[1].id
-    assert bp_event4.breakpoint.line == 5
-    assert bp_event4.breakpoint.end_line == 5
+        bp_event4 = dap_client.wait_for_message(dap.BreakpointEvent)
+        assert bp_event4.breakpoint.id == bp_resp.breakpoints[1].id
+        assert bp_event4.breakpoint.line == 5
+        assert bp_event4.breakpoint.end_line == 5
 
-    # Task 2 is processed, first breakpoint has the updated end_line,
-    # second breakpoint has new line updated for new task
-    bp_event5 = dap_client.wait_for_message(dap.BreakpointEvent)
-    assert bp_event5.breakpoint.id == bp_resp.breakpoints[0].id
-    assert bp_event5.breakpoint.line == 5
-    assert bp_event5.breakpoint.end_line == 7
-    bp_event6 = dap_client.wait_for_message(dap.BreakpointEvent)
-    assert bp_event6.breakpoint.id == bp_resp.breakpoints[1].id
-    assert bp_event6.breakpoint.line == 8
-    assert bp_event6.breakpoint.end_line == 8
+        # Task 2 is processed, first breakpoint has the updated end_line,
+        # second breakpoint has new line updated for new task
+        bp_event5 = dap_client.wait_for_message(dap.BreakpointEvent)
+        assert bp_event5.breakpoint.id == bp_resp.breakpoints[0].id
+        assert bp_event5.breakpoint.line == 5
+        assert bp_event5.breakpoint.end_line == 7
+        bp_event6 = dap_client.wait_for_message(dap.BreakpointEvent)
+        assert bp_event6.breakpoint.id == bp_resp.breakpoints[1].id
+        assert bp_event6.breakpoint.line == 8
+        assert bp_event6.breakpoint.end_line == 8
 
-    # Task 3 is processed, last breakpoint has new end_line
-    bp_event7 = dap_client.wait_for_message(dap.BreakpointEvent)
-    assert bp_event7.breakpoint.id == bp_resp.breakpoints[1].id
-    assert bp_event7.breakpoint.line == 8
-    assert bp_event7.breakpoint.end_line == 10
+        # Task 3 is processed, last breakpoint has new end_line
+        bp_event7 = dap_client.wait_for_message(dap.BreakpointEvent)
+        assert bp_event7.breakpoint.id == bp_resp.breakpoints[1].id
+        assert bp_event7.breakpoint.line == 8
+        assert bp_event7.breakpoint.end_line == 10
 
-    bp_id1 = bp_event5.breakpoint.id
-    bp_id2 = bp_event7.breakpoint.id
+        bp_id1 = bp_event5.breakpoint.id
+        bp_id2 = bp_event7.breakpoint.id
 
-    stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
-    assert stopped_event.reason == dap.StoppedReason.BREAKPOINT
-    assert stopped_event.thread_id == localhost_tid
-    assert stopped_event.hit_breakpoint_ids == [bp_id1]
+        stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
+        assert stopped_event.reason == dap.StoppedReason.BREAKPOINT
+        assert stopped_event.thread_id == localhost_tid
+        assert stopped_event.hit_breakpoint_ids == [bp_id1]
 
-    st_resp = dap_client.send(dap.StackTraceRequest(thread_id=localhost_tid), dap.StackTraceResponse)
-    assert len(st_resp.stack_frames) == 2
-    assert st_resp.total_frames == 2
-    assert st_resp.stack_frames[0].name == "include tasks 1"
-    assert st_resp.stack_frames[1].name == "include play tasks"
+        st_resp = dap_client.send(dap.StackTraceRequest(thread_id=localhost_tid), dap.StackTraceResponse)
+        assert len(st_resp.stack_frames) == 2
+        assert st_resp.total_frames == 2
+        assert st_resp.stack_frames[0].name == "include tasks 1"
+        assert st_resp.stack_frames[1].name == "include play tasks"
 
-    dap_client.send(dap.StepInRequest(thread_id=localhost_tid), dap.StepInResponse)
-    stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
-    assert stopped_event.reason == dap.StoppedReason.STEP
-    assert stopped_event.thread_id == localhost_tid
-    assert stopped_event.hit_breakpoint_ids == []
+        dap_client.send(dap.StepInRequest(thread_id=localhost_tid), dap.StepInResponse)
+        stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
+        assert stopped_event.reason == dap.StoppedReason.STEP
+        assert stopped_event.thread_id == localhost_tid
+        assert stopped_event.hit_breakpoint_ids == []
 
-    st_resp = dap_client.send(dap.StackTraceRequest(thread_id=localhost_tid), dap.StackTraceResponse)
-    assert len(st_resp.stack_frames) == 3
-    assert st_resp.total_frames == 3
-    assert st_resp.stack_frames[0].name == "sub task 1"
-    assert st_resp.stack_frames[1].name == "include tasks 1"
-    assert st_resp.stack_frames[2].name == "include play tasks"
+        st_resp = dap_client.send(dap.StackTraceRequest(thread_id=localhost_tid), dap.StackTraceResponse)
+        assert len(st_resp.stack_frames) == 3
+        assert st_resp.total_frames == 3
+        assert st_resp.stack_frames[0].name == "sub task 1"
+        assert st_resp.stack_frames[1].name == "include tasks 1"
+        assert st_resp.stack_frames[2].name == "include play tasks"
 
-    dap_client.send(dap.NextRequest(thread_id=localhost_tid), dap.NextResponse)
-    stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
-    assert stopped_event.reason == dap.StoppedReason.STEP
-    assert stopped_event.thread_id == localhost_tid
-    assert stopped_event.hit_breakpoint_ids == []
+        dap_client.send(dap.NextRequest(thread_id=localhost_tid), dap.NextResponse)
+        stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
+        assert stopped_event.reason == dap.StoppedReason.STEP
+        assert stopped_event.thread_id == localhost_tid
+        assert stopped_event.hit_breakpoint_ids == []
 
-    st_resp = dap_client.send(dap.StackTraceRequest(thread_id=localhost_tid), dap.StackTraceResponse)
-    assert len(st_resp.stack_frames) == 3
-    assert st_resp.total_frames == 3
-    assert st_resp.stack_frames[0].name == "sub task 2"
-    assert st_resp.stack_frames[1].name == "include tasks 1"
-    assert st_resp.stack_frames[2].name == "include play tasks"
+        st_resp = dap_client.send(dap.StackTraceRequest(thread_id=localhost_tid), dap.StackTraceResponse)
+        assert len(st_resp.stack_frames) == 3
+        assert st_resp.total_frames == 3
+        assert st_resp.stack_frames[0].name == "sub task 2"
+        assert st_resp.stack_frames[1].name == "include tasks 1"
+        assert st_resp.stack_frames[2].name == "include play tasks"
 
-    # This is just a test to ensure variables are cleaned up from parent stack frames
-    scope_resp = dap_client.send(dap.ScopesRequest(frame_id=st_resp.stack_frames[1].id), dap.ScopesResponse)
-    task_vars = dap_client.send(
-        dap.VariablesRequest(variables_reference=scope_resp.scopes[1].variables_reference),
-        dap.VariablesResponse,
-    )
-    for v in task_vars.variables:
-        if v.name == "inventory_hostname":
-            assert v.value == "'localhost'"
-            break
-    else:
-        raise Exception("Failed to find inventory_hostname in sub task")
+        # This is just a test to ensure variables are cleaned up from parent stack frames
+        scope_resp = dap_client.send(dap.ScopesRequest(frame_id=st_resp.stack_frames[1].id), dap.ScopesResponse)
+        task_vars = dap_client.send(
+            dap.VariablesRequest(variables_reference=scope_resp.scopes[1].variables_reference),
+            dap.VariablesResponse,
+        )
+        for v in task_vars.variables:
+            if v.name == "inventory_hostname":
+                assert v.value == "'localhost'"
+                break
+        else:
+            raise Exception("Failed to find inventory_hostname in sub task")
 
-    dap_client.send(dap.ContinueRequest(thread_id=localhost_tid), dap.ContinueResponse)
-    stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
-    assert stopped_event.reason == dap.StoppedReason.BREAKPOINT
-    assert stopped_event.thread_id == localhost_tid
-    assert stopped_event.hit_breakpoint_ids == [bp_id2]
+        dap_client.send(dap.ContinueRequest(thread_id=localhost_tid), dap.ContinueResponse)
+        stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
+        assert stopped_event.reason == dap.StoppedReason.BREAKPOINT
+        assert stopped_event.thread_id == localhost_tid
+        assert stopped_event.hit_breakpoint_ids == [bp_id2]
 
-    st_resp = dap_client.send(dap.StackTraceRequest(thread_id=localhost_tid), dap.StackTraceResponse)
-    assert len(st_resp.stack_frames) == 2
-    assert st_resp.total_frames == 2
-    assert st_resp.stack_frames[0].name == "task 2"
-    assert st_resp.stack_frames[1].name == "include play tasks"
+        st_resp = dap_client.send(dap.StackTraceRequest(thread_id=localhost_tid), dap.StackTraceResponse)
+        assert len(st_resp.stack_frames) == 2
+        assert st_resp.total_frames == 2
+        assert st_resp.stack_frames[0].name == "task 2"
+        assert st_resp.stack_frames[1].name == "include play tasks"
 
-    dap_client.send(dap.StepOutRequest(thread_id=localhost_tid), dap.StepOutResponse)
-    stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
-    assert stopped_event.reason == dap.StoppedReason.STEP
-    assert stopped_event.thread_id == localhost_tid
-    assert stopped_event.hit_breakpoint_ids == []
+        dap_client.send(dap.StepOutRequest(thread_id=localhost_tid), dap.StepOutResponse)
+        stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
+        assert stopped_event.reason == dap.StoppedReason.STEP
+        assert stopped_event.thread_id == localhost_tid
+        assert stopped_event.hit_breakpoint_ids == []
 
-    st_resp = dap_client.send(dap.StackTraceRequest(thread_id=localhost_tid), dap.StackTraceResponse)
-    assert len(st_resp.stack_frames) == 1
-    assert st_resp.total_frames == 1
-    assert st_resp.stack_frames[0].name == "final task"
+        st_resp = dap_client.send(dap.StackTraceRequest(thread_id=localhost_tid), dap.StackTraceResponse)
+        assert len(st_resp.stack_frames) == 1
+        assert st_resp.total_frames == 1
+        assert st_resp.stack_frames[0].name == "final task"
 
-    dap_client.send(dap.StepOutRequest(thread_id=localhost_tid), dap.StepOutResponse)
+        dap_client.send(dap.StepOutRequest(thread_id=localhost_tid), dap.StepOutResponse)
 
-    thread_event = dap_client.wait_for_message(dap.ThreadEvent)
-    assert thread_event.reason == "exited"
+        thread_event = dap_client.wait_for_message(dap.ThreadEvent)
+        assert thread_event.reason == "exited"
 
-    dap_client.wait_for_message(dap.TerminatedEvent)
+        dap_client.wait_for_message(dap.TerminatedEvent)
 
-    play_out = proc.communicate()
-    if rc := proc.returncode:
-        raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
+        proc.check_return_code()
 
 
 def test_conditional_breakpoint(

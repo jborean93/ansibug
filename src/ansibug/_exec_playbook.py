@@ -185,7 +185,7 @@ def _configure_ansible_env() -> dict[str, str]:
         ],
         # Explicitly set verbosity so it doesn't display version info breaking
         # the json parsing.
-        env=os.environ | {"ANSIBLE_VERBOSITY": "0"},
+        env=os.environ | {"ANSIBLE_VERBOSITY": "0", "ANSIBLE_DEBUG": "False"},
         capture_output=True,
         check=True,  # FUTURE: Maybe a nicer exception would be useful
     )
