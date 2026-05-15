@@ -388,7 +388,12 @@ class DAServer:
     def _process_msg(self, msg: dap.ProtocolMessage) -> None:
         # This should never happen.
         raise NotImplementedError(f"Debug Adapter does not support the {type(msg).__name__} message")
-
+        
+    @_process_msg.register
+    def _(self, msg: dap.DisconnectRequest) -> None:
+        if self._debuggee is not None:
+            self._send_disconnect(msg, self._debuggee)
+    
     @_process_msg.register
     def _(self, msg: dap.InitializeRequest) -> None:
         self.send_to_client(
