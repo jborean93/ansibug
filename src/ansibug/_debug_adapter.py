@@ -14,6 +14,7 @@ import pathlib
 import shlex
 import sys
 import tempfile
+import threading
 import traceback
 import types
 import typing as t
@@ -201,6 +202,7 @@ class _RunInTerminalDetails:
     debuggee: ServerMPQueue
     arguments: LaunchArguments
     launch_queue: ServerMPQueue
+    launch_file: str
 
 
 def start_dap(
@@ -256,6 +258,8 @@ class DAServer:
         self._run_in_response_data: dict[int, _RunInTerminalDetails] = {}
         self._temp_dir = temp_dir
         self._terminated_sent = False
+        # Both the stdin thread and the debuggee recv thread write to the client.
+        self._send_lock = threading.Lock()
 
     def __enter__(self) -> DAServer:
         return self
@@ -283,12 +287,15 @@ class DAServer:
         is_connected = True
         while is_connected:
             data = stdin.read(4096)
+            if not data:
+                log.info("Client closed stdin without sending a disconnect request")
+                break
 
             if log.isEnabledFor(logging.DEBUG):
-                log.debug("STDIN: %s", data.decode())
+                log.debug("STDIN: %r", data)
             adapter.receive_data(data)
 
-            while msg := adapter.next_message():
+            while msg := self._next_message():
                 # Trace each request from the client so we can return an
                 # ErrorMessage if there was a critical failure.
                 if isinstance(msg, dap.Request):
@@ -301,7 +308,11 @@ class DAServer:
                         self._send_disconnect(msg, self._debuggee)
 
                 elif isinstance(msg, dap.Request) and self._debuggee:
-                    self._debuggee.send(msg)
+                    try:
+                        self._debuggee.send(msg)
+                    except (CancelledError, OSError):
+                        log.debug("Debuggee is disconnected, cannot forward %s", msg.command.value)
+                        self._process_msg(msg)
 
                 else:
                     self._process_msg(msg)
@@ -322,16 +333,25 @@ class DAServer:
             from_debuggee: The stop is being called as the debuggee has
                 disconnected.
         """
-        # Ensure the DisconnectResponse is sent if there is an outstanding
-        # request.
-        for req in list(self._incoming_requests.values()):
+        # Both the debuggee recv thread and start() can get here at the same
+        # time, take what each needs to process under the lock so only one
+        # handles the outstanding requests and the TerminatedEvent.
+        with self._send_lock:
+            pending = list(self._incoming_requests.values())
+            self._incoming_requests.clear()
+            launch_queue, self._launch_queue = self._launch_queue, None
+            send_terminated = not self._terminated_sent
+            self._terminated_sent = True
+
+        for req in pending:
+            # Ensure the DisconnectResponse is sent if there is an outstanding
+            # request.
             if isinstance(req, dap.DisconnectRequest):
                 self.send_to_client(dap.DisconnectResponse(request_seq=req.seq))
 
-        if exp:
-            # For every incoming request relay the exception back to the client
-            # for it to display to the end user.
-            for req in list(self._incoming_requests.values()):
+            elif exp:
+                # For every incoming request relay the exception back to the
+                # client for it to display to the end user.
                 resp = dap.ErrorResponse(
                     command=req.command,
                     request_seq=req.seq,
@@ -343,15 +363,11 @@ class DAServer:
             self._debuggee.stop()
             self._debuggee = None
 
-        if self._launch_queue:
-            self._launch_queue.stop()
-            self._launch_queue = None
+        if launch_queue:
+            launch_queue.stop()
 
-        if not self._terminated_sent:
-            # Both the debuggee or start() end will hit the code here. We only
-            # need to send one TerminatedEvent() for whichever was first.
+        if send_terminated:
             self.send_to_client(dap.TerminatedEvent())
-            self._terminated_sent = True
 
     def send_to_client(
         self,
@@ -359,18 +375,34 @@ class DAServer:
     ) -> int:
         stdout = sys.stdout.buffer
 
-        req_no = self._adapter.queue_msg(msg)
-        data = self._adapter.data_to_send() or b""
-        if log.isEnabledFor(logging.DEBUG):
-            log.debug("STDOUT: %s", data.decode())
+        with self._send_lock:
+            req_no = self._adapter.queue_msg(msg)
+            data = self._adapter.data_to_send() or b""
+            if log.isEnabledFor(logging.DEBUG):
+                log.debug("STDOUT: %s", data.decode())
 
-        stdout.write(data)
-        stdout.flush()
+            stdout.write(data)
+            stdout.flush()
 
-        if isinstance(msg, dap.Response):
-            self._incoming_requests.pop(msg.request_seq, None)
+            if isinstance(msg, dap.Response):
+                self._incoming_requests.pop(msg.request_seq, None)
 
         return req_no
+
+    def _next_message(self) -> dap.ProtocolMessage | None:
+        """Gets the next client message, replying to any unknown request."""
+        while True:
+            try:
+                return self._adapter.next_message()
+            except dap.UnknownRequestError as e:
+                log.warning("Client sent unknown request: %s", e)
+                self.send_to_client(
+                    dap.ErrorResponse(
+                        command=e.command,
+                        request_seq=e.seq,
+                        message=f"ansibug does not support the {e.command} request",
+                    )
+                )
 
     def _send_disconnect(
         self,
@@ -379,8 +411,8 @@ class DAServer:
     ) -> None:
         try:
             debuggee.send(msg)
-        except OSError:
-            # The debuggee might have been disconnected during the send.
+        except (CancelledError, OSError):
+            # The debuggee might have already disconnected.
             pass
 
         debuggee.stop()
@@ -390,8 +422,19 @@ class DAServer:
 
     @functools.singledispatchmethod
     def _process_msg(self, msg: dap.ProtocolMessage) -> None:
-        # This should never happen.
-        raise NotImplementedError(f"Debug Adapter does not support the {type(msg).__name__} message")
+        if isinstance(msg, dap.Request):
+            # Requests for the debuggee that arrive before it is connected, or
+            # after it has gone.
+            self.send_to_client(
+                dap.ErrorResponse(
+                    command=msg.command,
+                    request_seq=msg.seq,
+                    message=f"The {msg.command.value} request needs a launched or attached playbook",
+                )
+            )
+
+        else:
+            log.warning("Ignoring unexpected %s message from the client", type(msg).__name__)
 
     @_process_msg.register
     def _(self, msg: dap.InitializeRequest) -> None:
@@ -554,7 +597,26 @@ rm -f "$0"
             debuggee=self._debuggee,
             arguments=launch_args,
             launch_queue=self._launch_queue,
+            launch_file=launch_file,
         )
+
+    @_process_msg.register
+    def _(self, msg: dap.ErrorResponse) -> None:
+        details = self._run_in_response_data.pop(msg.request_seq, None)
+        if not details:
+            log.warning("Ignoring unexpected ErrorResponse from the client: %s", msg.message)
+            return
+
+        # The script removes itself when run but the client never ran it.
+        pathlib.Path(details.launch_file).unlink(missing_ok=True)
+        self.send_to_client(
+            dap.ErrorResponse(
+                command=details.request.command,
+                request_seq=details.request.seq,
+                message=f"The client failed to start the ansible-playbook process: {msg.message}",
+            )
+        )
+        self.stop()
 
     @_process_msg.register
     def _(self, msg: dap.RunInTerminalResponse) -> None:

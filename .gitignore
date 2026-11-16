@@ -392,3 +392,6 @@ $RECYCLE.BIN/
 node_modules/
 
 *.log
+
+# Local review notes and scratch files
+scratch/

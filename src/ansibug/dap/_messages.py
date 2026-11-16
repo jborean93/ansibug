@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import dataclasses
 import enum
+import functools
 import json
 import queue
 import sys
@@ -61,6 +62,19 @@ class EventType(enum.Enum):
     MEMORY = "memory"
 
 
+class UnknownRequestError(ValueError):
+    """The request command is not one known to this library.
+
+    The seq and command are kept so the receiver can still send back an
+    ErrorResponse for the request.
+    """
+
+    def __init__(self, seq: int, command: str) -> None:
+        super().__init__(f"Unknown DAP request command '{command}'")
+        self.seq = seq
+        self.command = command
+
+
 class DAPEncoder(json.JSONEncoder):
     def default(self, o: t.Any) -> t.Any:
         if isinstance(o.__class__, DAPObjectMeta) and hasattr(o, "pack"):
@@ -71,6 +85,13 @@ class DAPEncoder(json.JSONEncoder):
 
         else:
             return str(o)
+
+
+def _enum_or_str(enum_type: type[enum.Enum], value: str) -> enum.Enum | str:
+    try:
+        return enum_type(value)
+    except ValueError:
+        return value
 
 
 def _parse_field_type(obj: type, value: str) -> t.Callable[[t.Any], t.Any] | None:
@@ -86,6 +107,15 @@ def _parse_field_type(obj: type, value: str) -> t.Callable[[t.Any], t.Any] | Non
         union_types = t.get_args(evaled_type)
         if len(union_types) == 2 and type(None) in union_types:
             attr_type = union_types[0]
+        elif (
+            len(union_types) == 2
+            and union_types[1] is str
+            and isinstance(union_types[0], type)
+            and issubclass(union_types[0], enum.Enum)
+        ):
+            # An enum that also accepts values it does not define, like the
+            # command of an ErrorResponse to an unknown request.
+            return functools.partial(_enum_or_str, union_types[0])
     elif type_origin is list:
         attr_type = t.get_args(evaled_type)[0]
     elif isinstance(evaled_type, type):
@@ -312,7 +342,7 @@ class ProtocolMessage(metaclass=DAPObjectMeta, dap={"seq": "seq", "type": "messa
 
             request_unpack = registry.get(cmd, None)
             if not request_unpack:
-                raise ValueError(f"Unknown DAP request command '{cmd}'")
+                raise UnknownRequestError(data.get("seq", 0), cmd)
 
             return request_unpack(data)
 

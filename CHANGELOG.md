@@ -10,6 +10,11 @@
 + Run the launch script through `/bin/sh` so it works when the temporary directory is mounted with `noexec` - https://github.com/jborean93/ansibug/issues/47
 + Fix race condition where the `continue`, `next`, `stepIn`, and `stepOut` responses could be sent after events emitted by the resumed threads
 + Fix launch failure when `ANSIBLE_DEBUG` is enabled, the debug output broke the parsing of the Ansible config
++ Return an error response for unknown requests, like `pause`, and for requests sent before a playbook is launched or attached instead of ending the debug adapter
++ Fix the debug adapter using 100% CPU when the client closes stdin without sending a `disconnect` request
++ Return a launch error when the client fails the `runInTerminal` request instead of ending the debug adapter
++ Fix race condition where messages from the client and the `ansible-playbook` process could be interleaved when written to the client
++ No longer fail when the client message sequence numbers are not contiguous
 
 ## 0.3.2 - 2025-11-22
 

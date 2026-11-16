@@ -156,6 +156,11 @@ class DAPClient:
 
         return resp
 
+    def send_raw(self, msg: dict[str, t.Any]) -> None:
+        """Sends a message this library cannot build, like an unknown request."""
+        b_msg = json.dumps(msg).encode()
+        self._stdin.write(b"Content-Length: %d\r\n\r\n%s" % (len(b_msg), b_msg))
+
     def wait_for_message(
         self,
         expected_type: type[ResponseMessage],
@@ -185,7 +190,8 @@ class DAPClient:
             raise Exception(f"DAP process has ended with {self._dap_proc.poll()}: {stderr.decode()}")
 
         elif isinstance(msg, dap.ErrorResponse) and expected_type != dap.ErrorResponse:
-            raise Exception(f"Received error response for {msg.command.value}: {msg.message}")
+            command = msg.command.value if isinstance(msg.command, dap.Command) else msg.command
+            raise Exception(f"Received error response for {command}: {msg.message}")
 
         elif not isinstance(msg, expected_type):
             raise Exception(f"Received unexpected response type {type(msg)} but expected {expected_type}: {msg}")
