@@ -31,6 +31,7 @@ class Command(enum.Enum):
     RUN_IN_TERMINAL = "runInTerminal"
     SET_BREAKPOINTS = "setBreakpoints"
     SET_EXCEPTION_BREAKPOINTS = "setExceptionBreakpoints"
+    SET_FUNCTION_BREAKPOINTS = "setFunctionBreakpoints"
     SET_VARIABLE = "setVariable"
     STACK_TRACE = "stackTrace"
     STEP_IN = "stepIn"

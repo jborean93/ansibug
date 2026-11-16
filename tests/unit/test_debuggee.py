@@ -11,7 +11,7 @@ import threading
 import pytest
 
 import ansibug.dap as dap
-from ansibug._debuggee import AnsibleDebugger, DebuggeeShutdownError, _replace_root
+from ansibug._debuggee import AnsibleDebugger, DebuggeeShutdownError, _replace_root, parse_hit_condition
 from ansibug._logging import configure_file_logging
 
 
@@ -90,3 +90,27 @@ def test_configure_file_logging_once(tmp_path: pathlib.Path) -> None:
 def test_replace_root(path: str, root: str, expected: str | None) -> None:
     new_root = "/new/" if root.endswith("/") else "/new"
     assert _replace_root(path, root, new_root) == expected
+
+
+@pytest.mark.parametrize(
+    ["condition", "hits_that_stop"],
+    [
+        ("2", [2]),
+        ("==2", [2]),
+        (" > 2 ", [3, 4, 5, 6]),
+        (">=2", [2, 3, 4, 5, 6]),
+        ("<3", [1, 2]),
+        ("<=3", [1, 2, 3]),
+        ("%3", [3, 6]),
+    ],
+)
+def test_parse_hit_condition(condition: str, hits_that_stop: list[int]) -> None:
+    check = parse_hit_condition(condition)
+
+    assert check is not None
+    assert [h for h in range(1, 7) if check(h)] == hits_that_stop
+
+
+@pytest.mark.parametrize("condition", ["", "abc", "=2", "2.5", "%0", ">=-1"])
+def test_parse_hit_condition_invalid(condition: str) -> None:
+    assert parse_hit_condition(condition) is None

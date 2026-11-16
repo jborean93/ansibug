@@ -8,13 +8,16 @@ import collections.abc
 import contextlib
 import dataclasses
 import enum
+import fnmatch
 import functools
 import itertools
 import json
 import logging
+import operator
 import os
 import pathlib
 import queue
+import re
 import ssl
 import threading
 import traceback
@@ -132,6 +135,37 @@ def _replace_root(path: str, root: str, new_root: str) -> str | None:
         return None
 
     return new_root + rest
+
+
+_HIT_CONDITION_OPS: dict[str, t.Callable[[int, int], bool]] = {
+    "==": operator.eq,
+    ">": operator.gt,
+    ">=": operator.ge,
+    "<": operator.lt,
+    "<=": operator.le,
+    "%": lambda hits, n: hits % n == 0,
+}
+
+
+def parse_hit_condition(hit_condition: str) -> t.Callable[[int], bool] | None:
+    """Parses a breakpoint hit condition.
+
+    The condition is an optional operator ==, >, >=, <, <=, or % followed by
+    a number. A number without an operator is the same as ==. For example
+    '5' stops on the 5th hit, '>=5' on every hit from the 5th, and '%5' on
+    every 5th hit.
+
+    Returns:
+        The function that checks the hit count or None if the condition is
+        invalid.
+    """
+    match = re.fullmatch(r"\s*(==|>=|<=|>|<|%)?\s*(\d+)\s*", hit_condition)
+    if not match or (match.group(1) == "%" and int(match.group(2)) == 0):
+        return None
+
+    op = _HIT_CONDITION_OPS[match.group(1) or "=="]
+    value = int(match.group(2))
+    return lambda hits: op(hits, value)
 
 
 def get_pid_info_path(pid: int) -> pathlib.Path:
@@ -262,6 +296,32 @@ class AnsibleLineBreakpoint:
     breakpoint: dap.Breakpoint
     actual_path: str
     source_path: str
+    hit_check: t.Callable[[int], bool] | None = None
+    hit_count: int = 0
+
+    @property
+    def condition(self) -> str | None:
+        return self.source_breakpoint.condition
+
+    @property
+    def log_message(self) -> str | None:
+        return self.source_breakpoint.log_message
+
+
+@dataclasses.dataclass
+class AnsibleFunctionBreakpoint:
+    id: int
+    function_breakpoint: dap.FunctionBreakpoint
+    hit_check: t.Callable[[int], bool] | None = None
+    hit_count: int = 0
+
+    @property
+    def condition(self) -> str | None:
+        return self.function_breakpoint.condition
+
+    @property
+    def log_message(self) -> str | None:
+        return None
 
 
 class AnsibleDebugger(metaclass=Singleton):
@@ -288,6 +348,7 @@ class AnsibleDebugger(metaclass=Singleton):
         self._breakpoint_exceptions: dict[str, bool] = {}
         self._breakpoints: dict[int, AnsibleLineBreakpoint] = {}
         self._breakpoint_counter = itertools.count(1)
+        self._function_breakpoints: list[AnsibleFunctionBreakpoint] = []
         # Guards _breakpoints and _source_info which are used by both the
         # strategy and the recv thread.
         self._breakpoint_lock = threading.Lock()
@@ -414,6 +475,28 @@ class AnsibleDebugger(metaclass=Singleton):
 
         return None
 
+    def get_function_breakpoint(
+        self,
+        names: collections.abc.Iterable[str],
+    ) -> AnsibleFunctionBreakpoint | None:
+        """Gets the first function breakpoint whose name glob matches a name.
+
+        Args:
+            names: The task names and module names to match.
+
+        Returns:
+            Optional[AnsibleFunctionBreakpoint]: The matching breakpoint.
+        """
+        with self._breakpoint_lock:
+            function_breakpoints = self._function_breakpoints
+
+        names = list(names)
+        for b in function_breakpoints:
+            if any(fnmatch.fnmatchcase(n, b.function_breakpoint.name) for n in names):
+                return b
+
+        return None
+
     def start(
         self,
         addr: str,
@@ -536,6 +619,7 @@ class AnsibleDebugger(metaclass=Singleton):
         # breakpoints and our debug config no longer applies
         self._debug_config = DebugConfiguration()
         self._breakpoints = {}
+        self._function_breakpoints = []
 
         # Ensure the callback plugin isn't stuck waiting for this
         self._configuration_done.set()
@@ -744,15 +828,7 @@ class AnsibleDebugger(metaclass=Singleton):
     ) -> None:
         # FIXME: Deal with source_reference if set
         source_path = msg.source.path or ""
-
-        # If explicit path mappings are provided we convert the client provided
-        # source path to the path known to Ansible. This is important as the
-        # source mappings are keyed by the Ansible paths.
-        actual_path = source_path
-        for mapping in self._debug_config.path_mappings:
-            if (remote_path := _replace_root(source_path, mapping.local_root, mapping.remote_root)) is not None:
-                actual_path = remote_path
-                break
+        actual_path = self._convert_to_ansible_path(source_path)
 
         # Held so a line registered by the strategy can't be missed between
         # reading _source_info and storing the new breakpoints.
@@ -767,6 +843,21 @@ class AnsibleDebugger(metaclass=Singleton):
             breakpoint_info: list[dap.Breakpoint] = []
             for source_breakpoint in msg.breakpoints:
                 bp_id = next(self._breakpoint_counter)
+
+                hit_check = None
+                if source_breakpoint.hit_condition and not (
+                    hit_check := parse_hit_condition(source_breakpoint.hit_condition)
+                ):
+                    breakpoint_info.append(
+                        dap.Breakpoint(
+                            id=bp_id,
+                            verified=False,
+                            message=f"Invalid hit condition '{source_breakpoint.hit_condition}'.",
+                            source=msg.source,
+                            line=source_breakpoint.line,
+                        )
+                    )
+                    continue
 
                 bp: dap.Breakpoint
                 if msg.source_modified:
@@ -804,6 +895,7 @@ class AnsibleDebugger(metaclass=Singleton):
                     breakpoint=bp,
                     actual_path=actual_path,
                     source_path=source_path,
+                    hit_check=hit_check,
                 )
                 breakpoint_info.append(bp)
 
@@ -814,6 +906,50 @@ class AnsibleDebugger(metaclass=Singleton):
             breakpoints=breakpoint_info,
         )
         self.queue_msg(resp)
+
+    @process_message.register
+    def _(
+        self,
+        msg: dap.SetFunctionBreakpointsRequest,
+    ) -> None:
+        function_breakpoints: list[AnsibleFunctionBreakpoint] = []
+        breakpoint_info: list[dap.Breakpoint] = []
+        for function_breakpoint in msg.breakpoints:
+            bp_id = next(self._breakpoint_counter)
+
+            hit_check = None
+            if function_breakpoint.hit_condition and not (
+                hit_check := parse_hit_condition(function_breakpoint.hit_condition)
+            ):
+                breakpoint_info.append(
+                    dap.Breakpoint(
+                        id=bp_id,
+                        verified=False,
+                        message=f"Invalid hit condition '{function_breakpoint.hit_condition}'.",
+                    )
+                )
+                continue
+
+            function_breakpoints.append(
+                AnsibleFunctionBreakpoint(
+                    id=bp_id,
+                    function_breakpoint=function_breakpoint,
+                    hit_check=hit_check,
+                )
+            )
+            # The name is a glob matched against tasks as they run, it can't
+            # be validated beforehand.
+            breakpoint_info.append(dap.Breakpoint(id=bp_id, verified=True))
+
+        with self._breakpoint_lock:
+            self._function_breakpoints = function_breakpoints
+
+        self.queue_msg(
+            dap.SetFunctionBreakpointsResponse(
+                request_seq=msg.seq,
+                breakpoints=breakpoint_info,
+            )
+        )
 
     @process_message.register
     def _(
@@ -895,6 +1031,21 @@ class AnsibleDebugger(metaclass=Singleton):
         # InitializedEvent to the client.
         self.queue_msg(dap.InitializedEvent())
 
+    def _convert_to_ansible_path(
+        self,
+        path: str,
+    ) -> str:
+        """Converts the client path to the path known to Ansible.
+
+        This is the reverse of convert_to_client_path, the breakpoint and
+        source info are keyed by the paths Ansible uses.
+        """
+        for mapping in self._debug_config.path_mappings:
+            if (remote_path := _replace_root(path, mapping.local_root, mapping.remote_root)) is not None:
+                return remote_path
+
+        return path
+
     def _calculate_breakpoint(
         self,
         bp_id: int,
@@ -938,6 +1089,7 @@ class AnsibleDebugger(metaclass=Singleton):
     ) -> None:
         self._debug_config = DebugConfiguration()
         self._breakpoints = {}
+        self._function_breakpoints = []
 
         # Don't wait for a strategy, none can start while the callback is
         # blocked waiting for configuration done.

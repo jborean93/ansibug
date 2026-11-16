@@ -79,6 +79,7 @@ class Capabilities(
         "supportSuspendDebuggee": "supports_suspend_debuggee",
         "supportsTerminateRequest": "supports_terminate_request",
         "supportsClipboardContext": "supports_clipboard_context",
+        "supportsLogPoints": "supports_log_points",
     },
 ):
     """Capabilities of a debug adapter.
@@ -143,7 +144,7 @@ class Capabilities(
     supports_suspend_debuggee: bool = False
     # supports_delayed_stack_trace_loading
     # supports_loaded_sources_request
-    # supports_log_points
+    supports_log_points: bool = False
     # supports_terminate_threads_request
     # supports_set_expression
     supports_terminate_request: bool = False
@@ -632,3 +633,26 @@ class VariablePresentationHint(
     ] = dataclasses.field(default_factory=list)
     visibility: str | t.Literal["public", "private", "protected", "internal"] | None = None
     lazy: bool = False
+
+
+@dataclasses.dataclass()
+class FunctionBreakpoint(
+    metaclass=DAPObjectMeta,
+    dap={
+        "name": "name",
+        "condition": "condition",
+        "hitCondition": "hit_condition",
+    },
+):
+    """Properties of a breakpoint passed to the SetFunctionBreakpointsRequest.
+
+    Args:
+        name: The name of the function.
+        condition: An optional expression for conditional breakpoints.
+        hit_condition: An optional expression that controls how many hits of
+            the breakpoint are ignored.
+    """
+
+    name: str
+    condition: str | None = None
+    hit_condition: str | None = None
