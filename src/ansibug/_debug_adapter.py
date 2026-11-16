@@ -526,15 +526,14 @@ rm -f "$0"
             ansibug_args=" ".join(shlex.quote(c) for c in ansibug_args),
         )
 
-        # Default permissions are 0o600, we need the executable bit.
         launch_fd, launch_file = tempfile.mkstemp(prefix="ansibug-launch-", dir=self._temp_dir)
-        os.fchmod(launch_fd, 0o700)
         with os.fdopen(launch_fd, mode="w") as launch_writer:
             launch_writer.write(launch_script)
 
         log.debug("Created launch script at '%s' with\n%s", launch_file, launch_script)
 
-        playbook_args = [launch_file, launch_args.playbook]
+        # Run through sh rather than exec'ing the file so a noexec temp dir works.
+        playbook_args = ["/bin/sh", launch_file, launch_args.playbook]
         playbook_args.extend(launch_args.args)
 
         req_no = self.send_to_client(
