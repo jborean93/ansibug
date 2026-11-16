@@ -561,7 +561,11 @@ except OSError:
 "
 }}
 
-trap cleanup EXIT INT ABRT KILL TERM
+# A signal exits through the EXIT trap so cleanup only runs once.
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 134' ABRT
+trap 'exit 143' TERM
 
 rm -f "$0"
 {python} {ansibug_args} "$@"

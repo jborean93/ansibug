@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 import typing as t
@@ -74,3 +75,23 @@ def test_config_dump_force_color(
 
     assert ("ANSIBLE_FORCE_COLOR" in run_env) is expected
     assert ("FORCE_COLOR" in run_env) is expected
+
+
+def test_config_dump_missing_key(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    dump = [{"name": "CALLBACKS_ENABLED", "value": ["my.callback"]}]
+
+    def run(args: list[str], **kwargs: t.Any) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(args, 0, stdout=json.dumps(dump), stderr="")
+
+    monkeypatch.setattr(subprocess, "run", run)
+
+    env = _configure_ansible_env()
+
+    assert env["ANSIBLE_CALLBACKS_ENABLED"] == "ansibug.dap.debug,my.callback"
+    assert capsys.readouterr().err == (
+        "ansibug: config 'COLLECTIONS_PATHS' was not found in the Ansible config dump, "
+        "any value set for it will be ignored\n"
+    )

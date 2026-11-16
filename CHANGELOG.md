@@ -35,6 +35,16 @@
 + Only template the `Host Variables` scope when it is expanded, and reuse the scope and child variables when a stack frame is selected again while stopped
 + Show `hostvars` as `HostVars (N hosts)` instead of templating every variable of every host to display it
 + No longer expand `bytes` values into a list of integers in the variables view
++ Warn when the launch cannot find the `CALLBACKS_ENABLED` or `COLLECTIONS_PATHS` Ansible config, previously the user's values were silently dropped
++ Fix `!so` and `!ro` changing the module options of the task for every host, they now only apply to the host of the stopped thread
++ Fix `!so` and `!ro` failing when the client has not requested the scopes of the frame yet
++ Fix path mappings matching a partial directory name, for example a root of `/foo` matched `/foobar/main.yml`
++ Fail with a clear error when `--wrap-tls` or the `use_tls` callback option is set without a TLS server certificate, previously a `TypeError` was raised
++ Return an error message for a debug console command with unbalanced quotes instead of a critical debuggee exception
++ Return a clearer message when evaluating an expression without a stack frame
++ Fix the `stepIn` request `targetId` argument overwriting the `threadId`
++ Omit unset optional fields from DAP messages instead of sending `null`, as required by the DAP specification
++ Fix the `no_wait_for_config_done` callback option documentation describing the opposite behaviour and remove the invalid `debug_addr` default
 
 ## 0.3.2 - 2025-11-22
 

@@ -559,7 +559,7 @@ class AnsibleDebugState(DebugState):
         host: Host,
         task: Task,
         task_vars: dict[str, t.Any],
-    ) -> None:
+    ) -> Task:
         """Start a task.
 
         Processes the Ansible task before it is run. Processing a task will
@@ -570,6 +570,10 @@ class AnsibleDebugState(DebugState):
             host: The inventory host for the task.
             task: The task to process.
             task_vars: The task variables.
+
+        Returns:
+            Task: The task to run for the host. This is a copy if the client
+            inspected or changed its options while stopped.
         """
         thread = self._host_threads.get(host) or self._add_thread(host)
 
@@ -606,7 +610,7 @@ class AnsibleDebugState(DebugState):
         # a path. We can't set breakpoints on these tasks so skip the check.
         task_path = task.get_path()
         if not task_path:
-            return
+            return task
 
         path_and_line = task_path.rsplit(":", 1)
         path = path_and_line[0]
@@ -634,6 +638,8 @@ class AnsibleDebugState(DebugState):
                 # to terminate the debuggee.
                 if thread.state == ThreadState.END:
                     raise EndStrategy()
+
+        return sf.task
 
     def end_task(
         self,
@@ -699,6 +705,38 @@ class AnsibleDebugState(DebugState):
                     thread_id=tid,
                 )
             )
+
+    def _create_scope_variables(
+        self,
+        sf: AnsibleStackFrame,
+    ) -> None:
+        """Creates the scope variables for the frame if not already created."""
+        # The client requests the scopes each time a frame is selected, only
+        # create the variables once per frame.
+        if not sf.variables_options_id:
+            # The Task object is shared by every host, use a copy so changes to
+            # the options only apply to this host. It keeps the same uuid.
+            sf.task = sf.task.copy()
+
+            # This is a very basic templating of the args and doesn't handle loops.
+            templar = Templar(loader=self._loader, variables=sf.task_vars)
+            task_args = templar.template(sf.task.args, fail_on_undefined=False)
+            sf.variables_options_id = self._add_variable(
+                sf,
+                task_args,
+                # Any changes to our templated var also needs to reflect back onto
+                # the raw datastore so use a custom variable class.
+                var_factory=lambda i: AnsibleDictWithRawStoreVariable(i, sf, task_args, sf.task.args),
+            ).id
+            sf.variables_taskvar_id = self._add_variable(sf, sf.task_vars).id
+            sf.variables_hostvars_id = self._add_variable(
+                sf,
+                {},
+                var_factory=lambda i: AnsibleHostVarsVariable(
+                    i, sf, sf.task_vars["inventory_hostname"], self._variable_mamanger
+                ),
+            ).id
+            sf.variables_globalvars_id = self._add_variable(sf, sf.task_vars["vars"]).id
 
     def _eval_condition(
         self,
@@ -779,28 +817,7 @@ class AnsibleDebugState(DebugState):
     ) -> ansibug.dap.ScopesResponse:
         sf = self.stackframes[request.frame_id]
 
-        # The client requests the scopes each time a frame is selected, only
-        # create the variables once per frame.
-        if not sf.variables_options_id:
-            # This is a very basic templating of the args and doesn't handle loops.
-            templar = Templar(loader=self._loader, variables=sf.task_vars)
-            task_args = templar.template(sf.task.args, fail_on_undefined=False)
-            sf.variables_options_id = self._add_variable(
-                sf,
-                task_args,
-                # Any changes to our templated var also needs to reflect back onto
-                # the raw datastore so use a custom variable class.
-                var_factory=lambda i: AnsibleDictWithRawStoreVariable(i, sf, task_args, sf.task.args),
-            ).id
-            sf.variables_taskvar_id = self._add_variable(sf, sf.task_vars).id
-            sf.variables_hostvars_id = self._add_variable(
-                sf,
-                {},
-                var_factory=lambda i: AnsibleHostVarsVariable(
-                    i, sf, sf.task_vars["inventory_hostname"], self._variable_mamanger
-                ),
-            ).id
-            sf.variables_globalvars_id = self._add_variable(sf, sf.task_vars["vars"]).id
+        self._create_scope_variables(sf)
 
         module_opts = self.variables[sf.variables_options_id]
         task_vars = self.variables[sf.variables_taskvar_id]
@@ -885,6 +902,8 @@ class AnsibleDebugState(DebugState):
             # The argparse library is used to parse this data rather than do
             # it manually.
             sf = self.stackframes[request.frame_id]
+            # The client may not have requested the scopes for this frame yet.
+            self._create_scope_variables(sf)
 
             repl_command = parse_repl_args(expression[1:])
             if isinstance(repl_command, TemplateCommand):
@@ -916,6 +935,9 @@ class AnsibleDebugState(DebugState):
         elif request.context in ["repl", "watch", "clipboard", "variables"] and request.frame_id:
             sf = self.stackframes[request.frame_id]
             value, value_type = self._safe_evaluate_expression(expression, sf.task_vars)
+
+        elif not request.frame_id:
+            value = "Evaluation requires a stack frame, select a frame of a stopped thread"
 
         else:
             value = f"Evaluation for {request.context} is not implemented"
@@ -1166,7 +1188,7 @@ class StrategyModule(LinearStrategy):
         # locals.
 
         task_vars = inspect.currentframe().f_back.f_locals["task_vars"]  # pyright: ignore[reportOptionalMemberAccess]  # I know this is bad
-        self._debug_state.start_task(target_host, task, task_vars)
+        task = self._debug_state.start_task(target_host, task, task_vars)
         res = super()._execute_meta(task, play_context, iterator, target_host)
 
         meta_action = task.args.get("_raw_params", None)
@@ -1204,7 +1226,7 @@ class StrategyModule(LinearStrategy):
         play_context: PlayContext,
     ) -> None:
         """Called just as a task is about to be queue"""
-        self._debug_state.start_task(host, task, task_vars)
+        task = self._debug_state.start_task(host, task, task_vars)
 
         return super()._queue_task(host, task, task_vars, play_context)
 

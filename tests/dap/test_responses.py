@@ -122,7 +122,7 @@ def test_error_response_pack_no_error() -> None:
         "success": False,
         "command": dap.Command.LAUNCH,
         "message": "error message",
-        "body": {"error": None},
+        "body": {},
     }
 
 

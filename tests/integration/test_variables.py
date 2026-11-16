@@ -1679,3 +1679,71 @@ def test_include_frame_host_vars_refreshed(
 
     proc.communicate()
     assert proc.returncode == 0, proc.format_output()
+
+
+def test_set_option_only_applies_to_current_host(
+    dap_client: DAPClient,
+    tmp_path: pathlib.Path,
+) -> None:
+    playbook = tmp_path / "main.yml"
+    playbook.write_text(
+        r"""
+- hosts: all
+  gather_facts: false
+  tasks:
+  - name: debug
+    debug:
+      msg: original
+"""
+    )
+    inventory = tmp_path / "inventory.ini"
+    inventory.write_text(
+        r"""
+host1 ansible_host=127.0.0.1 ansible_connection=local ansible_python_interpreter={{ansible_playbook_python}}
+host2 ansible_host=127.0.0.1 ansible_connection=local ansible_python_interpreter={{ansible_playbook_python}}
+"""
+    )
+
+    proc = dap_client.launch("main.yml", playbook_dir=tmp_path, playbook_args=["-i", "inventory.ini"])
+    dap_client.send(
+        dap.SetBreakpointsRequest(
+            source=dap.Source(name="main.yml", path=str(playbook.absolute())),
+            lines=[5],
+            breakpoints=[dap.SourceBreakpoint(line=5)],
+            source_modified=False,
+        ),
+        dap.SetBreakpointsResponse,
+    )
+    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
+
+    host1_tid = dap_client.wait_for_message(dap.ThreadEvent).thread_id
+    dap_client.wait_for_message(dap.StoppedEvent)
+    st_resp = dap_client.send(dap.StackTraceRequest(thread_id=host1_tid), dap.StackTraceResponse)
+
+    # Sent before any scopes request for the frame.
+    eval_resp = dap_client.send(
+        dap.EvaluateRequest("!so msg 'changed'", frame_id=st_resp.stack_frames[0].id, context="repl"),
+        dap.EvaluateResponse,
+    )
+    assert eval_resp.result == ""
+    dap_client.send(dap.ContinueRequest(thread_id=host1_tid), dap.ContinueResponse)
+
+    host2_tid = dap_client.wait_for_message(dap.ThreadEvent).thread_id
+    dap_client.wait_for_message(dap.StoppedEvent)
+    st_resp = dap_client.send(dap.StackTraceRequest(thread_id=host2_tid), dap.StackTraceResponse)
+    scopes = dap_client.send(dap.ScopesRequest(frame_id=st_resp.stack_frames[0].id), dap.ScopesResponse)
+    mod_vars = dap_client.send(
+        dap.VariablesRequest(variables_reference=scopes.scopes[0].variables_reference),
+        dap.VariablesResponse,
+    )
+    assert {v.name: v.value for v in mod_vars.variables}["msg"] == "'original'"
+
+    dap_client.send(dap.ContinueRequest(thread_id=host2_tid), dap.ContinueResponse)
+    dap_client.wait_for_message(dap.ThreadEvent)
+    dap_client.wait_for_message(dap.ThreadEvent)
+    dap_client.wait_for_message(dap.TerminatedEvent)
+
+    stdout = proc.communicate()[0].decode()
+    assert proc.returncode == 0, proc.format_output()
+    assert '"msg": "changed"' in stdout
+    assert '"msg": "original"' in stdout

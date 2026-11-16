@@ -488,7 +488,7 @@ class StepInRequest(
         "arguments": {
             "threadId": "thread_id",
             "singleThread": "single_thread",
-            "targetId": "thread_id",
+            "targetId": "target_id",
             "granularity": "granularity",
         }
     },

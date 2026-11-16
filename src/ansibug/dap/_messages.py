@@ -7,7 +7,6 @@ import dataclasses
 import enum
 import functools
 import json
-import queue
 import sys
 import types
 import typing as t
@@ -224,22 +223,18 @@ class DAPObjectMeta(type):
     ) -> dict[str, t.Any]:
         packed_value: dict[str, t.Any] = {}
 
-        todo: queue.Queue[tuple[dict[str, t.Any], dict[str, t.Any]]] = queue.Queue()
-        todo.put((getattr(self.__class__, "_dap", {}), packed_value))
-
-        while True:
-            try:
-                mapping, value = todo.get(block=False)
-            except queue.Empty:
-                break
+        todo: list[tuple[dict[str, t.Any], dict[str, t.Any]]] = [(getattr(self.__class__, "_dap", {}), packed_value)]
+        while todo:
+            mapping, value = todo.pop()
 
             for key, info in mapping.items():
                 if key == "__types":
                     continue
                 elif isinstance(info, dict):
-                    todo.put((info, value.setdefault(key, {})))
-                else:
-                    value[key] = getattr(self, info)
+                    todo.append((info, value.setdefault(key, {})))
+                elif (field_value := getattr(self, info)) is not None:
+                    # The spec has optional fields omitted rather than null.
+                    value[key] = field_value
 
         return packed_value
 
@@ -271,14 +266,9 @@ class DAPObjectMeta(type):
         kwargs: dict[str, t.Any] = {}
         manual_set: dict[str, t.Any] = {}
 
-        todo: queue.Queue[tuple[dict[str, t.Any], dict[str, t.Any]]] = queue.Queue()
-        todo.put((dap, data))
-
-        while True:
-            try:
-                mapping, body = todo.get(block=False)
-            except queue.Empty:
-                break
+        todo: list[tuple[dict[str, t.Any], dict[str, t.Any]]] = [(dap, data)]
+        while todo:
+            mapping, body = todo.pop()
 
             for key, value in body.items():
                 if key not in mapping or value is None:
@@ -286,7 +276,7 @@ class DAPObjectMeta(type):
 
                 field_meta = mapping[key]
                 if isinstance(field_meta, dict):
-                    todo.put((field_meta, value))
+                    todo.append((field_meta, value))
                     continue
 
                 can_init, field_unpack = type_info[field_meta]

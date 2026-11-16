@@ -118,6 +118,22 @@ class PlaybookProcessInfo:
         }
 
 
+def _replace_root(path: str, root: str, new_root: str) -> str | None:
+    """Replaces root with new_root if path is under root, otherwise None.
+
+    The root must match whole path segments so /foo does not match /foobar.
+    Both separators are checked as the client could be on Windows.
+    """
+    if not path.startswith(root):
+        return None
+
+    rest = path[len(root) :]
+    if rest and root[-1:] not in ("/", "\\") and rest[0] not in ("/", "\\"):
+        return None
+
+    return new_root + rest
+
+
 def get_pid_info_path(pid: int) -> pathlib.Path:
     """Get the path used to store info about the ansible-playbook debug proc."""
     # It is important that changes here are also reflected in the extension code
@@ -573,11 +589,10 @@ class AnsibleDebugger(metaclass=Singleton):
             str: The converted path.
         """
         for mapping in self._debug_config.path_mappings:
-            if path.startswith(mapping.remote_root):
-                return mapping.local_root + path[len(mapping.remote_root) :]
+            if (client_path := _replace_root(path, mapping.remote_root, mapping.local_root)) is not None:
+                return client_path
 
-        else:
-            return path
+        return path
 
     def register_path_breakpoint(
         self,
@@ -735,8 +750,8 @@ class AnsibleDebugger(metaclass=Singleton):
         # source mappings are keyed by the Ansible paths.
         actual_path = source_path
         for mapping in self._debug_config.path_mappings:
-            if actual_path.startswith(mapping.local_root):
-                actual_path = mapping.remote_root + actual_path[len(mapping.local_root) :]
+            if (remote_path := _replace_root(source_path, mapping.local_root, mapping.remote_root)) is not None:
+                actual_path = remote_path
                 break
 
         # Held so a line registered by the strategy can't be missed between
@@ -899,7 +914,7 @@ class AnsibleDebugger(metaclass=Singleton):
         while end_line < len(file_lines) and file_lines[end_line] is None:
             end_line += 1
 
-        end_line = min(end_line - 1, len(file_lines))
+        end_line -= 1
 
         if line_type == 0:
             verified = False

@@ -31,7 +31,6 @@ options:
     - For C(mode=listen), the connection string the process will listen on.
     - For C(mode=connect), the connection string the process will connect to.
     - The details of these connection strings are internal to ansibug itself.
-    default: localhost
     required: true
     type: str
     env:
@@ -44,6 +43,7 @@ options:
       the certificate's authenticity.
     - This can also contain the PEM encoded certificate key, otherwise use
       C(tls_server_keyfile).
+    - Required when C(use_tls) is set.
     type: path
     env:
     - name: ANSIBUG_TLS_SERVER_CERTFILE
@@ -87,11 +87,11 @@ options:
     - name: ANSIBUG_USE_TLS
   no_wait_for_config_done:
     description:
-    - If true, will wait until the DA server has passed through the
+    - If false, will wait until the DA server has passed through the
       configurationDone request from the client that indicates all the initial
       breakpoint configuration has been sent through and the client is ready to
       run the code.
-    - If false, will start the playbook immediately without waiting for the
+    - If true, will start the playbook immediately without waiting for the
       initial configuration details.
     type: bool
     default: false

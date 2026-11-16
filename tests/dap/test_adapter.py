@@ -37,9 +37,7 @@ def test_connection_all_data() -> None:
         "command": "initialize",
         "arguments": {
             "clientID": "My Client",
-            "clientName": None,
             "adapterID": "Ansibug DAP",
-            "locale": None,
             "linesStartAt1": True,
             "columnsStartAt1": True,
             "pathFormat": "path",
@@ -119,18 +117,12 @@ def test_connection_send_partial_data() -> None:
                 "path": "/tmp/test.txt",
                 "sourceReference": 0,
                 "presentationHint": "normal",
-                "origin": None,
                 "sources": [],
-                "adapterData": None,
                 "checksums": [],
             },
             "breakpoints": [
                 {
                     "line": 0,
-                    "column": None,
-                    "condition": None,
-                    "hitCondition": None,
-                    "logMessage": None,
                 },
             ],
             "lines": [],
