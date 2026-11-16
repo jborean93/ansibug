@@ -82,6 +82,7 @@ from ..plugin_utils._repl_util import (
     TemplateCommand,
     parse_repl_args,
 )
+from ..plugin_utils._task_result import AnsibugTaskResult
 from ..plugin_utils._variables import get_canonicalized_variable_type
 
 display = Display()
@@ -204,34 +205,32 @@ class AnsibleThread:
 
     def should_stop_on_exception(
         self,
-        result: TaskResult,
+        result: AnsibugTaskResult,
         should_stop_on_error: bool = False,
         should_stop_on_unreachable: bool = False,
         should_stop_on_skipped: bool = False,
     ) -> ansibug.dap.StoppedEvent | None:
         details: tuple[str, str] | None = None
 
-        # 2.19 changed the property to _return_data
-        task_result = result._return_data if hasattr(result, "_return_data") else result._result
-        if result.is_failed() and not result._task_fields.get("ignore_errors", None):
+        if result.failed and not result.ignore_errors:
             is_rescued = False
 
-            task = result._task
+            task = result.task
             while task := task._parent:
                 if isinstance(task, Block) and task.rescue:
                     is_rescued = True
                     break
 
             if should_stop_on_error and not is_rescued:
-                details = get_on_failed_details(task_result)
+                details = get_on_failed_details(result.result)
 
-        elif result.is_unreachable() and not result._task_fields.get("ignore_unreachable", None):
+        elif result.unreachable and not result.ignore_unreachable:
             if should_stop_on_unreachable:
-                details = get_on_unreachable_details(task_result)
+                details = get_on_unreachable_details(result.result)
 
-        elif result.is_skipped():
+        elif result.skipped:
             if should_stop_on_skipped:
-                details = get_on_skipped_details(task_result)
+                details = get_on_skipped_details(result.result)
 
         if details:
             self.state = ThreadState.WAIT
@@ -615,7 +614,7 @@ class AnsibleDebugState(DebugState):
 
     def end_task(
         self,
-        result: TaskResult,
+        result: AnsibugTaskResult,
     ) -> None:
         """Ends a task.
 
@@ -626,11 +625,8 @@ class AnsibleDebugState(DebugState):
         Args:
             result: The task result to process.
         """
-        host = result._host
-        task = result._task
-        # 2.19 changed the property to _return_data
-        task_result = result._return_data if hasattr(result, "_return_data") else result._result
-        thread = next(iter([t for t in self.threads.values() if t.host == host]))
+        task = result.task
+        thread = next(iter([t for t in self.threads.values() if t.host == result.host]))
 
         with self._waiting_condition:
             stopped_event = thread.should_stop_on_exception(
@@ -643,7 +639,7 @@ class AnsibleDebugState(DebugState):
                 sf_id = thread.stack_frames[0]
                 sf = self.stackframes[sf_id]
 
-                result_variable = self._add_variable(sf, task_result)
+                result_variable = self._add_variable(sf, result.result)
                 sf.variables_result_id = result_variable.id
 
                 self._debugger.queue_msg(stopped_event)
@@ -1119,13 +1115,7 @@ class StrategyModule(LinearStrategy):
         else:
             # Needed to ensure the stackframe is removed as these meta tasks
             # have no results for _process_pending_results to handle.
-            task_res = TaskResult(
-                host=target_host,
-                task=task,
-                return_data={},
-                task_fields=None,
-            )
-            self._debug_state.end_task(task_res)
+            self._debug_state.end_task(AnsibugTaskResult.from_meta_task(target_host, task))
 
         return res
 
@@ -1162,7 +1152,7 @@ class StrategyModule(LinearStrategy):
         res = super()._process_pending_results(*args, **kwargs)
 
         for task_res in res:
-            self._debug_state.end_task(task_res)
+            self._debug_state.end_task(AnsibugTaskResult.from_task_result(task_res))
 
         return res
 

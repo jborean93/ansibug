@@ -1,7 +1,8 @@
 # Changelog
 
-## 0.3.3 - TBD
+## 0.4.0 - TBD
 
++ Added support for Ansible 2.21, 2.22, and Python 3.15
 + Catch `AnsibleUndefinedVariable` when enumerating templated host variables using an undefined variable, the raw templated string will be returned
 + Passthrough the raw `ansible-config` output on a failure to help the caller figure out why it failed
 + Return a descriptive launch error when `ansible-playbook` exits before connecting to the debug adapter, previously a confusing `NotImplementedError` for `DisconnectRequest` was shown - https://github.com/jborean93/ansibug/issues/50
