@@ -123,6 +123,36 @@ gather_facts: false
     assert proc.returncode != 0
 
 
+def test_launch_process_ends_before_connect(
+    dap_client: DAPClient,
+    tmp_path: pathlib.Path,
+) -> None:
+    playbook = tmp_path / "main.yml"
+    playbook.write_text(
+        r"""
+- hosts: localhost
+  gather_facts: false
+  tasks: []
+"""
+    )
+
+    # An invalid arg makes ansible-playbook exit before it connects back.
+    proc = dap_client.launch(
+        playbook,
+        playbook_dir=tmp_path,
+        playbook_args=["--invalid-arg"],
+        expected_terminated=True,
+    )
+    proc.communicate()
+    assert proc.returncode != 0
+
+    dap_client.send(dap.DisconnectRequest(), dap.DisconnectResponse)
+
+    # The DA server should exit cleanly without a further ErrorResponse.
+    assert dap_client._incoming_msg.get(timeout=10) is None
+    assert dap_client._dap_proc.wait() == 0
+
+
 def test_launch_with_disconnect(
     dap_client: DAPClient,
     tmp_path: pathlib.Path,

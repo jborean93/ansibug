@@ -275,6 +275,9 @@ class DAPClient:
             self.send(dap.RunInTerminalResponse(request_seq=resp.seq, process_id=proc.pid))
 
             if expected_terminated:
+                err = self.wait_for_message(dap.ErrorResponse)
+                assert err.command == dap.Command.LAUNCH
+                assert "ansible-playbook process ended before it connected" in (err.message or "")
                 self.wait_for_message(dap.TerminatedEvent)
                 return proc
 

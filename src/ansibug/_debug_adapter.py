@@ -292,12 +292,14 @@ class DAServer:
                 if isinstance(msg, dap.Request):
                     self._incoming_requests[msg.seq] = msg
 
-                if isinstance(msg, dap.Request) and self._debuggee:
-                    if isinstance(msg, dap.DisconnectRequest):
-                        is_connected = False
+                if isinstance(msg, dap.DisconnectRequest):
+                    # The debuggee may not be present if the launch failed.
+                    is_connected = False
+                    if self._debuggee:
                         self._send_disconnect(msg, self._debuggee)
-                    else:
-                        self._debuggee.send(msg)
+
+                elif isinstance(msg, dap.Request) and self._debuggee:
+                    self._debuggee.send(msg)
 
                 else:
                     self._process_msg(msg)
@@ -388,12 +390,7 @@ class DAServer:
     def _process_msg(self, msg: dap.ProtocolMessage) -> None:
         # This should never happen.
         raise NotImplementedError(f"Debug Adapter does not support the {type(msg).__name__} message")
-        
-    @_process_msg.register
-    def _(self, msg: dap.DisconnectRequest) -> None:
-        if self._debuggee is not None:
-            self._send_disconnect(msg, self._debuggee)
-    
+
     @_process_msg.register
     def _(self, msg: dap.InitializeRequest) -> None:
         self.send_to_client(
@@ -570,6 +567,16 @@ rm -f "$0"
 
         except CancelledError:
             log.debug("Launch cancel socket was connected, launched process has ended")
+            self.send_to_client(
+                dap.ErrorResponse(
+                    command=details.request.command,
+                    request_seq=details.request.seq,
+                    message=(
+                        "The ansible-playbook process ended before it connected to the debug adapter, check the "
+                        "terminal output for errors. Ensure each launch argument is a separate entry in args."
+                    ),
+                )
+            )
             self.stop()
 
         else:
