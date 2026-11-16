@@ -121,8 +121,7 @@ host2 ansible_host=127.0.0.1 ansible_connection=local ansible_python_interpreter
     for v in global_vars.variables:
         if v.name == "hostvars":
             hostvar_id = v.variables_reference
-            assert v.value.startswith("{")
-            assert v.value.endswith("}")
+            hostvar_value = v.value
             break
     else:
         raise Exception("Failed to find hostvars in global vars")
@@ -133,6 +132,8 @@ host2 ansible_host=127.0.0.1 ansible_connection=local ansible_python_interpreter
     )
     assert "host1" in [v.name for v in global_host_vars.variables]
     assert "host2" in [v.name for v in global_host_vars.variables]
+    # Ansible before 2.19 also counts the implicit localhost once it exists.
+    assert hostvar_value == f"HostVars ({len(global_host_vars.variables)} hosts)"
     assert stopped_event.thread_id is not None
     dap_client.send(dap.ContinueRequest(thread_id=stopped_event.thread_id), dap.ContinueResponse)
 
@@ -1606,3 +1607,75 @@ localhost ansible_connection=local ansible_python_interpreter={{ansible_playbook
     play_out = proc.communicate()
     if rc := proc.returncode:
         raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
+
+
+def test_include_frame_host_vars_refreshed(
+    dap_client: DAPClient,
+    tmp_path: pathlib.Path,
+) -> None:
+    playbook = tmp_path / "main.yml"
+    playbook.write_text(
+        r"""
+- hosts: localhost
+  gather_facts: false
+  tasks:
+  - name: include
+    include_tasks: tasks.yml
+"""
+    )
+    (tmp_path / "tasks.yml").write_text(
+        r"""
+- name: task 1
+  ping:
+
+- name: set fact
+  set_fact:
+    my_fact: changed
+
+- name: task 2
+  ping:
+"""
+    )
+
+    proc = dap_client.launch(playbook, playbook_dir=tmp_path)
+    dap_client.send(
+        dap.SetBreakpointsRequest(
+            source=dap.Source(name="main.yml", path=str(playbook.absolute())),
+            lines=[5],
+            breakpoints=[dap.SourceBreakpoint(line=5)],
+            source_modified=False,
+        ),
+        dap.SetBreakpointsResponse,
+    )
+    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
+    tid = dap_client.wait_for_message(dap.ThreadEvent).thread_id
+    dap_client.wait_for_message(dap.StoppedEvent)
+
+    def include_host_vars() -> dict[str, str]:
+        st_resp = dap_client.send(dap.StackTraceRequest(thread_id=tid), dap.StackTraceResponse)
+        assert [f.name for f in st_resp.stack_frames][1] == "include"
+        scopes = dap_client.send(dap.ScopesRequest(frame_id=st_resp.stack_frames[1].id), dap.ScopesResponse)
+        host_scope = next(s for s in scopes.scopes if s.name == "Host Variables")
+        resp = dap_client.send(
+            dap.VariablesRequest(variables_reference=host_scope.variables_reference),
+            dap.VariablesResponse,
+        )
+        return {v.name: v.value for v in resp.variables}
+
+    dap_client.send(dap.StepInRequest(thread_id=tid), dap.StepInResponse)
+    dap_client.wait_for_message(dap.StoppedEvent)
+    assert "my_fact" not in include_host_vars()
+
+    # Step over 'set fact' to 'task 2', the include frame is still present but
+    # its host vars must reflect the new fact.
+    for _ in range(2):
+        dap_client.send(dap.NextRequest(thread_id=tid), dap.NextResponse)
+        dap_client.wait_for_message(dap.StoppedEvent)
+    assert include_host_vars()["my_fact"] == "'changed'"
+
+    dap_client.send(dap.ContinueRequest(thread_id=tid), dap.ContinueResponse)
+    dap_client.wait_for_message(dap.ThreadEvent)
+    dap_client.wait_for_message(dap.TerminatedEvent)
+
+    proc.communicate()
+    assert proc.returncode == 0, proc.format_output()
