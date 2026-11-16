@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import ansibug.dap
 from ansibug.ansible_collections.ansibug.dap.plugins.strategy.debug import (
     AnsibleDebugState,
     AnsibleStackFrame,
@@ -26,3 +27,12 @@ def test_exit_threads_removes_stackframes() -> None:
     assert list(state.threads) == [1]
     assert state.stackframes == {}
     assert state.variables == {}
+
+
+def test_continue_exited_thread() -> None:
+    state = AnsibleDebugState(MagicMock(), MagicMock(), MagicMock())
+
+    # The client can still reference a thread that has since exited.
+    state.continue_request(ansibug.dap.ContinueRequest(thread_id=99, single_thread=True))
+
+    assert list(state.threads) == [1]

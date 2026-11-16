@@ -9,6 +9,7 @@ import contextlib
 import dataclasses
 import enum
 import functools
+import itertools
 import json
 import logging
 import os
@@ -245,14 +246,18 @@ class AnsibleDebugger(metaclass=Singleton):
         self._terminated = False
         self._shutting_down = False
 
-        self._thread_counter = 2  # 1 is always the main thread
-        self._stackframe_counter = 1
-        self._variable_counter = 1
+        # Ids are allocated from both the strategy and the recv thread.
+        self._thread_counter = itertools.count(2)  # 1 is always the main thread
+        self._stackframe_counter = itertools.count(1)
+        self._variable_counter = itertools.count(1)
 
         # Stores all the client breakpoints, key is the breakpoint number/id
         self._breakpoint_exceptions: dict[str, bool] = {}
         self._breakpoints: dict[int, AnsibleLineBreakpoint] = {}
-        self._breakpoint_counter = 1
+        self._breakpoint_counter = itertools.count(1)
+        # Guards _breakpoints and _source_info which are used by both the
+        # strategy and the recv thread.
+        self._breakpoint_lock = threading.Lock()
 
         # Key is the path, the value is a list of the lines in that file where:
         #   None - Line is a continuation of a breakpoint range
@@ -323,22 +328,13 @@ class AnsibleDebugger(metaclass=Singleton):
                 self._strategy_connected.notify_all()
 
     def next_thread_id(self) -> int:
-        tid = self._thread_counter
-        self._thread_counter += 1
-
-        return tid
+        return next(self._thread_counter)
 
     def next_stackframe_id(self) -> int:
-        sfid = self._stackframe_counter
-        self._stackframe_counter += 1
-
-        return sfid
+        return next(self._stackframe_counter)
 
     def next_variable_id(self) -> int:
-        vid = self._variable_counter
-        self._variable_counter += 1
-
-        return vid
+        return next(self._variable_counter)
 
     def wait_for_config_done(
         self,
@@ -374,13 +370,14 @@ class AnsibleDebugger(metaclass=Singleton):
             Optional[AnsibleLineBreakpoint]: The breakpoint associated with the
             args if present.
         """
-        for b in self._breakpoints.values():
-            if (
-                b.actual_path == path
-                and (b.breakpoint.line is None or b.breakpoint.line <= line)
-                and (b.breakpoint.end_line is None or b.breakpoint.end_line >= line)
-            ):
-                return b
+        with self._breakpoint_lock:
+            for b in self._breakpoints.values():
+                if (
+                    b.actual_path == path
+                    and (b.breakpoint.line is None or b.breakpoint.line <= line)
+                    and (b.breakpoint.end_line is None or b.breakpoint.end_line >= line)
+                ):
+                    return b
 
         return None
 
@@ -585,34 +582,35 @@ class AnsibleDebugger(metaclass=Singleton):
         # Ensure each new entry has a starting value of 0 which denotes that
         # a breakpoint cannot be set at the start of the file. It can only be
         # set when a line was registered.
-        file_lines = self._source_info.setdefault(path, [0])
-        file_lines.extend([None] * (1 + line - len(file_lines)))
-        file_lines[line] = bp_type
+        with self._breakpoint_lock:
+            file_lines = self._source_info.setdefault(path, [0])
+            file_lines.extend([None] * (1 + line - len(file_lines)))
+            file_lines[line] = bp_type
 
-        for breakpoint in self._breakpoints.values():
-            if breakpoint.actual_path != path:
-                continue
+            for breakpoint in self._breakpoints.values():
+                if breakpoint.actual_path != path:
+                    continue
 
-            source_breakpoint = breakpoint.source_breakpoint
-            bp = self._calculate_breakpoint(
-                breakpoint.id,
-                breakpoint.source,
-                source_breakpoint.line,
-                file_lines,
-            )
-
-            if (
-                breakpoint.breakpoint.verified != bp.verified
-                or breakpoint.breakpoint.line != bp.line
-                or breakpoint.breakpoint.end_line != bp.end_line
-            ):
-                breakpoint.breakpoint = bp
-                self.queue_msg(
-                    dap.BreakpointEvent(
-                        reason="changed",
-                        breakpoint=bp,
-                    )
+                source_breakpoint = breakpoint.source_breakpoint
+                bp = self._calculate_breakpoint(
+                    breakpoint.id,
+                    breakpoint.source,
+                    source_breakpoint.line,
+                    file_lines,
                 )
+
+                if (
+                    breakpoint.breakpoint.verified != bp.verified
+                    or breakpoint.breakpoint.line != bp.line
+                    or breakpoint.breakpoint.end_line != bp.end_line
+                ):
+                    breakpoint.breakpoint = bp
+                    self.queue_msg(
+                        dap.BreakpointEvent(
+                            reason="changed",
+                            breakpoint=bp,
+                        )
+                    )
 
     @classmethod
     def _enable_debugpy(cls) -> None:  # pragma: nocover
@@ -724,55 +722,60 @@ class AnsibleDebugger(metaclass=Singleton):
                 actual_path = mapping.remote_root + actual_path[len(mapping.local_root) :]
                 break
 
-        source_info = self._source_info.get(actual_path, None)
+        # Held so a line registered by the strategy can't be missed between
+        # reading _source_info and storing the new breakpoints.
+        with self._breakpoint_lock:
+            source_info = self._source_info.get(actual_path, None)
 
-        # Clear out existing breakpoints for the source as each request should
-        # send the latest list for a source.
-        self._breakpoints = {bpid: b for bpid, b in self._breakpoints.items() if b.source_path != source_path}
+            # Clear out existing breakpoints for the source as each request should
+            # send the latest list for a source. Build a new dict so the strategy
+            # never sees it partially updated.
+            breakpoints = {bpid: b for bpid, b in self._breakpoints.items() if b.source_path != source_path}
 
-        breakpoint_info: list[dap.Breakpoint] = []
-        for source_breakpoint in msg.breakpoints:
-            bp_id = self._breakpoint_counter
-            self._breakpoint_counter += 1
+            breakpoint_info: list[dap.Breakpoint] = []
+            for source_breakpoint in msg.breakpoints:
+                bp_id = next(self._breakpoint_counter)
 
-            bp: dap.Breakpoint
-            if msg.source_modified:
-                bp = dap.Breakpoint(
+                bp: dap.Breakpoint
+                if msg.source_modified:
+                    bp = dap.Breakpoint(
+                        id=bp_id,
+                        verified=False,
+                        message="Cannot set breakpoint on a modified source.",
+                        source=msg.source,
+                    )
+                    # I don't think we need to preserve this bp for later reference.
+                    breakpoint_info.append(bp)
+                    continue
+
+                if not source_info:
+                    bp = dap.Breakpoint(
+                        id=bp_id,
+                        verified=False,
+                        message="File has not been loaded by Ansible, cannot detect breakpoints yet.",
+                        source=msg.source,
+                        line=source_breakpoint.line,
+                    )
+
+                else:
+                    bp = self._calculate_breakpoint(
+                        bp_id,
+                        msg.source,
+                        source_breakpoint.line,
+                        source_info,
+                    )
+
+                breakpoints[bp_id] = AnsibleLineBreakpoint(
                     id=bp_id,
-                    verified=False,
-                    message="Cannot set breakpoint on a modified source.",
                     source=msg.source,
+                    source_breakpoint=source_breakpoint,
+                    breakpoint=bp,
+                    actual_path=actual_path,
+                    source_path=source_path,
                 )
-                # I don't think we need to preserve this bp for later reference.
                 breakpoint_info.append(bp)
-                continue
 
-            if not source_info:
-                bp = dap.Breakpoint(
-                    id=bp_id,
-                    verified=False,
-                    message="File has not been loaded by Ansible, cannot detect breakpoints yet.",
-                    source=msg.source,
-                    line=source_breakpoint.line,
-                )
-
-            else:
-                bp = self._calculate_breakpoint(
-                    bp_id,
-                    msg.source,
-                    source_breakpoint.line,
-                    source_info,
-                )
-
-            self._breakpoints[bp_id] = AnsibleLineBreakpoint(
-                id=bp_id,
-                source=msg.source,
-                source_breakpoint=source_breakpoint,
-                breakpoint=bp,
-                actual_path=actual_path,
-                source_path=source_path,
-            )
-            breakpoint_info.append(bp)
+            self._breakpoints = breakpoints
 
         resp = dap.SetBreakpointsResponse(
             request_seq=msg.seq,
