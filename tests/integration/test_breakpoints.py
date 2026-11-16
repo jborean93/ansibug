@@ -1563,3 +1563,249 @@ def test_stepping_out_of_nested_includes(
 
     proc.communicate()
     assert proc.returncode == 0, proc.format_output()
+
+
+def _collect_stops(dap_client: DAPClient) -> list[tuple[dap.StoppedReason | str, str]]:
+    """Continues each stop until the thread exits, returns each stop reason and task."""
+    stops: list[tuple[dap.StoppedReason | str, str]] = []
+    while True:
+        event = dap_client.wait_for_message(dap.Event)
+        if isinstance(event, dap.ThreadEvent) and event.reason == "exited":
+            return stops
+
+        elif isinstance(event, dap.StoppedEvent):
+            assert event.thread_id is not None
+            st_resp = dap_client.send(dap.StackTraceRequest(thread_id=event.thread_id), dap.StackTraceResponse)
+            stops.append((event.reason, st_resp.stack_frames[0].name))
+            dap_client.send(dap.ContinueRequest(thread_id=event.thread_id), dap.ContinueResponse)
+
+
+@pytest.mark.parametrize(
+    ["name", "expected"],
+    [
+        # A redirected module matches both the name used and the redirect target.
+        ("ns.name.foo", ["redirected"]),
+        ("target.name.foo", ["redirected", "target direct"]),
+        # A library/ module resolves to its bare name and ansible.legacy.
+        ("foo", ["library foo", "library foo legacy"]),
+        ("ansible.legacy.foo", ["library foo", "library foo legacy"]),
+        # A short builtin name resolves to its FQCN.
+        ("ping", ["Install ping", "myrole : role task"]),
+        ("ansible.builtin.ping", ["Install ping", "ansible.builtin.ping", "myrole : role task"]),
+        # Globs and task names.
+        ("*.foo", ["library foo", "library foo legacy", "redirected", "target direct"]),
+        ("Install *", ["Install ping"]),
+        ("myrole : *", ["myrole : role task"]),
+        ("unknown", []),
+    ],
+)
+def test_function_breakpoint(
+    name: str,
+    expected: list[str],
+    dap_client: DAPClient,
+    tmp_path: pathlib.Path,
+) -> None:
+    module = "#!/usr/bin/python\nfrom ansible.module_utils.basic import AnsibleModule\nAnsibleModule(argument_spec={}).exit_json()\n"
+    (tmp_path / "library").mkdir()
+    (tmp_path / "library" / "foo.py").write_text(module)
+
+    collections = tmp_path / "collections" / "ansible_collections"
+    (collections / "ns" / "name" / "meta").mkdir(parents=True)
+    (collections / "ns" / "name" / "meta" / "runtime.yml").write_text(
+        "plugin_routing:\n  modules:\n    foo:\n      redirect: target.name.foo\n"
+    )
+    (collections / "target" / "name" / "plugins" / "modules").mkdir(parents=True)
+    (collections / "target" / "name" / "plugins" / "modules" / "foo.py").write_text(module)
+    (tmp_path / "ansible.cfg").write_text("[defaults]\ncollections_path = ./collections\n")
+
+    (tmp_path / "roles" / "myrole" / "tasks").mkdir(parents=True)
+    (tmp_path / "roles" / "myrole" / "tasks" / "main.yml").write_text("- name: role task\n  ping:\n")
+
+    playbook = tmp_path / "main.yml"
+    playbook.write_text(
+        r"""
+- hosts: localhost
+  gather_facts: false
+  tasks:
+  - name: library foo
+    foo:
+  - name: library foo legacy
+    ansible.legacy.foo:
+  - name: redirected
+    ns.name.foo:
+  - name: target direct
+    target.name.foo:
+  - name: Install ping
+    ping:
+  - ansible.builtin.ping:
+  - import_role:
+      name: myrole
+"""
+    )
+
+    proc = dap_client.launch(playbook, playbook_dir=tmp_path)
+    resp = dap_client.send(
+        dap.SetFunctionBreakpointsRequest(breakpoints=[dap.FunctionBreakpoint(name=name)]),
+        dap.SetFunctionBreakpointsResponse,
+    )
+    assert len(resp.breakpoints) == 1
+    assert resp.breakpoints[0].verified
+
+    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
+    dap_client.wait_for_message(dap.ThreadEvent)
+
+    stops = _collect_stops(dap_client)
+    assert [n for _, n in stops] == expected
+    assert all(r == dap.StoppedReason.FUNCTION_BREAKPOINT for r, _ in stops)
+
+    dap_client.wait_for_message(dap.TerminatedEvent)
+    proc.communicate()
+    assert proc.returncode == 0, proc.format_output()
+
+
+def test_function_breakpoint_invalid_hit_condition(
+    dap_client: DAPClient,
+    tmp_path: pathlib.Path,
+) -> None:
+    playbook = tmp_path / "main.yml"
+    playbook.write_text("- hosts: localhost\n  gather_facts: false\n  tasks:\n  - ping:\n")
+
+    proc = dap_client.launch(playbook, playbook_dir=tmp_path)
+    resp = dap_client.send(
+        dap.SetFunctionBreakpointsRequest(
+            breakpoints=[
+                dap.FunctionBreakpoint(name="ping", hit_condition="abc"),
+                dap.FunctionBreakpoint(name="ping", hit_condition=">=1"),
+            ]
+        ),
+        dap.SetFunctionBreakpointsResponse,
+    )
+    assert not resp.breakpoints[0].verified
+    assert resp.breakpoints[0].message == "Invalid hit condition 'abc'."
+    assert resp.breakpoints[1].verified
+
+    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
+    dap_client.wait_for_message(dap.ThreadEvent)
+    assert _collect_stops(dap_client) == [(dap.StoppedReason.FUNCTION_BREAKPOINT, "ping")]
+
+    dap_client.wait_for_message(dap.TerminatedEvent)
+    proc.communicate()
+    assert proc.returncode == 0, proc.format_output()
+
+
+def test_hit_condition(
+    dap_client: DAPClient,
+    tmp_path: pathlib.Path,
+) -> None:
+    playbook = tmp_path / "main.yml"
+    playbook.write_text(
+        r"""
+- hosts: all
+  gather_facts: false
+  tasks:
+  - name: ping test
+    ping:
+"""
+    )
+    inventory = tmp_path / "inventory.ini"
+    inventory.write_text(
+        "\n".join(
+            f"host{i} ansible_host=127.0.0.1 ansible_connection=local "
+            + "ansible_python_interpreter={{ansible_playbook_python}}"
+            for i in range(1, 5)
+        )
+    )
+
+    proc = dap_client.launch("main.yml", playbook_dir=tmp_path, playbook_args=["-i", "inventory.ini", "--forks", "1"])
+    dap_client.send(
+        dap.SetBreakpointsRequest(
+            source=dap.Source(name="main.yml", path=str(playbook.absolute())),
+            lines=[5],
+            # Every 2nd time a host reaches the task.
+            breakpoints=[dap.SourceBreakpoint(line=5, hit_condition="%2")],
+            source_modified=False,
+        ),
+        dap.SetBreakpointsResponse,
+    )
+    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
+
+    # The hosts start in inventory order as there is only 1 fork.
+    started: list[int] = []
+    stopped: list[int] = []
+    while len(stopped) < 2:
+        event = dap_client.wait_for_message(dap.Event)
+        if isinstance(event, dap.ThreadEvent) and event.reason == "started":
+            started.append(event.thread_id)
+        elif isinstance(event, dap.StoppedEvent):
+            assert event.reason == dap.StoppedReason.BREAKPOINT
+            assert event.thread_id is not None
+            stopped.append(event.thread_id)
+            dap_client.send(dap.ContinueRequest(thread_id=event.thread_id), dap.ContinueResponse)
+
+    # host2 and host4
+    assert stopped == [started[1], started[3]]
+
+    for _ in range(4):
+        assert dap_client.wait_for_message(dap.ThreadEvent).reason == "exited"
+    dap_client.wait_for_message(dap.TerminatedEvent)
+    proc.communicate()
+    assert proc.returncode == 0, proc.format_output()
+
+
+def test_logpoint(
+    dap_client: DAPClient,
+    tmp_path: pathlib.Path,
+) -> None:
+    playbook = tmp_path / "main.yml"
+    playbook.write_text(
+        r"""
+- hosts: localhost
+  gather_facts: false
+  vars:
+    packages: [a, b, c]
+  tasks:
+  - name: install packages
+    ping:
+
+  - name: final
+    ping:
+"""
+    )
+
+    proc = dap_client.launch(playbook, playbook_dir=tmp_path)
+    dap_client.send(
+        dap.SetBreakpointsRequest(
+            source=dap.Source(name="main.yml", path=str(playbook.absolute())),
+            lines=[7, 10],
+            breakpoints=[
+                dap.SourceBreakpoint(
+                    line=7,
+                    log_message="{{ inventory_hostname }}: installing {{ packages | length }} packages",
+                ),
+                dap.SourceBreakpoint(line=10, log_message="bad {{ undefined_var }}"),
+            ],
+            source_modified=False,
+        ),
+        dap.SetBreakpointsResponse,
+    )
+    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
+    dap_client.wait_for_message(dap.ThreadEvent)
+
+    output = dap_client.wait_for_message(dap.OutputEvent)
+    assert output.category == "console"
+    assert output.output == "localhost: installing 3 packages\n"
+    assert output.source is not None
+    assert output.source.path == str(playbook)
+    assert output.line == 7
+
+    output = dap_client.wait_for_message(dap.OutputEvent)
+    assert output.output.startswith("bad {{ undefined_var }} (failed to template: ")
+    assert output.line == 10
+
+    # A logpoint does not stop the thread.
+    thread_event = dap_client.wait_for_message(dap.ThreadEvent)
+    assert thread_event.reason == "exited"
+    dap_client.wait_for_message(dap.TerminatedEvent)
+
+    proc.communicate()
+    assert proc.returncode == 0, proc.format_output()

@@ -10,6 +10,7 @@ from ._messages import Command, Request
 from ._types import (
     ExceptionFilterOptions,
     ExceptionOptions,
+    FunctionBreakpoint,
     Source,
     SourceBreakpoint,
     StackFrameFormat,
@@ -603,3 +604,16 @@ class VariablesRequest(
     start: int | None = None
     count: int | None = None
     format: ValueFormat | None = None
+
+
+@dataclasses.dataclass()
+class SetFunctionBreakpointsRequest(Request, dap={"arguments": {"breakpoints": "breakpoints"}}):
+    """Replaces all existing function breakpoints with new ones.
+
+    Args:
+        breakpoints: The function breakpoints to set.
+    """
+
+    command = Command.SET_FUNCTION_BREAKPOINTS
+
+    breakpoints: list[FunctionBreakpoint] = dataclasses.field(default_factory=list)

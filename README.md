@@ -31,6 +31,9 @@ See the [ansible-core support matrix](https://docs.ansible.com/ansible/devel/ref
 There are no guarantees that all features will be supported across Ansible versions, new features might be reliant on changes only present in newer Ansible versions.
 Any such features will be explicitly called out in the documentation.
 
+The client must implement the [Debug Adapter Protocol](https://microsoft.github.io/debug-adapter-protocol/changelog) 1.47 or newer.
+Launching a playbook also requires the client to support the `runInTerminal` request, attaching to a playbook does not.
+
 # Installation
 This library has been published on PyPI and can be installed with:
 

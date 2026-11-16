@@ -66,6 +66,7 @@ except ImportError:
 import ansibug
 from ansibug._debuggee import (
     AnsibleDebugger,
+    AnsibleFunctionBreakpoint,
     AnsibleLineBreakpoint,
     DebugState,
     EndStrategy,
@@ -97,6 +98,28 @@ def _get_parent_tasks(
     while task := task._parent:
         if isinstance(task, Task):
             yield task
+
+
+def _get_task_names(task: Task) -> set[str]:
+    """The names a function breakpoint can match for a task.
+
+    This is the module as written, the module it resolved to after any
+    redirects, and the task name. A module in a library/ dir resolves to its
+    bare name so the ansible.legacy form is also added.
+    """
+    names = {task.action}
+    # resolved_action is None for some actions like include_role on older
+    # Ansible versions.
+    if resolved := getattr(task, "resolved_action", None):
+        names.add(resolved)
+        if "." not in resolved:
+            names.add(f"ansible.legacy.{resolved}")
+
+    if task.name:
+        # get_name() adds the role prefix for role tasks.
+        names.update([task.name, task.get_name()])
+
+    return names
 
 
 def _is_container(value: t.Any) -> bool:
@@ -176,7 +199,7 @@ class AnsibleThread:
     def should_break(
         self,
         task: Task,
-        breakpoint: AnsibleLineBreakpoint | None,
+        breakpoint: AnsibleLineBreakpoint | AnsibleFunctionBreakpoint | None,
     ) -> ansibug.dap.StoppedEvent | None:
         stopped_kwargs: dict[str, t.Any] = {}
 
@@ -204,9 +227,14 @@ class AnsibleThread:
 
         elif breakpoint and self.state != ThreadState.STEP_OUT:
             # Breakpoints are ignored when stepping out.
+            is_function = isinstance(breakpoint, AnsibleFunctionBreakpoint)
             stopped_kwargs = {
-                "reason": ansibug.dap.StoppedReason.BREAKPOINT,
-                "description": "Breakpoint hit",
+                "reason": (
+                    ansibug.dap.StoppedReason.FUNCTION_BREAKPOINT
+                    if is_function
+                    else ansibug.dap.StoppedReason.BREAKPOINT
+                ),
+                "description": "Function breakpoint hit" if is_function else "Breakpoint hit",
                 "hit_breakpoint_ids": [breakpoint.id],
                 "thread_id": self.id,
             }
@@ -619,15 +647,10 @@ class AnsibleDebugState(DebugState):
         with self._waiting_condition:
             tid = thread.id
 
-            line_breakpoint = self._debugger.get_breakpoint(path, line)
-            if (
-                line_breakpoint
-                and line_breakpoint.source_breakpoint.condition
-                and not self._eval_condition(line_breakpoint.source_breakpoint.condition, sf.task_vars)
-            ):
-                line_breakpoint = None
-
-            stopped_event = thread.should_break(task, line_breakpoint)
+            breakpoint = self._match_breakpoint(
+                self._debugger.get_breakpoint(path, line), sf
+            ) or self._match_breakpoint(self._debugger.get_function_breakpoint(_get_task_names(task)), sf)
+            stopped_event = thread.should_break(task, breakpoint)
 
             if stopped_event:
                 self._debugger.queue_msg(stopped_event)
@@ -737,6 +760,50 @@ class AnsibleDebugState(DebugState):
                 ),
             ).id
             sf.variables_globalvars_id = self._add_variable(sf, sf.task_vars["vars"]).id
+
+    def _match_breakpoint(
+        self,
+        breakpoint: AnsibleLineBreakpoint | AnsibleFunctionBreakpoint | None,
+        sf: AnsibleStackFrame,
+    ) -> AnsibleLineBreakpoint | AnsibleFunctionBreakpoint | None:
+        """Applies the breakpoint's condition, hit condition, and log message.
+
+        Returns:
+            The breakpoint if it should stop the thread, otherwise None. A
+            logpoint writes its message and never stops.
+        """
+        if not breakpoint or (breakpoint.condition and not self._eval_condition(breakpoint.condition, sf.task_vars)):
+            return None
+
+        breakpoint.hit_count += 1
+        if breakpoint.hit_check and not breakpoint.hit_check(breakpoint.hit_count):
+            return None
+
+        if breakpoint.log_message:
+            frame = sf.to_dap()
+            self._debugger.queue_msg(
+                ansibug.dap.OutputEvent(
+                    category="console",
+                    output=self._template_message(breakpoint.log_message, sf.task_vars) + "\n",
+                    source=frame.source,
+                    line=frame.line,
+                )
+            )
+            return None
+
+        return breakpoint
+
+    def _template_message(
+        self,
+        message: str,
+        variables: dict[str, t.Any],
+    ) -> str:
+        """Templates a logpoint message, the message can contain {{ ... }}."""
+        templar = Templar(loader=self._loader, variables=variables)
+        try:
+            return str(templar.template(trust_as_template(message) if POST_DATATAGGING else message))  # pyright: ignore[reportPossiblyUnboundVariable]
+        except Exception as e:
+            return f"{message} (failed to template: {type(e).__name__}: {e})"
 
     def _eval_condition(
         self,

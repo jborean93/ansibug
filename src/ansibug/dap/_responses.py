@@ -291,3 +291,17 @@ class ErrorResponse(Response, dap={"message": "message", "body": {"error": "erro
     command: Command | str = dataclasses.field(init=True)  # pyright: ignore[reportIncompatibleVariableOverride]
     message: str | None = None
     error: Message | None = None
+
+
+@dataclasses.dataclass()
+class SetFunctionBreakpointsResponse(Response, dap={"body": {"breakpoints": "breakpoints"}}):
+    """Response to SetFunctionBreakpointsRequest.
+
+    Args:
+        breakpoints: The breakpoints in the same order of the request and their
+            status.
+    """
+
+    command = Command.SET_FUNCTION_BREAKPOINTS
+
+    breakpoints: list[Breakpoint] = dataclasses.field(default_factory=list)
