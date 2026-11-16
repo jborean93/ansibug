@@ -676,18 +676,9 @@ class AnsibleDebugState(DebugState):
     def continue_request(
         self,
         request: ansibug.dap.ContinueRequest,
-    ) -> ansibug.dap.ContinueResponse:
-        if request.single_thread:
-            self._resume_threads([request.thread_id], ThreadState.CONTINUE)
-            all_threads_continued = False
-        else:
-            self._resume_threads(self.threads.keys(), ThreadState.CONTINUE)
-            all_threads_continued = True
-
-        return ansibug.dap.ContinueResponse(
-            request_seq=request.seq,
-            all_threads_continued=all_threads_continued,
-        )
+    ) -> None:
+        thread_ids = [request.thread_id] if request.single_thread else self.threads.keys()
+        self._resume_threads(thread_ids, ThreadState.CONTINUE)
 
     def disconnect(
         self,

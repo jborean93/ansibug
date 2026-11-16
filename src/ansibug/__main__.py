@@ -160,8 +160,7 @@ def parse_args(
         "used when starting an ansible-playbook process. If not set, the "
         "temporary directory will be created in the system's temporary "
         "directory as returned by tempfile.mkstemp(). This directory must "
-        "be writable by the user running the DAP process and not have the "
-        "NOEXEC flag.",
+        "be writable by the user running the DAP process.",
     )
 
     # Listen

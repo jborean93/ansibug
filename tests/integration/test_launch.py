@@ -380,7 +380,8 @@ def test_launch_with_tempdir(
             launch_found = False
             for file in tmp_path.iterdir():
                 if file.name.startswith("ansibug-launch-"):
-                    assert str(file.absolute()) == request.args[0]
+                    assert request.args[0] == "/bin/sh"
+                    assert str(file.absolute()) == request.args[1]
                     launch_found = True
                     break
 
