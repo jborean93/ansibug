@@ -156,7 +156,7 @@ class DebugState(t.Protocol):
     def continue_request(
         self,
         request: dap.ContinueRequest,
-    ) -> dap.ContinueResponse:
+    ) -> None:
         raise NotImplementedError()  # pragma: nocover
 
     def disconnect(
@@ -638,8 +638,10 @@ class AnsibleDebugger(metaclass=Singleton):
         msg: dap.ContinueRequest,
     ) -> None:
         strategy = self._get_strategy()
-        resp = strategy.continue_request(msg)
-        self.queue_msg(resp)
+        # Queue the response before resuming so it is sent before any event
+        # the resumed threads emit.
+        self.queue_msg(dap.ContinueResponse(request_seq=msg.seq, all_threads_continued=not msg.single_thread))
+        strategy.continue_request(msg)
 
     @process_message.register
     def _(
@@ -665,8 +667,8 @@ class AnsibleDebugger(metaclass=Singleton):
         msg: dap.NextRequest,
     ) -> None:
         strategy = self._get_strategy()
-        strategy.step_over(msg)
         self.queue_msg(dap.NextResponse(request_seq=msg.seq))
+        strategy.step_over(msg)
 
     @process_message.register
     def _(
@@ -786,8 +788,8 @@ class AnsibleDebugger(metaclass=Singleton):
         msg: dap.StepInRequest,
     ) -> None:
         strategy = self._get_strategy()
-        strategy.step_in(msg)
         self.queue_msg(dap.StepInResponse(request_seq=msg.seq))
+        strategy.step_in(msg)
 
     @process_message.register
     def _(
@@ -795,8 +797,8 @@ class AnsibleDebugger(metaclass=Singleton):
         msg: dap.StepOutRequest,
     ) -> None:
         strategy = self._get_strategy()
-        strategy.step_out(msg)
         self.queue_msg(dap.StepOutResponse(request_seq=msg.seq))
+        strategy.step_out(msg)
 
     @process_message.register
     def _(

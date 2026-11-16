@@ -8,6 +8,7 @@
 + Return a descriptive launch error when `ansible-playbook` exits before connecting to the debug adapter, previously a confusing `NotImplementedError` for `DisconnectRequest` was shown - https://github.com/jborean93/ansibug/issues/50
 + Fix `ansible-playbook` hanging on exit when it fails after connecting to the debug adapter
 + Run the launch script through `/bin/sh` so it works when the temporary directory is mounted with `noexec` - https://github.com/jborean93/ansibug/issues/47
++ Fix race condition where the `continue`, `next`, `stepIn`, and `stepOut` responses could be sent after events emitted by the resumed threads
 
 ## 0.3.2 - 2025-11-22
 
