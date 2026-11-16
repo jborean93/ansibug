@@ -669,9 +669,10 @@ class AnsibleDebugState(DebugState):
             if tid == 1:
                 continue
 
-            thread = self.threads.pop(tid)
-            while thread.stack_frames:
-                self._pop_stackframe(thread)
+            with self._waiting_condition:
+                thread = self.threads.pop(tid)
+                while thread.stack_frames:
+                    self._pop_stackframe(thread)
 
             self._debugger.queue_msg(
                 ansibug.dap.ThreadEvent(
@@ -700,7 +701,7 @@ class AnsibleDebugState(DebugState):
         request: ansibug.dap.DisconnectRequest,
     ) -> None:
         state = ThreadState.END if request.terminate_debuggee else ThreadState.CONTINUE
-        self._resume_threads(list(self.threads.keys()), state)
+        self._resume_threads(self.threads.keys(), state)
 
     def get_scopes(
         self,
@@ -892,9 +893,13 @@ class AnsibleDebugState(DebugState):
         self,
         request: ansibug.dap.ThreadsRequest,
     ) -> ansibug.dap.ThreadsResponse:
+        # The strategy adds and removes threads under this lock.
+        with self._waiting_condition:
+            threads = [t.to_dap() for t in self.threads.values()]
+
         return ansibug.dap.ThreadsResponse(
             request_seq=request.seq,
-            threads=[t.to_dap() for t in self.threads.values()],
+            threads=threads,
         )
 
     def get_variables(
@@ -988,10 +993,11 @@ class AnsibleDebugState(DebugState):
     ) -> AnsibleThread:
         tid = self._debugger.next_thread_id()
 
-        thread = self.threads[tid] = AnsibleThread(
-            id=tid,
-            host=host,
-        )
+        with self._waiting_condition:
+            thread = self.threads[tid] = AnsibleThread(
+                id=tid,
+                host=host,
+            )
         self._debugger.queue_msg(
             ansibug.dap.ThreadEvent(
                 reason="started",
@@ -1030,7 +1036,9 @@ class AnsibleDebugState(DebugState):
     ) -> None:
         with self._waiting_condition:
             for tid in thread_ids:
-                self.threads[tid].set_state(thread_state)
+                # The thread may have exited since the client last saw it.
+                if thread := self.threads.get(tid):
+                    thread.set_state(thread_state)
 
             self._waiting_condition.notify_all()
 

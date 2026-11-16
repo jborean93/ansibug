@@ -23,6 +23,9 @@
 + Fix step over after stopping on an exception continuing instead of stopping on the next task
 + Fix stale stack frames shown after leaving multiple includes at once or with `include_tasks` that use `apply` or contain a `block`
 + Fix the `Uncaught Failures` exception breakpoint not stopping on a failure in a `rescue` or `always` section of a block
++ Fix race conditions between the client setting breakpoints and Ansible loading new files that could fail the strategy or leave a breakpoint unverified
++ Fix race condition when the client requests the threads while hosts are being added or removed
++ Ignore `continue` and step requests for a thread that has already exited
 
 ## 0.3.2 - 2025-11-22
 
