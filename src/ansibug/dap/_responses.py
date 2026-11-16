@@ -287,6 +287,7 @@ class ErrorResponse(Response, dap={"message": "message", "body": {"error": "erro
     """
 
     success: bool = dataclasses.field(init=False, default=False)
-    command: Command = dataclasses.field(init=True)
+    # A str when responding to a request whose command is unknown.
+    command: Command | str = dataclasses.field(init=True)  # pyright: ignore[reportIncompatibleVariableOverride]
     message: str | None = None
     error: Message | None = None

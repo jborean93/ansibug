@@ -20,6 +20,7 @@ from ._messages import (
     ProtocolMessage,
     Request,
     Response,
+    UnknownRequestError,
 )
 from ._requests import (
     AttachRequest,
@@ -156,6 +157,7 @@ __all__ = [
     "ThreadEvent",
     "ThreadsRequest",
     "ThreadsResponse",
+    "UnknownRequestError",
     "ValueFormat",
     "Variable",
     "VariablePresentationHint",

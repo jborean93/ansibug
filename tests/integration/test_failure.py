@@ -13,14 +13,19 @@ import ansibug.dap as dap
 def test_unknown_message(
     dap_client: DAPClient,
 ) -> None:
-    # Sending a debuggee intended message before its connected will have the
-    # adapter fail as expected
-    dap_client.send(dap.ConfigurationDoneRequest())
+    # Sending a debuggee intended message before its connected is rejected
+    # without ending the adapter.
+    req = dap.ConfigurationDoneRequest()
+    dap_client.send(req)
     resp = dap_client.wait_for_message(dap.ErrorResponse)
 
-    assert isinstance(resp, dap.ErrorResponse)
-    assert resp.message
-    assert "NotImplementedError: Debug Adapter does not support the ConfigurationDoneRequest message" in resp.message
+    assert resp.request_seq == req.seq
+    assert resp.command == dap.Command.CONFIGURATION_DONE
+    assert resp.message == "The configurationDone request needs a launched or attached playbook"
+
+    # The adapter is still running.
+    dap_client.send(dap.ThreadsRequest())
+    dap_client.wait_for_message(dap.ErrorResponse)
 
 
 def test_unknown_message_on_debuggee(

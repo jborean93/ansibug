@@ -162,8 +162,18 @@ def test_receive_out_of_sequence() -> None:
 
     server = dap.DebugAdapterConnection()
     server.receive_data(client.data_to_send())
-    with pytest.raises(ValueError, match="Expected seq 1 but received 2"):
-        server.next_message()
+    actual = server.next_message()
+    assert isinstance(actual, dap.LaunchRequest)
+    assert actual.seq == 2
+
+
+def test_receive_header_value_with_separator() -> None:
+    conn = dap.DebugAdapterConnection()
+    headers = b"Content-Type: application/vscode-jsonrpc; charset: utf-8\r\nContent-Length: 51\r\n\r\n"
+    conn.receive_data(headers + b'{"seq": 1, "type": "request", "command": "threads"}')
+
+    actual = conn.next_message()
+    assert isinstance(actual, dap.ThreadsRequest)
 
 
 def test_receive_partial_message() -> None:

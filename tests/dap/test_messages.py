@@ -51,13 +51,39 @@ def test_unpack_extra_data() -> None:
 
 
 def test_unpack_request_unknown_command() -> None:
-    with pytest.raises(ValueError, match="Unknown DAP request command 'unknown'"):
+    with pytest.raises(dap.UnknownRequestError, match="Unknown DAP request command 'unknown'") as e:
         dap.ProtocolMessage.unpack(
             {
+                "seq": 5,
                 "type": "request",
                 "command": "unknown",
             }
         )
+
+    assert e.value.seq == 5
+    assert e.value.command == "unknown"
+
+
+def test_pack_error_unknown_command() -> None:
+    actual = dap.ErrorResponse(command="unknown", request_seq=5, message="error").pack()
+
+    assert actual["command"] == "unknown"
+    assert actual["success"] is False
+
+
+def test_unpack_error_unknown_command() -> None:
+    actual = dap.ProtocolMessage.unpack(
+        {
+            "seq": 1,
+            "type": "response",
+            "request_seq": 0,
+            "success": False,
+            "command": "unknown",
+        }
+    )
+
+    assert isinstance(actual, dap.ErrorResponse)
+    assert actual.command == "unknown"
 
 
 def test_unpack_response() -> None:

@@ -12,14 +12,7 @@ class DebugAdapterConnection:
     def __init__(self) -> None:
         self._out_buffer = bytearray()
         self._in_buffer = bytearray()
-        self.__seq_no_in = 1
         self.__seq_no_out = 1
-
-    @property
-    def _seq_no_in(self) -> int:
-        no = self.__seq_no_in
-        self.__seq_no_in += 1
-        return no
 
     @property
     def _seq_no_out(self) -> int:
@@ -52,7 +45,7 @@ class DebugAdapterConnection:
             return None
 
         raw_headers = bytes(self._in_buffer[:header_idx])
-        headers = dict(h.split(b": ", 2) for h in raw_headers.split(b"\r\n"))
+        headers = dict(h.split(b": ", 1) for h in raw_headers.split(b"\r\n"))
         if b"Content-Length" not in headers:
             raise ValueError("Expected Content-Length header before message payload but none found")
 
@@ -66,12 +59,7 @@ class DebugAdapterConnection:
         self._in_buffer = self._in_buffer[header_idx + length :]
 
         msg_data = json.loads(raw_msg.decode())
-        msg = ProtocolMessage.unpack(msg_data)
-        expected_seq_no_in = self._seq_no_in
-        if expected_seq_no_in != msg.seq:
-            raise ValueError(f"Expected seq {expected_seq_no_in} but received {msg.seq}")
-
-        return msg
+        return ProtocolMessage.unpack(msg_data)
 
     def queue_msg(
         self,
