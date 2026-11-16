@@ -31,6 +31,7 @@
 + Fix attach hanging when the target accepts the connection but never responds, the handshake now honours `connectTimeout`
 + Fix socket connect and accept failing when the process has more than 1024 file descriptors open
 + Use JSON instead of `pickle` for the messages between the debug adapter and `ansible-playbook`, attaching to an untrusted address can no longer run code in the debug adapter process. An older ansibug version on one side cannot communicate with this version or newer on the other side
++ Reduce the per task overhead of the debug strategy, the host thread lookup no longer scales with the number of hosts and breakpoint conditions are only templated when a breakpoint matches
 
 ## 0.3.2 - 2025-11-22
 
