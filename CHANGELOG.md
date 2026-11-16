@@ -9,6 +9,7 @@
 + Fix `ansible-playbook` hanging on exit when it fails after connecting to the debug adapter
 + Run the launch script through `/bin/sh` so it works when the temporary directory is mounted with `noexec` - https://github.com/jborean93/ansibug/issues/47
 + Fix race condition where the `continue`, `next`, `stepIn`, and `stepOut` responses could be sent after events emitted by the resumed threads
++ Fix launch failure when `ANSIBLE_DEBUG` is enabled, the debug output broke the parsing of the Ansible config
 
 ## 0.3.2 - 2025-11-22
 
