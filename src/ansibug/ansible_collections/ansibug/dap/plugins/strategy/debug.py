@@ -16,6 +16,7 @@ author: Jordan Borean (@jborean93)
 import collections.abc
 import dataclasses
 import enum
+import functools
 import inspect
 import logging
 import os
@@ -96,6 +97,13 @@ def _get_parent_tasks(
     while task := task._parent:
         if isinstance(task, Task):
             yield task
+
+
+def _is_container(value: t.Any) -> bool:
+    """Whether the value can be expanded as a child variable."""
+    return isinstance(value, (collections.abc.Mapping, collections.abc.Sequence)) and not isinstance(
+        value, (str, bytes, bytearray)
+    )
 
 
 class ThreadState(enum.Enum):
@@ -318,6 +326,7 @@ class AnsibleStackFrame:
         self.variables_options_id = 0
         self.variables_taskvar_id = 0
         self.variables_hostvars_id = 0
+        self.variables_globalvars_id = 0
         self.variables_result_id = 0
 
         self._debugger = debugger
@@ -349,6 +358,9 @@ class AnsibleVariable:
     ) -> None:
         self.id = id
         self.stackframe = stackframe
+        # Child variables created for container values, keyed by name, so
+        # each variables request reuses them. Cleared when the name is changed.
+        self.children: dict[str, AnsibleVariable] = {}
 
     @property
     def named_variables(self) -> int:
@@ -399,6 +411,7 @@ class AnsibleListVariable(AnsibleVariable):
         index: str,
         value: t.Any,
     ) -> None:
+        self.children.pop(index, None)
         self._ds[int(index)] = value  # pyright: ignore[reportIndexIssue]
 
 
@@ -425,6 +438,7 @@ class AnsibleDictVariable(AnsibleVariable):
         self,
         index: str,
     ) -> None:
+        self.children.pop(index, None)
         if index in self._ds:
             del self._ds[index]  # pyright: ignore[reportIndexIssue]
 
@@ -433,6 +447,7 @@ class AnsibleDictVariable(AnsibleVariable):
         index: str,
         value: t.Any,
     ) -> None:
+        self.children.pop(index, None)
         self._ds[index] = value  # pyright: ignore[reportIndexIssue]
 
 
@@ -459,19 +474,45 @@ class AnsibleDictWithRawStoreVariable(AnsibleDictVariable):
 
 
 class AnsibleHostVarsVariable(AnsibleDictVariable):
-    """AnsibleDictVariable with integration into a host variable manager."""
+    """AnsibleDictVariable with integration into a host variable manager.
+
+    The host vars are only templated when first used as reading each value
+    templates it, the scope is marked as expensive so the client only expands
+    it when requested.
+    """
 
     def __init__(
         self,
         id: int,
         stackframe: AnsibleStackFrame,
-        value: collections.abc.Mapping[t.Any, t.Any],
         host: str,
         variable_manager: VariableManager,
     ) -> None:
-        super().__init__(id, stackframe, value)
+        AnsibleVariable.__init__(self, id, stackframe)
         self._host = host
         self._variable_manager = variable_manager
+
+    @functools.cached_property
+    def _ds(self) -> dict[str, t.Any]:
+        # We use the hostvars but for simplicity sake we also overlay the task
+        # vars that might be set as these will contain things like play/task
+        # vars. The hostvars are a more persistent set of vars that last beyond
+        # this task so is important to give the user a way to set these
+        # persistently in the debugger.
+        task_vars = self.stackframe.task_vars
+        host_vars: dict[str, t.Any] = {}
+
+        inventory_hostvars = task_vars["hostvars"][task_vars["inventory_hostname"]]
+        for k in inventory_hostvars.keys():
+            try:
+                host_vars[k] = inventory_hostvars[k]
+            except AnsibleUndefinedVariable:
+                host_vars[k] = task_vars.get(k, "<undefined>")
+
+        for k, v in task_vars.items():
+            host_vars.setdefault(str(k), v)
+
+        return host_vars
 
     def set(self, index: str, value: t.Any) -> None:
         super().set(index, value)
@@ -587,6 +628,7 @@ class AnsibleDebugState(DebugState):
             if stopped_event:
                 self._debugger.queue_msg(stopped_event)
                 self._waiting_condition.wait_for(lambda: self.threads[tid].state != ThreadState.WAIT)
+                self._reset_frame_variables(thread)
 
                 # If thread is marked as end then the client has requested us
                 # to terminate the debuggee.
@@ -625,6 +667,7 @@ class AnsibleDebugState(DebugState):
 
                 self._debugger.queue_msg(stopped_event)
                 self._waiting_condition.wait_for(lambda: self.threads[thread.id].state != ThreadState.WAIT)
+                self._reset_frame_variables(thread)
 
             if thread.state == ThreadState.END:
                 raise EndStrategy()
@@ -681,6 +724,33 @@ class AnsibleDebugState(DebugState):
             except AnsibleError:
                 return False
 
+    def _reset_frame_variables(
+        self,
+        thread: AnsibleThread,
+    ) -> None:
+        """Drops the cached scope variables of the thread's frames.
+
+        Include frames live across multiple stops and the tasks run in between
+        can change the host vars. Their scopes are recreated on the next stop.
+        The module result does not change so is kept.
+        """
+        for sfid in thread.stack_frames:
+            sf = self.stackframes[sfid]
+            for variable_id in sf.variables:
+                if variable_id != sf.variables_result_id:
+                    del self.variables[variable_id]
+
+            if sf.variables_result_id:
+                sf.variables = [sf.variables_result_id]
+                self.variables[sf.variables_result_id].children.clear()
+            else:
+                sf.variables = []
+
+            sf.variables_options_id = 0
+            sf.variables_taskvar_id = 0
+            sf.variables_hostvars_id = 0
+            sf.variables_globalvars_id = 0
+
     def _pop_stackframe(
         self,
         thread: AnsibleThread,
@@ -709,49 +779,33 @@ class AnsibleDebugState(DebugState):
     ) -> ansibug.dap.ScopesResponse:
         sf = self.stackframes[request.frame_id]
 
-        # This is a very basic templating of the args and doesn't handle loops.
-        templar = Templar(loader=self._loader, variables=sf.task_vars)
-        task_args = templar.template(sf.task.args, fail_on_undefined=False)
-        module_opts = self._add_variable(
-            sf,
-            task_args,
-            # Any changes to our templated var also needs to reflect back onto
-            # the raw datastore so use a custom variable class.
-            var_factory=lambda i: AnsibleDictWithRawStoreVariable(i, sf, task_args, sf.task.args),
-        )
-        sf.variables_options_id = module_opts.id
+        # The client requests the scopes each time a frame is selected, only
+        # create the variables once per frame.
+        if not sf.variables_options_id:
+            # This is a very basic templating of the args and doesn't handle loops.
+            templar = Templar(loader=self._loader, variables=sf.task_vars)
+            task_args = templar.template(sf.task.args, fail_on_undefined=False)
+            sf.variables_options_id = self._add_variable(
+                sf,
+                task_args,
+                # Any changes to our templated var also needs to reflect back onto
+                # the raw datastore so use a custom variable class.
+                var_factory=lambda i: AnsibleDictWithRawStoreVariable(i, sf, task_args, sf.task.args),
+            ).id
+            sf.variables_taskvar_id = self._add_variable(sf, sf.task_vars).id
+            sf.variables_hostvars_id = self._add_variable(
+                sf,
+                {},
+                var_factory=lambda i: AnsibleHostVarsVariable(
+                    i, sf, sf.task_vars["inventory_hostname"], self._variable_mamanger
+                ),
+            ).id
+            sf.variables_globalvars_id = self._add_variable(sf, sf.task_vars["vars"]).id
 
-        task_vars = self._add_variable(sf, sf.task_vars)
-        sf.variables_taskvar_id = task_vars.id
-
-        # We use the hostvars but for simplicity sake we also overlay the task
-        # vars that might be set as these will contain things like play/task
-        # vars. The hostvars are a more persistent set of vars that last beyond
-        # this task so is important to give the user a way to set these
-        # persistently in the debugger.
-        host_vars_amalgamated: dict[str, t.Any] = {}
-
-        inventory_hostvars = sf.task_vars["hostvars"][sf.task_vars["inventory_hostname"]]
-        for k in inventory_hostvars.keys():
-            try:
-                value = inventory_hostvars[k]
-                host_vars_amalgamated[k] = value
-            except AnsibleUndefinedVariable:
-                host_vars_amalgamated[k] = sf.task_vars.get(k, "<undefined>")
-        for k, v in task_vars.get():
-            if k not in host_vars_amalgamated:
-                host_vars_amalgamated[k] = v
-
-        host_vars = self._add_variable(
-            sf,
-            host_vars_amalgamated,
-            var_factory=lambda i: AnsibleHostVarsVariable(
-                i, sf, host_vars_amalgamated, sf.task_vars["inventory_hostname"], self._variable_mamanger
-            ),
-        )
-        sf.variables_hostvars_id = host_vars.id
-
-        global_vars = self._add_variable(sf, sf.task_vars["vars"])
+        module_opts = self.variables[sf.variables_options_id]
+        task_vars = self.variables[sf.variables_taskvar_id]
+        host_vars = self.variables[sf.variables_hostvars_id]
+        global_vars = self.variables[sf.variables_globalvars_id]
 
         scopes: list[ansibug.dap.Scope] = [
             # Options for the module itself
@@ -772,8 +826,7 @@ class AnsibleDebugState(DebugState):
             ansibug.dap.Scope(
                 name="Host Variables",
                 variables_reference=host_vars.id,
-                named_variables=host_vars.named_variables,
-                indexed_variables=host_vars.indexed_variables,
+                # Counting them requires templating each one.
                 expensive=True,
             ),
             # Scoped task vars but the full vars dict
@@ -910,22 +963,20 @@ class AnsibleDebugState(DebugState):
 
         variables: list[ansibug.dap.Variable] = []
         for name, value in variable.get():
-            child_var: AnsibleVariable | None = None
-            if isinstance(value, (collections.abc.Mapping, collections.abc.Sequence)) and not isinstance(value, str):
-                child_var = self._add_variable(variable.stackframe, value)
+            child_var = variable.children.get(name)
+            if child_var:
+                pass
+            elif _is_container(value):
+                child_var = variable.children[name] = self._add_variable(variable.stackframe, value)
             elif dataclasses.is_dataclass(value) and not isinstance(value, type):
-                child_var = self._add_variable(variable.stackframe, dataclasses.asdict(value))
+                child_var = variable.children[name] = self._add_variable(variable.stackframe, dataclasses.asdict(value))
 
             value_repr: str
             if isinstance(value, HostVars):
-                # Data Tagging (2.19) removed the repr for HostVars so we just
-                # manually create the repr.
-                # HostVars is from the untyped ansible-core so the isinstance check doesn't narrow value.
-                host_vars: t.Any = value
-                hostvars = {}
-                for inventory_host in host_vars:
-                    hostvars[inventory_host] = host_vars.get(inventory_host)
-                value_repr = repr(hostvars)
+                # The repr would template every var of every host, the client
+                # can expand it to view each host.
+                # HostVars is from the untyped ansible-core so isinstance doesn't narrow value.
+                value_repr = f"HostVars ({len(t.cast(t.Any, value))} hosts)"
             else:
                 value_repr = repr(value)
 
@@ -955,10 +1006,8 @@ class AnsibleDebugState(DebugState):
         variable.set(request.name, new_value)
 
         new_container = None
-        if isinstance(new_value, (collections.abc.Mapping, collections.abc.Sequence)) and not isinstance(
-            new_value, str
-        ):
-            new_container = self._add_variable(variable.stackframe, new_value)
+        if _is_container(new_value):
+            new_container = variable.children[request.name] = self._add_variable(variable.stackframe, new_value)
 
         return ansibug.dap.SetVariableResponse(
             request_seq=request.seq,

@@ -32,6 +32,9 @@
 + Fix socket connect and accept failing when the process has more than 1024 file descriptors open
 + Use JSON instead of `pickle` for the messages between the debug adapter and `ansible-playbook`, attaching to an untrusted address can no longer run code in the debug adapter process. An older ansibug version on one side cannot communicate with this version or newer on the other side
 + Reduce the per task overhead of the debug strategy, the host thread lookup no longer scales with the number of hosts and breakpoint conditions are only templated when a breakpoint matches
++ Only template the `Host Variables` scope when it is expanded, and reuse the scope and child variables when a stack frame is selected again while stopped
++ Show `hostvars` as `HostVars (N hosts)` instead of templating every variable of every host to display it
++ No longer expand `bytes` values into a list of integers in the variables view
 
 ## 0.3.2 - 2025-11-22
 
