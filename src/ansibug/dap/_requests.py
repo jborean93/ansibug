@@ -617,3 +617,17 @@ class SetFunctionBreakpointsRequest(Request, dap={"arguments": {"breakpoints": "
     command = Command.SET_FUNCTION_BREAKPOINTS
 
     breakpoints: list[FunctionBreakpoint] = dataclasses.field(default_factory=list)
+
+
+@dataclasses.dataclass()
+class ExceptionInfoRequest(Request, dap={"arguments": {"threadId": "thread_id"}}):
+    """Retrieves the details of the exception that caused the stop.
+
+    Args:
+        thread_id: The thread for which exception information should be
+            retrieved.
+    """
+
+    command = Command.EXCEPTION_INFO
+
+    thread_id: int

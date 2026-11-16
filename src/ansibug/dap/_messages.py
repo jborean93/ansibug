@@ -25,6 +25,7 @@ class Command(enum.Enum):
     CONTINUE = "continue"
     DISCONNECT = "disconnect"
     EVALUATE = "evaluate"
+    EXCEPTION_INFO = "exceptionInfo"
     INITIALIZE = "initialize"
     LAUNCH = "launch"
     NEXT = "next"

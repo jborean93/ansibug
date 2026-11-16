@@ -6,6 +6,7 @@ from __future__ import annotations
 import pathlib
 import shutil
 
+import pytest
 from dap_client import DAPClient
 
 import ansibug.dap as dap
@@ -666,5 +667,178 @@ def test_break_on_error_in_rescue_section(
     dap_client.wait_for_message(dap.ThreadEvent)
     dap_client.wait_for_message(dap.TerminatedEvent)
 
+    proc.communicate()
+    assert proc.returncode == 2, proc.format_output()
+
+
+def _three_host_inventory(tmp_path: pathlib.Path) -> None:
+    (tmp_path / "inventory.ini").write_text(
+        "\n".join(
+            f"host{i} ansible_host=127.0.0.1 ansible_connection=local "
+            + "ansible_python_interpreter={{ansible_playbook_python}}"
+            for i in range(1, 4)
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    "condition",
+    [
+        "inventory_hostname == 'host2'",
+        "'boom host2' in result.msg",
+    ],
+)
+def test_break_on_error_condition(
+    condition: str,
+    dap_client: DAPClient,
+    tmp_path: pathlib.Path,
+) -> None:
+    playbook = tmp_path / "main.yml"
+    playbook.write_text(
+        r"""
+- hosts: all
+  gather_facts: false
+  tasks:
+  - name: fail task
+    fail:
+      msg: boom {{ inventory_hostname }}
+"""
+    )
+    _three_host_inventory(tmp_path)
+
+    proc = dap_client.launch("main.yml", playbook_dir=tmp_path, playbook_args=["-i", "inventory.ini", "--forks", "1"])
+    dap_client.send(
+        dap.SetExceptionBreakpointsRequest(
+            filter_options=[dap.ExceptionFilterOptions(filter_id="on_error", condition=condition)],
+        ),
+        dap.SetExceptionBreakpointsResponse,
+    )
+    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
+
+    started: list[int] = []
+    stopped: list[int] = []
+    exited = 0
+    while exited < 3:
+        event = dap_client.wait_for_message(dap.Event)
+        if isinstance(event, dap.ThreadEvent):
+            if event.reason == "started":
+                started.append(event.thread_id)
+            else:
+                exited += 1
+
+        elif isinstance(event, dap.StoppedEvent):
+            assert event.reason == dap.StoppedReason.EXCEPTION
+            assert event.thread_id is not None
+            stopped.append(event.thread_id)
+            dap_client.send(dap.ContinueRequest(thread_id=event.thread_id), dap.ContinueResponse)
+
+    # Only host2 stops, the hosts run in inventory order with 1 fork.
+    assert stopped == [started[1]]
+
+    dap_client.wait_for_message(dap.TerminatedEvent)
+    proc.communicate()
+    assert proc.returncode == 2, proc.format_output()
+
+
+def test_break_on_error_empty_condition(
+    dap_client: DAPClient,
+    tmp_path: pathlib.Path,
+) -> None:
+    playbook = tmp_path / "main.yml"
+    playbook.write_text("- hosts: localhost\n  gather_facts: false\n  tasks:\n  - fail:\n      msg: boom\n")
+
+    proc = dap_client.launch(playbook, playbook_dir=tmp_path)
+    dap_client.send(
+        dap.SetExceptionBreakpointsRequest(
+            filter_options=[dap.ExceptionFilterOptions(filter_id="on_error", condition="")],
+        ),
+        dap.SetExceptionBreakpointsResponse,
+    )
+    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
+    tid = dap_client.wait_for_message(dap.ThreadEvent).thread_id
+
+    # An empty condition is the same as no condition.
+    assert dap_client.wait_for_message(dap.StoppedEvent).reason == dap.StoppedReason.EXCEPTION
+    dap_client.send(dap.ContinueRequest(thread_id=tid), dap.ContinueResponse)
+    dap_client.wait_for_message(dap.ThreadEvent)
+    dap_client.wait_for_message(dap.TerminatedEvent)
+    proc.communicate()
+    assert proc.returncode == 2, proc.format_output()
+
+
+def test_exception_info(
+    dap_client: DAPClient,
+    tmp_path: pathlib.Path,
+) -> None:
+    playbook = tmp_path / "main.yml"
+    playbook.write_text(
+        r"""
+- hosts: localhost
+  gather_facts: false
+  tasks:
+  - name: skipped task
+    ping:
+    when: false
+
+  - name: ping task
+    ping:
+
+  - name: fail task
+    fail:
+      msg: boom
+"""
+    )
+
+    proc = dap_client.launch(playbook, playbook_dir=tmp_path)
+    dap_client.send(
+        dap.SetBreakpointsRequest(
+            source=dap.Source(name="main.yml", path=str(playbook.absolute())),
+            lines=[9],
+            breakpoints=[dap.SourceBreakpoint(line=9)],
+            source_modified=False,
+        ),
+        dap.SetBreakpointsResponse,
+    )
+    dap_client.send(
+        dap.SetExceptionBreakpointsRequest(filters=["on_error", "on_skipped"]), dap.SetExceptionBreakpointsResponse
+    )
+    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
+    tid = dap_client.wait_for_message(dap.ThreadEvent).thread_id
+
+    # Skipped
+    dap_client.wait_for_message(dap.StoppedEvent)
+    info = dap_client.send(dap.ExceptionInfoRequest(thread_id=tid), dap.ExceptionInfoResponse)
+    assert info.exception_id == "Task skipped"
+    assert info.break_mode == "always"
+    assert info.description is not None
+    assert "False condition: False" in info.description
+    assert info.details is not None
+    assert info.details.type_name == "ansible.builtin.ping"
+    dap_client.send(dap.ContinueRequest(thread_id=tid), dap.ContinueResponse)
+
+    # A breakpoint stop has no exception info.
+    stopped = dap_client.wait_for_message(dap.StoppedEvent)
+    assert stopped.reason == dap.StoppedReason.BREAKPOINT
+    err = dap_client.send(dap.ExceptionInfoRequest(thread_id=tid), dap.ErrorResponse)
+    assert err.message == "The thread is not stopped on an exception"
+    dap_client.send(dap.ContinueRequest(thread_id=tid), dap.ContinueResponse)
+
+    # Failed
+    stopped = dap_client.wait_for_message(dap.StoppedEvent)
+    assert stopped.reason == dap.StoppedReason.EXCEPTION
+    assert stopped.text is not None
+    # Newer Ansible versions failed to format the error and showed its repr.
+    assert "ErrorSummary(" not in stopped.text
+    info = dap_client.send(dap.ExceptionInfoRequest(thread_id=tid), dap.ExceptionInfoResponse)
+    assert info.exception_id == "Task failed"
+    assert info.break_mode == "unhandled"
+    assert info.description is not None
+    assert "boom" in info.description
+    assert info.details is not None
+    assert info.details.type_name == "ansible.builtin.fail"
+    dap_client.send(dap.ContinueRequest(thread_id=tid), dap.ContinueResponse)
+
+    dap_client.wait_for_message(dap.ThreadEvent)
+    dap_client.wait_for_message(dap.TerminatedEvent)
     proc.communicate()
     assert proc.returncode == 2, proc.format_output()

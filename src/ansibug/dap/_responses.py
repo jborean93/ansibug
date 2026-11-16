@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 import dataclasses
+import typing as t
 
 from ._messages import Command, Response
 from ._types import (
     Breakpoint,
     Capabilities,
+    ExceptionDetails,
     Message,
     Scope,
     StackFrame,
@@ -305,3 +307,32 @@ class SetFunctionBreakpointsResponse(Response, dap={"body": {"breakpoints": "bre
     command = Command.SET_FUNCTION_BREAKPOINTS
 
     breakpoints: list[Breakpoint] = dataclasses.field(default_factory=list)
+
+
+@dataclasses.dataclass()
+class ExceptionInfoResponse(
+    Response,
+    dap={
+        "body": {
+            "exceptionId": "exception_id",
+            "description": "description",
+            "breakMode": "break_mode",
+            "details": "details",
+        }
+    },
+):
+    """Response to ExceptionInfoRequest.
+
+    Args:
+        exception_id: ID of the exception that was thrown.
+        description: Descriptive text for the exception.
+        break_mode: Mode that caused the exception notification to be raised.
+        details: Detailed information about the exception.
+    """
+
+    command = Command.EXCEPTION_INFO
+
+    exception_id: str
+    break_mode: t.Literal["never", "always", "unhandled", "userUnhandled"]
+    description: str | None = None
+    details: ExceptionDetails | None = None

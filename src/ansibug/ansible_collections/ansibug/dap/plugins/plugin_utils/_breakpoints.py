@@ -12,7 +12,12 @@ from ansible.playbook.task import Task
 HAS_FORMAT_MESSAGE = False
 try:
     from ansible.module_utils._internal._messages import ErrorSummary
-    from ansible.utils.display import _format_message
+
+    try:
+        from ansible._internal._display_utils import format_message as _format_message
+    except ImportError:
+        # Ansible 2.19, moved in 2.20.
+        from ansible.utils.display import _format_message
 
     HAS_FORMAT_MESSAGE = True
 except ImportError:
@@ -21,17 +26,32 @@ except ImportError:
 from ansibug._debuggee import AnsibleDebugger
 
 
+def get_result_error(result: dict[str, t.Any]) -> tuple[str, str | None]:
+    """Gets the error message and traceback of a failed or unreachable result.
+
+    Args:
+        result: The task result.
+
+    Returns:
+        tuple[str, str | None]: The error message and the traceback if one
+        was captured.
+    """
+    exc = result.get("exception")
+
+    # Data Tagging (2.19) has an ErrorSummary object with the message and any
+    # traceback which is only captured if enabled by Ansible's config.
+    if HAS_FORMAT_MESSAGE and isinstance(exc, ErrorSummary):  # pyright: ignore[reportPossiblyUnboundVariable]
+        msg = _format_message(exc, False)  # pyright: ignore[reportPossiblyUnboundVariable]
+        with_traceback = _format_message(exc, True)  # pyright: ignore[reportPossiblyUnboundVariable]
+        return msg, with_traceback if with_traceback != msg else None
+
+    msg = str(result.get("msg", result.get("stdout", "Unknown error")))
+    return msg, str(exc) if exc else None
+
+
 def _format_exception(result: dict[str, t.Any]) -> str:
-    text = str(result.get("msg", result.get("stdout", "Unknown error")))
-
-    if exc := result.get("exception"):
-        # Data Tagging has special method to format the exception tuple
-        if HAS_FORMAT_MESSAGE and isinstance(exc, ErrorSummary):  # pyright: ignore[reportPossiblyUnboundVariable]
-            return _format_message(exc, False)  # pyright: ignore[reportPossiblyUnboundVariable]
-
-        text += f"\n\n{exc}"
-
-    return text
+    msg, traceback = get_result_error(result)
+    return f"{msg}\n\n{traceback}" if traceback else msg
 
 
 def _split_task_path(task_path: str) -> tuple[str, int]:

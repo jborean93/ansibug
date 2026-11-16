@@ -70,12 +70,14 @@ from ansibug._debuggee import (
     AnsibleLineBreakpoint,
     DebugState,
     EndStrategy,
+    ExceptionBreakpointType,
 )
 
 from ..plugin_utils._breakpoints import (
     get_on_failed_details,
     get_on_skipped_details,
     get_on_unreachable_details,
+    get_result_error,
     register_block_breakpoints,
 )
 from ..plugin_utils._repl_util import (
@@ -161,6 +163,8 @@ class AnsibleThread:
         self.stack_frames: list[int] = []
         self.state: ThreadState = ThreadState.CONTINUE
         self._stopped_task: Task | None = None
+        # The ExceptionInfoResponse body when stopped on an exception.
+        self.exception_info: dict[str, t.Any] | None = None
 
     def to_dap(self) -> ansibug.dap.Thread:
         return ansibug.dap.Thread(
@@ -243,6 +247,7 @@ class AnsibleThread:
             # Store this task so the step_* actions can use it when verifying
             # if the requested action for this task should cause a stop.
             self._stopped_task = task
+            self.exception_info = None
             self.state = ThreadState.WAIT
             return ansibug.dap.StoppedEvent(**stopped_kwargs)
 
@@ -251,11 +256,23 @@ class AnsibleThread:
     def should_stop_on_exception(
         self,
         result: AnsibugTaskResult,
-        should_stop_on_error: bool = False,
-        should_stop_on_unreachable: bool = False,
-        should_stop_on_skipped: bool = False,
+        check_filter: t.Callable[[ExceptionBreakpointType], bool],
     ) -> ansibug.dap.StoppedEvent | None:
+        """Checks if the task result should stop on an exception filter.
+
+        Args:
+            result: The task result.
+            check_filter: Called with the exception filter that applies to the
+                result, returns whether it is enabled and its condition passes.
+
+        Returns:
+            Optional[StoppedEvent]: The stopped event if the thread should stop.
+        """
         details: tuple[str, str] | None = None
+        exception_id = ""
+        break_mode = "unhandled"
+        message: str = ""
+        traceback: str | None = None
 
         if result.failed and not result.ignore_errors:
             is_rescued = False
@@ -270,19 +287,39 @@ class AnsibleThread:
                     break
                 child = parent
 
-            if should_stop_on_error and not is_rescued:
+            if not is_rescued and check_filter(ExceptionBreakpointType.ON_ERROR):
                 details = get_on_failed_details(result.result)
+                exception_id = "Task failed"
+                message, traceback = get_result_error(result.result)
 
         elif result.unreachable and not result.ignore_unreachable:
-            if should_stop_on_unreachable:
+            if check_filter(ExceptionBreakpointType.ON_UNREACHABLE):
                 details = get_on_unreachable_details(result.result)
+                exception_id = "Host unreachable"
+                message, traceback = get_result_error(result.result)
 
         elif result.skipped:
-            if should_stop_on_skipped:
+            if check_filter(ExceptionBreakpointType.ON_SKIPPED):
                 details = get_on_skipped_details(result.result)
+                exception_id = "Task skipped"
+                # A skip is expected rather than an error.
+                break_mode = "always"
+                # The text after the 'Task skipped' header line.
+                message = details[1].partition("\n")[2]
 
         if details:
-            self._stopped_task = result.task
+            task = result.task
+            self.exception_info = {
+                "exception_id": exception_id,
+                "description": message,
+                "break_mode": break_mode,
+                "details": ansibug.dap.ExceptionDetails(
+                    message=message,
+                    type_name=getattr(task, "resolved_action", None) or task.action,
+                    stack_trace=traceback,
+                ),
+            }
+            self._stopped_task = task
             self.state = ThreadState.WAIT
             return ansibug.dap.StoppedEvent(
                 reason=ansibug.dap.StoppedReason.EXCEPTION,
@@ -679,18 +716,18 @@ class AnsibleDebugState(DebugState):
         """
         task = result.task
         thread = self._host_threads[result.host]
+        sf = self.stackframes[thread.stack_frames[0]]
+
+        def check_filter(filter_type: ExceptionBreakpointType) -> bool:
+            enabled, condition = self._debugger.get_exception_filter(filter_type)
+            if not enabled or not condition:
+                return enabled
+
+            return self._eval_condition(condition, sf.task_vars | {"result": result.result})
 
         with self._waiting_condition:
-            stopped_event = thread.should_stop_on_exception(
-                result,
-                should_stop_on_error=self._debugger.should_stop_on_error,
-                should_stop_on_unreachable=self._debugger.should_stop_on_unreachable,
-                should_stop_on_skipped=self._debugger.should_stop_on_skipped,
-            )
+            stopped_event = thread.should_stop_on_exception(result, check_filter)
             if stopped_event:
-                sf_id = thread.stack_frames[0]
-                sf = self.stackframes[sf_id]
-
                 result_variable = self._add_variable(sf, result.result)
                 sf.variables_result_id = result_variable.id
 
@@ -1014,6 +1051,20 @@ class AnsibleDebugState(DebugState):
             result=value,
             type=value_type,
         )
+
+    def exception_info(
+        self,
+        request: ansibug.dap.ExceptionInfoRequest,
+    ) -> ansibug.dap.ExceptionInfoResponse | ansibug.dap.ErrorResponse:
+        thread = self.threads.get(request.thread_id)
+        if not thread or not thread.exception_info:
+            return ansibug.dap.ErrorResponse(
+                command=ansibug.dap.Command.EXCEPTION_INFO,
+                request_seq=request.seq,
+                message="The thread is not stopped on an exception",
+            )
+
+        return ansibug.dap.ExceptionInfoResponse(request_seq=request.seq, **thread.exception_info)
 
     def get_stacktrace(
         self,
