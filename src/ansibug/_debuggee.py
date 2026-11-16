@@ -149,7 +149,7 @@ class DAProtocol(MPProtocol):
             log.info("Socket connection failed with\n%s", msg)
 
         # This ensures we don't get stuck waiting for this same thread to finish.
-        self._debugger.shutdown(from_send_thread=True)
+        self._debugger.shutdown(join=False)
 
 
 class DebugState(t.Protocol):
@@ -281,6 +281,10 @@ class AnsibleDebugger(metaclass=Singleton):
         self._source_info: dict[str, list[int | None]] = {}
 
     @property
+    def adapter_connected(self) -> bool:
+        return self._adapter_connected
+
+    @property
     def should_stop_on_error(self) -> bool:
         return self._breakpoint_exceptions.get(ExceptionBreakpointType.ON_ERROR.value, False)
 
@@ -409,6 +413,9 @@ class AnsibleDebugger(metaclass=Singleton):
         """
         log.info("Setting up ansible-playbook debug %s socket at '%s'", mode, addr)
 
+        # The token is left cancelled by the shutdown of a previous playbook.
+        self._cancel_token = SocketCancellationToken()
+
         queue_kwargs: dict[str, t.Any] = {
             "address": addr,
             "proto": lambda: self._proto,
@@ -436,6 +443,12 @@ class AnsibleDebugger(metaclass=Singleton):
 
         log.debug("MPQueue set on address %s", addr)
 
+        # Reset state left over from a previous playbook in the same process.
+        self._configuration_done.clear()
+        self._send_queue = queue.Queue()
+        self._terminated = False
+        atexit.unregister(self.shutdown)
+
         with self._strategy_connected:
             self._shutting_down = False
 
@@ -454,7 +467,7 @@ class AnsibleDebugger(metaclass=Singleton):
 
     def shutdown(
         self,
-        from_send_thread: bool = False,
+        join: bool = True,
     ) -> None:
         """Shutdown the Debuggee.
 
@@ -462,8 +475,8 @@ class AnsibleDebugger(metaclass=Singleton):
         shutdown.
 
         Args:
-            from_send_thread: The shutdown request has come from the send
-                thread.
+            join: Wait for the send thread to stop, set to False when called
+                from the socket recv thread which the send thread joins.
         """
         log.debug("Shutting down DebugServer")
 
@@ -473,7 +486,7 @@ class AnsibleDebugger(metaclass=Singleton):
             self._shutting_down = True
             self._strategy_connected.notify_all()
 
-        if not from_send_thread and self._send_thread:
+        if self._send_thread:
             # If we aren't connected we need to cancel the queue start method
             # before trying to join the thread. If we are connected we want to
             # add None to the queue for the thread to exit gracefully once all
@@ -482,11 +495,12 @@ class AnsibleDebugger(metaclass=Singleton):
                 self._cancel_token.cancel()
 
             self.queue_msg(None)
-            # The thread is a daemon so don't block the exit if it is stuck.
-            self._send_thread.join(timeout=5)
-            if self._send_thread.is_alive():
-                log.warning("Timed out waiting for the debuggee send thread to stop")
-            self._send_thread = None
+            if join:
+                # The thread is a daemon so don't block the exit if it is stuck.
+                self._send_thread.join(timeout=5)
+                if self._send_thread.is_alive():
+                    log.warning("Timed out waiting for the debuggee send thread to stop")
+                self._send_thread = None
 
         # If the strategy is still running we don't want it to fire on any
         # breakpoints and our debug config no longer applies
@@ -523,7 +537,9 @@ class AnsibleDebugger(metaclass=Singleton):
         Args:
             msg: The message to send.
         """
-        self._send_queue.put(msg)
+        # Nothing will drain the queue once the send thread has ended.
+        if self._send_thread and self._send_thread.is_alive():
+            self._send_queue.put(msg)
 
     def convert_to_client_path(
         self,
@@ -649,7 +665,7 @@ class AnsibleDebugger(metaclass=Singleton):
         msg: dap.DisconnectRequest,
     ) -> None:
         self._disconnect(msg)
-        self._send_queue.put(None)
+        self.queue_msg(None)
         # The response is sent by the debug adapter.
 
     @process_message.register
@@ -808,7 +824,7 @@ class AnsibleDebugger(metaclass=Singleton):
         self._terminated = True
         self._disconnect(dap.DisconnectRequest(terminate_debuggee=True))
         self.queue_msg(dap.TerminateResponse(request_seq=msg.seq))
-        self._send_queue.put(None)
+        self.queue_msg(None)
 
     @process_message.register
     def _(
@@ -890,13 +906,15 @@ class AnsibleDebugger(metaclass=Singleton):
         self._debug_config = DebugConfiguration()
         self._breakpoints = {}
 
-        try:
-            strategy = self._get_strategy()
-        except DebuggeeShutdownError:
-            # Nothing is running that needs to be released or ended.
-            return
+        # Don't wait for a strategy, none can start while the callback is
+        # blocked waiting for configuration done.
+        with self._strategy_connected:
+            strategy = self._strategy
 
-        strategy.disconnect(msg)
+        if strategy:
+            strategy.disconnect(msg)
+        else:
+            self._configuration_done.set()
 
     def _send_task(
         self,
@@ -930,5 +948,8 @@ class AnsibleDebugger(metaclass=Singleton):
         finally:
             mp_queue.stop()
             self._adapter_connected = False
+            # Nothing can send configuration done anymore, don't block the
+            # callback waiting for it.
+            self._configuration_done.set()
 
         log.debug("Debuggee server send thread ended")

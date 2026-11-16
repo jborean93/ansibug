@@ -464,3 +464,85 @@ def test_attach_no_pid_or_port(
 ) -> None:
     with pytest.raises(Exception, match="Expected processId or address/port to be specified for attach"):
         dap_client.send(dap.AttachRequest(arguments={}), dap.AttachResponse)
+
+
+def test_attach_disconnect_before_config_done(
+    dap_client: DAPClient,
+    tmp_path: pathlib.Path,
+) -> None:
+    playbook = tmp_path / "main.yml"
+    playbook.write_text(
+        r"""
+- hosts: localhost
+  gather_facts: false
+  tasks:
+  - name: ping test
+    ping:
+"""
+    )
+
+    proc = dap_client.attach(playbook, playbook_dir=tmp_path)
+    dap_client.send(dap.DisconnectRequest(), dap.DisconnectResponse)
+
+    # The playbook was waiting for configurationDone, it should now run to the
+    # end without the debugger.
+    proc.communicate()
+    assert proc.returncode == 0, proc.format_output()
+
+
+def test_attach_multiple_playbooks(
+    dap_client: DAPClient,
+    tmp_path: pathlib.Path,
+) -> None:
+    playbooks = []
+    for name in ["one", "two"]:
+        playbook = tmp_path / f"{name}.yml"
+        playbook.write_text(
+            rf"""
+- hosts: localhost
+  gather_facts: false
+  tasks:
+  - name: {name}
+    ping:
+"""
+        )
+        playbooks.append(playbook)
+
+    proc = dap_client.attach(playbooks[0], playbook_dir=tmp_path, playbook_args=[str(playbooks[1])])
+    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
+    dap_client.wait_for_message(dap.ThreadEvent)
+    dap_client.wait_for_message(dap.ThreadEvent)
+    dap_client.wait_for_message(dap.TerminatedEvent)
+
+    # The second playbook must wait for a new client and be debuggable.
+    with DAPClient("test_attach_multiple_playbooks_two") as second_client:
+        second_client.send(
+            dap.InitializeRequest(adapter_id="ansibug", client_id="ansibug"),
+            dap.InitializeResponse,
+        )
+        second_client.send(dap.AttachRequest(arguments={"processId": proc.pid, "connectTimeout": 20.0}))
+        second_client.wait_for_message(dap.AttachResponse, timeout=30)
+        second_client.wait_for_message(dap.InitializedEvent)
+
+        resp = second_client.send(
+            dap.SetBreakpointsRequest(
+                source=dap.Source(name="two.yml", path=str(playbooks[1].absolute())),
+                lines=[5],
+                breakpoints=[dap.SourceBreakpoint(line=5)],
+                source_modified=False,
+            ),
+            dap.SetBreakpointsResponse,
+        )
+        assert resp.breakpoints[0].verified
+        second_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
+
+        thread_event = second_client.wait_for_message(dap.ThreadEvent)
+        stopped_event = second_client.wait_for_message(dap.StoppedEvent)
+        assert stopped_event.reason == dap.StoppedReason.BREAKPOINT
+
+        second_client.send(dap.ContinueRequest(thread_id=thread_event.thread_id), dap.ContinueResponse)
+        second_client.wait_for_message(dap.ThreadEvent)
+        second_client.wait_for_message(dap.TerminatedEvent)
+
+    proc.communicate()
+    assert proc.returncode == 0, proc.format_output()

@@ -15,6 +15,10 @@
 + Return a launch error when the client fails the `runInTerminal` request instead of ending the debug adapter
 + Fix race condition where messages from the client and the `ansible-playbook` process could be interleaved when written to the client
 + No longer fail when the client message sequence numbers are not contiguous
++ Fix `ansible-playbook` hanging when it fails to connect to the debug adapter, a warning is now shown and the playbook runs without the debugger
++ Fix `ansible-playbook` hanging when the client disconnects before sending `configurationDone`
++ Fix only the first playbook being debuggable when running multiple playbooks with `python -m ansibug listen`
++ Fix duplicate log entries when running multiple playbooks with a log file
 
 ## 0.3.2 - 2025-11-22
 

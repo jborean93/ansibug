@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import typing as t
 
 LogLevel = t.Literal["info", "debug", "warning", "error"]
@@ -32,10 +33,15 @@ def configure_file_logging(
         "error": logging.ERROR,
     }[level]
 
+    ansibug_logger = logging.getLogger("ansibug")
+    ansibug_logger.setLevel(log_level)
+
+    # Each playbook in the same process configures the logger again.
+    file = os.path.abspath(file)
+    if any(isinstance(h, logging.FileHandler) and h.baseFilename == file for h in ansibug_logger.handlers):
+        return
+
     fh = logging.FileHandler(file, mode="a", encoding="utf-8")
     fh.setLevel(log_level)
     fh.setFormatter(logging.Formatter(format or DEFAULT_FORMAT))
-
-    ansibug_logger = logging.getLogger("ansibug")
-    ansibug_logger.setLevel(log_level)
     ansibug_logger.addHandler(fh)

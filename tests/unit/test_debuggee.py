@@ -4,12 +4,15 @@
 from __future__ import annotations
 
 import concurrent.futures
+import logging
+import pathlib
 import threading
 
 import pytest
 
 import ansibug.dap as dap
 from ansibug._debuggee import AnsibleDebugger, DebuggeeShutdownError
+from ansibug._logging import configure_file_logging
 
 
 class WaitTrackingCondition(threading.Condition):
@@ -34,12 +37,11 @@ class WaitTrackingCondition(threading.Condition):
 def test_get_strategy_wakes_on_shutdown() -> None:
     # Bypass the Singleton so the test doesn't share state with other tests.
     debugger = type.__call__(AnsibleDebugger)
-    condition = WaitTrackingCondition(waiters=2)
+    condition = WaitTrackingCondition(waiters=1)
     debugger._strategy_connected = condition
 
     with concurrent.futures.ThreadPoolExecutor() as pool:
         get_fut = pool.submit(debugger._get_strategy)
-        disconnect_fut = pool.submit(debugger._disconnect, dap.DisconnectRequest())
         assert condition.all_waiting.wait(timeout=5)
 
         debugger.shutdown()
@@ -47,5 +49,27 @@ def test_get_strategy_wakes_on_shutdown() -> None:
         with pytest.raises(DebuggeeShutdownError):
             get_fut.result(timeout=5)
 
-        # A disconnect with no strategy is a no-op rather than an error.
-        assert disconnect_fut.result(timeout=5) is None
+
+def test_disconnect_before_strategy_releases_config_done() -> None:
+    debugger = type.__call__(AnsibleDebugger)
+
+    # Must not wait for a strategy, none can start until config done is set.
+    debugger._disconnect(dap.DisconnectRequest())
+
+    assert debugger._configuration_done.is_set()
+
+
+def test_configure_file_logging_once(tmp_path: pathlib.Path) -> None:
+    logger = logging.getLogger("ansibug")
+    existing = list(logger.handlers)
+    log_file = tmp_path / "ansibug.log"
+    try:
+        configure_file_logging(str(log_file), "info")
+        configure_file_logging(str(log_file), "info")
+
+        assert len(logger.handlers) == len(existing) + 1
+
+    finally:
+        for h in logger.handlers[len(existing) :]:
+            logger.removeHandler(h)
+            h.close()
