@@ -583,3 +583,88 @@ def test_do_not_break_on_skipped_unset(
     play_out = proc.communicate()
     if rc := proc.returncode:
         raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
+
+
+def test_step_over_after_exception_stop(
+    dap_client: DAPClient,
+    tmp_path: pathlib.Path,
+) -> None:
+    playbook = tmp_path / "main.yml"
+    playbook.write_text(
+        r"""
+- hosts: localhost
+  gather_facts: false
+  tasks:
+  - name: skipped
+    ping:
+    when: false
+
+  - name: after
+    ping:
+
+  - name: end
+    ping:
+"""
+    )
+
+    proc = dap_client.launch(playbook, playbook_dir=tmp_path)
+    dap_client.send(dap.SetExceptionBreakpointsRequest(filters=["on_skipped"]), dap.SetExceptionBreakpointsResponse)
+    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
+    tid = dap_client.wait_for_message(dap.ThreadEvent).thread_id
+
+    stopped = dap_client.wait_for_message(dap.StoppedEvent)
+    assert stopped.reason == dap.StoppedReason.EXCEPTION
+
+    dap_client.send(dap.NextRequest(thread_id=tid), dap.NextResponse)
+    stopped = dap_client.wait_for_message(dap.StoppedEvent)
+    assert stopped.reason == dap.StoppedReason.STEP
+    st_resp = dap_client.send(dap.StackTraceRequest(thread_id=tid), dap.StackTraceResponse)
+    assert [f.name for f in st_resp.stack_frames] == ["after"]
+
+    dap_client.send(dap.ContinueRequest(thread_id=tid), dap.ContinueResponse)
+    dap_client.wait_for_message(dap.ThreadEvent)
+    dap_client.wait_for_message(dap.TerminatedEvent)
+
+    proc.communicate()
+    assert proc.returncode == 0, proc.format_output()
+
+
+def test_break_on_error_in_rescue_section(
+    dap_client: DAPClient,
+    tmp_path: pathlib.Path,
+) -> None:
+    playbook = tmp_path / "main.yml"
+    playbook.write_text(
+        r"""
+- hosts: localhost
+  gather_facts: false
+  tasks:
+  - block:
+    - name: rescued
+      fail:
+        msg: rescued failure
+
+    rescue:
+    - name: not rescued
+      fail:
+        msg: rescue failure
+"""
+    )
+
+    proc = dap_client.launch(playbook, playbook_dir=tmp_path)
+    dap_client.send(dap.SetExceptionBreakpointsRequest(filters=["on_error"]), dap.SetExceptionBreakpointsResponse)
+    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
+    tid = dap_client.wait_for_message(dap.ThreadEvent).thread_id
+
+    # Only the failure in the rescue section stops, the block rescues the first.
+    stopped = dap_client.wait_for_message(dap.StoppedEvent)
+    assert stopped.reason == dap.StoppedReason.EXCEPTION
+    st_resp = dap_client.send(dap.StackTraceRequest(thread_id=tid), dap.StackTraceResponse)
+    assert [f.name for f in st_resp.stack_frames] == ["not rescued"]
+
+    dap_client.send(dap.ContinueRequest(thread_id=tid), dap.ContinueResponse)
+    dap_client.wait_for_message(dap.ThreadEvent)
+    dap_client.wait_for_message(dap.TerminatedEvent)
+
+    proc.communicate()
+    assert proc.returncode == 2, proc.format_output()

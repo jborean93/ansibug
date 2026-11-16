@@ -1482,3 +1482,84 @@ def test_path_mappings(
     play_out = proc.communicate()
     if rc := proc.returncode:
         raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
+
+
+def test_stepping_out_of_nested_includes(
+    dap_client: DAPClient,
+    tmp_path: pathlib.Path,
+) -> None:
+    playbook = tmp_path / "main.yml"
+    playbook.write_text(
+        r"""
+- hosts: localhost
+  gather_facts: false
+  tasks:
+  - name: outer include
+    include_tasks: a.yml
+
+  - name: outer 1
+    ping:
+"""
+    )
+    (tmp_path / "a.yml").write_text(
+        r"""
+- name: a include
+  include_tasks:
+    file: b.yml
+    apply:
+      tags: [always]
+"""
+    )
+    (tmp_path / "b.yml").write_text(
+        r"""
+- block:
+  - name: b 1
+    ping:
+
+  - name: b 2
+    ping:
+"""
+    )
+
+    proc = dap_client.launch(playbook, playbook_dir=tmp_path)
+    dap_client.send(
+        dap.SetBreakpointsRequest(
+            source=dap.Source(name="main.yml", path=str(playbook.absolute())),
+            lines=[5],
+            breakpoints=[dap.SourceBreakpoint(line=5)],
+            source_modified=False,
+        ),
+        dap.SetBreakpointsResponse,
+    )
+    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
+    tid = dap_client.wait_for_message(dap.ThreadEvent).thread_id
+
+    def assert_stopped(reason: dap.StoppedReason, frames: list[str]) -> None:
+        stopped = dap_client.wait_for_message(dap.StoppedEvent)
+        assert stopped.reason == reason
+        st_resp = dap_client.send(dap.StackTraceRequest(thread_id=tid), dap.StackTraceResponse)
+        assert [f.name for f in st_resp.stack_frames] == frames
+
+    assert_stopped(dap.StoppedReason.BREAKPOINT, ["outer include"])
+
+    dap_client.send(dap.StepInRequest(thread_id=tid), dap.StepInResponse)
+    assert_stopped(dap.StoppedReason.STEP, ["a include", "outer include"])
+
+    # The task is in a block and the include uses apply, both add a Block
+    # between the task and the include.
+    dap_client.send(dap.StepInRequest(thread_id=tid), dap.StepInResponse)
+    assert_stopped(dap.StoppedReason.STEP, ["b 1", "a include", "outer include"])
+
+    dap_client.send(dap.NextRequest(thread_id=tid), dap.NextResponse)
+    assert_stopped(dap.StoppedReason.STEP, ["b 2", "a include", "outer include"])
+
+    # Stepping over the last task leaves both includes.
+    dap_client.send(dap.NextRequest(thread_id=tid), dap.NextResponse)
+    assert_stopped(dap.StoppedReason.STEP, ["outer 1"])
+
+    dap_client.send(dap.ContinueRequest(thread_id=tid), dap.ContinueResponse)
+    dap_client.wait_for_message(dap.ThreadEvent)
+    dap_client.wait_for_message(dap.TerminatedEvent)
+
+    proc.communicate()
+    assert proc.returncode == 0, proc.format_output()

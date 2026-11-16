@@ -19,6 +19,10 @@
 + Fix `ansible-playbook` hanging when the client disconnects before sending `configurationDone`
 + Fix only the first playbook being debuggable when running multiple playbooks with `python -m ansibug listen`
 + Fix duplicate log entries when running multiple playbooks with a log file
++ Fix step over on the last task of an include continuing instead of stopping on the next task
++ Fix step over after stopping on an exception continuing instead of stopping on the next task
++ Fix stale stack frames shown after leaving multiple includes at once or with `include_tasks` that use `apply` or contain a `block`
++ Fix the `Uncaught Failures` exception breakpoint not stopping on a failure in a `rescue` or `always` section of a block
 
 ## 0.3.2 - 2025-11-22
 
