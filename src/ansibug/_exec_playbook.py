@@ -7,6 +7,7 @@ import atexit
 import json
 import os
 import pathlib
+import shlex
 import subprocess
 import sys
 import typing as t
@@ -173,6 +174,19 @@ def _configure_ansible_env() -> dict[str, str]:
     # settings without clobbering the existing ones. This should reflect the
     # config the subsequent ansible-playbook call will use as it's run in the
     # same cwd with the same env vars.
+
+    # Explicitly set verbosity so it doesn't display version info breaking
+    # the json parsing.
+    dump_env = os.environ | {"ANSIBLE_VERBOSITY": "0"}
+
+    # Output is captured so Ansible won't detect a tty, force colour to keep
+    # error output looking the same as a normal run. JSON output is uncoloured.
+    # ANSIBLE_FORCE_COLOR overrides NOCOLOR so don't set it if colour was
+    # disabled. FORCE_COLOR covers Python's own tracebacks for import failures.
+    if sys.stdout.isatty() and not ({"ANSIBLE_NOCOLOR", "NO_COLOR"} & dump_env.keys()):
+        dump_env["ANSIBLE_FORCE_COLOR"] = "1"
+        dump_env["FORCE_COLOR"] = "1"
+
     raw_config_dump = subprocess.run(
         [
             sys.executable,
@@ -183,12 +197,18 @@ def _configure_ansible_env() -> dict[str, str]:
             "--format",
             "json",
         ],
-        # Explicitly set verbosity so it doesn't display version info breaking
-        # the json parsing.
-        env=os.environ | {"ANSIBLE_VERBOSITY": "0"},
+        env=dump_env,
         capture_output=True,
-        check=True,  # FUTURE: Maybe a nicer exception would be useful
+        text=True,
     )
+    if raw_config_dump.returncode != 0:
+        sys.stdout.write(raw_config_dump.stdout)
+        sys.stderr.write(raw_config_dump.stderr)
+        sys.stderr.write(
+            f"ansibug: failed to get Ansible config, '{shlex.join(raw_config_dump.args)}' "
+            f"exited with rc {raw_config_dump.returncode}\n"
+        )
+        sys.exit(raw_config_dump.returncode)
     config_dump = json.loads(raw_config_dump.stdout)
 
     enabled_callbacks = ["ansibug.dap.debug"]
