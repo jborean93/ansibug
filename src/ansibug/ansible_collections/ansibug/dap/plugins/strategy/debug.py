@@ -89,6 +89,15 @@ display = Display()
 log = logging.getLogger("ansibug.strategy")
 
 
+def _get_parent_tasks(
+    task: Task,
+) -> collections.abc.Iterator[Task]:
+    """Yields each parent Task, i.e. the includes, of the task."""
+    while task := task._parent:
+        if isinstance(task, Task):
+            yield task
+
+
 class ThreadState(enum.Enum):
     CONTINUE = enum.auto()
     """Thread will continue to run until a breakpoint is hit."""
@@ -215,11 +224,15 @@ class AnsibleThread:
         if result.failed and not result.ignore_errors:
             is_rescued = False
 
-            task = result.task
-            while task := task._parent:
-                if isinstance(task, Block) and task.rescue:
+            # Only a failure in a block section is rescued, not one in its
+            # rescue or always section. Compare by uuid as the iterator works
+            # on copies of the blocks.
+            child = result.task
+            while parent := child._parent:
+                if isinstance(parent, Block) and parent.rescue and any(c._uuid == child._uuid for c in parent.block):
                     is_rescued = True
                     break
+                child = parent
 
             if should_stop_on_error and not is_rescued:
                 details = get_on_failed_details(result.result)
@@ -233,6 +246,7 @@ class AnsibleThread:
                 details = get_on_skipped_details(result.result)
 
         if details:
+            self._stopped_task = result.task
             self.state = ThreadState.WAIT
             return ansibug.dap.StoppedEvent(
                 reason=ansibug.dap.StoppedReason.EXCEPTION,
@@ -253,13 +267,15 @@ class AnsibleThread:
         if self.state != ThreadState.STEP_OVER or not self._stopped_task:
             return False
 
-        # Get the parent task of the current task being evaluated as well as
-        # the task which was resumed with step over. If they are the same then
-        # the task should stop.
-        task_parent = self._get_parent_task(task)
+        # Break if the task has the same parent as the task which was resumed
+        # with step over or if that parent is no longer in the task's parent
+        # chain, i.e. the include it was in has ended.
+        task_parents = [p._uuid for p in _get_parent_tasks(task)]
         stopped_parent = self._get_parent_task(self._stopped_task)
+        if stopped_parent is None:
+            return not task_parents
 
-        return getattr(task_parent, "_uuid", None) == getattr(stopped_parent, "_uuid", None)
+        return task_parents[:1] == [stopped_parent._uuid] or stopped_parent._uuid not in task_parents
 
     def _break_step_in(self) -> bool:
         # If in, then the first task to call this will need to break.
@@ -282,11 +298,7 @@ class AnsibleThread:
         self,
         task: Task,
     ) -> Task | None:
-        while task := task._parent:
-            if isinstance(task, Task):
-                return task
-
-        return None
+        return next(_get_parent_tasks(task), None)
 
 
 class AnsibleStackFrame:
@@ -523,29 +535,24 @@ class AnsibleDebugState(DebugState):
         if not thread:
             thread = self._add_thread(host)
 
-        if thread.stack_frames:
-            # The parent is the implicit block and we want the parent of that.
-            parent_task = task._parent._parent
-            last_frame_id = thread.stack_frames[0]
-            last_frame = self.stackframes[last_frame_id]
-            if not parent_task or (last_frame.task and last_frame.task._uuid != parent_task._uuid):
-                thread.stack_frames.pop(0)
-                self.stackframes.pop(last_frame_id)
-                for variable_id in last_frame.variables:
-                    del self.variables[variable_id]
+        # Remove the frames of any includes that have ended, the top frame
+        # should be the task's parent include.
+        parent_task = next(_get_parent_tasks(task), None)
+        while thread.stack_frames:
+            last_frame = self.stackframes[thread.stack_frames[0]]
+            if parent_task and last_frame.task._uuid == parent_task._uuid:
+                # If this is a task in a role included by include_role we
+                # need to scan the tasks and handlers to validate the
+                # breakpoints.
+                if last_frame.task.action in C._ACTION_INCLUDE_ROLE and hasattr(task, "_role"):
+                    task_handlers = task._role.get_task_blocks()
+                    role_handlers = task._role.get_handler_blocks(task.play)
+                    register_block_breakpoints(self._debugger, task_handlers)
+                    register_block_breakpoints(self._debugger, role_handlers)
 
-            # If this is the first task in a role included by include_role we
-            # need to scan the tasks and handlers to validate the breakpoints
-            if (
-                parent_task
-                and last_frame.task
-                and last_frame.task.action in C._ACTION_INCLUDE_ROLE
-                and hasattr(task, "_role")
-            ):
-                task_handlers = task._role.get_task_blocks()
-                role_handlers = task._role.get_handler_blocks(task.play)
-                register_block_breakpoints(self._debugger, task_handlers)
-                register_block_breakpoints(self._debugger, role_handlers)
+                break
+
+            self._pop_stackframe(thread)
 
         sfid = self._debugger.next_stackframe_id()
 
@@ -649,10 +656,7 @@ class AnsibleDebugState(DebugState):
                 raise EndStrategy()
 
         if task.action not in C._ACTION_ALL_INCLUDES:
-            sfid = thread.stack_frames.pop(0)
-            sf = self.stackframes.pop(sfid)
-            for variable_id in sf.variables:
-                del self.variables[variable_id]
+            self._pop_stackframe(thread)
 
     def exit_threads(self) -> None:
         """Exits all active threads.
@@ -665,13 +669,24 @@ class AnsibleDebugState(DebugState):
             if tid == 1:
                 continue
 
-            del self.threads[tid]
+            thread = self.threads.pop(tid)
+            while thread.stack_frames:
+                self._pop_stackframe(thread)
+
             self._debugger.queue_msg(
                 ansibug.dap.ThreadEvent(
                     reason="exited",
                     thread_id=tid,
                 )
             )
+
+    def _pop_stackframe(
+        self,
+        thread: AnsibleThread,
+    ) -> None:
+        sf = self.stackframes.pop(thread.stack_frames.pop(0))
+        for variable_id in sf.variables:
+            del self.variables[variable_id]
 
     def continue_request(
         self,
