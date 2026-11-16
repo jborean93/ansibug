@@ -9,6 +9,7 @@ import json
 import os
 import pathlib
 import queue
+import signal
 import subprocess
 import sys
 import threading
@@ -20,6 +21,11 @@ import ansibug.dap as dap
 from ansibug._debuggee import get_pid_info_path
 
 ResponseMessage = t.TypeVar("ResponseMessage", bound=dap.ProtocolMessage)
+
+# Must stay below the pytest-timeout value (60s) so we fail with a normal
+# exception and the Ansible output instead of pytest killing the worker.
+MSG_TIMEOUT = 20.0
+PROC_TIMEOUT = 20.0
 
 
 def get_test_env() -> dict[str, str]:
@@ -90,6 +96,7 @@ class DAPClient:
             name="DAPClient-stderr-recv",
         )
         self._incoming_msg: queue.Queue[dap.ProtocolMessage | None] = queue.Queue()
+        self._ansible_procs: list[AnsibleProcess] = []
 
     def __enter__(self) -> DAPClient:
         self._stdout_thread.start()
@@ -103,14 +110,24 @@ class DAPClient:
         traceback: types.TracebackType | None = None,
         **kwargs: t.Any,
     ) -> None:
-        if self._dap_proc.poll() is None:
-            self.send(dap.DisconnectRequest())
-            self._dap_proc.wait()
+        try:
+            for proc in self._ansible_procs:
+                proc.stop()
+                # pytest only displays captured output for failed tests.
+                print(proc.format_output())
 
-        self._dap_proc.communicate(None)
+        finally:
+            if self._dap_proc.poll() is None:
+                try:
+                    self.send(dap.DisconnectRequest())
+                    self._dap_proc.wait(timeout=10)
+                except (OSError, subprocess.TimeoutExpired):
+                    self._dap_proc.kill()
+                    self._dap_proc.wait()
 
-        self._stdout_thread.join()
-        self._stderr_thread.join()
+            t.cast(io.BytesIO, self._dap_proc.stdin).close()
+            self._stdout_thread.join(timeout=5)
+            self._stderr_thread.join(timeout=5)
 
     @t.overload
     def send(self, msg: dap.ProtocolMessage) -> None: ...
@@ -142,8 +159,26 @@ class DAPClient:
     def wait_for_message(
         self,
         expected_type: type[ResponseMessage],
+        timeout: float = MSG_TIMEOUT,
     ) -> ResponseMessage:
-        msg = self._incoming_msg.get(block=True)
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                msg = self._incoming_msg.get(timeout=1)
+                break
+            except queue.Empty:
+                pass
+
+            now = time.monotonic()
+            if dead := [p for p in self._ansible_procs if p.poll() is not None]:
+                # Give the DA server a few seconds to relay any final events
+                # before failing fast on an Ansible crash.
+                deadline = min(deadline, now + 5)
+
+            if now > deadline:
+                rcs = ", ".join(f"{p.pid}: rc {p.returncode}" for p in dead)
+                ansible_info = f" (Ansible process exited - {rcs})" if dead else ""
+                raise TimeoutError(f"Timed out waiting for {expected_type.__name__}{ansible_info}")
 
         if not msg:
             stderr = self._stderr or b"Unknown error"
@@ -165,7 +200,7 @@ class DAPClient:
         ansibug_args: list[str] | None = None,
         attach_options: dict[str, t.Any] | None = None,
         attach_by_address: bool = False,
-    ) -> subprocess.Popen:
+    ) -> AnsibleProcess:
         proc_args = [sys.executable, "-m", "ansibug", "listen"]
         if ansibug_args:
             proc_args += ansibug_args
@@ -185,13 +220,8 @@ class DAPClient:
             proc_args += playbook_args
 
         new_environment = get_test_env()
-        proc = subprocess.Popen(
-            proc_args,
-            cwd=playbook_dir,
-            env=new_environment,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
+        proc = AnsibleProcess(proc_args, cwd=playbook_dir, env=new_environment)
+        self._ansible_procs.append(proc)
 
         pid_path = get_pid_info_path(proc.pid)
         for _ in range(20):
@@ -205,7 +235,6 @@ class DAPClient:
 
             time.sleep(1)
         else:
-            proc.kill()
             raise Exception("timed out waiting for proc pid")
 
         if attach_by_address:
@@ -219,7 +248,8 @@ class DAPClient:
             # macOS in CI is quite slow, bump the timeout to 20
             attach_arguments["connectTimeout"] = 20.0
 
-        self.send(dap.AttachRequest(arguments=attach_arguments), dap.AttachResponse)
+        self.send(dap.AttachRequest(arguments=attach_arguments))
+        self.wait_for_message(dap.AttachResponse, timeout=attach_arguments["connectTimeout"] + MSG_TIMEOUT)
         self.wait_for_message(dap.InitializedEvent)
 
         return proc
@@ -233,7 +263,7 @@ class DAPClient:
         do_not_launch: bool = False,
         expected_terminated: bool = False,
         check_request: collections.abc.Callable[[dap.RunInTerminalRequest], None] | None = None,
-    ) -> subprocess.Popen:
+    ) -> AnsibleProcess:
         launch_args: dict[str, t.Any] = (launch_options or {}) | {"playbook": str(playbook)}
         if playbook_args:
             launch_args["args"] = playbook_args
@@ -248,6 +278,9 @@ class DAPClient:
             # macOS in CI is quite slow, bump the timeout to 20
             launch_args["connectTimeout"] = 20.0
 
+        # The LaunchResponse is only sent once the debuggee connects back.
+        connect_timeout = launch_args["connectTimeout"] + MSG_TIMEOUT
+
         self.send(dap.LaunchRequest(arguments=launch_args))
         resp = self.wait_for_message(dap.RunInTerminalRequest)
 
@@ -261,28 +294,23 @@ class DAPClient:
         if do_not_launch:
             # This is for a specific test that makes sure the timeout is honoured
             self.send(dap.RunInTerminalResponse(request_seq=resp.seq, process_id=1))
-            self.wait_for_message(dap.LaunchResponse)
+            self.wait_for_message(dap.LaunchResponse, timeout=connect_timeout)
             raise Exception("This should not happen")
 
         else:
-            proc = subprocess.Popen(
-                resp.args,
-                cwd=resp.cwd or None,
-                env=new_environment,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
+            proc = AnsibleProcess(resp.args, cwd=resp.cwd, env=new_environment)
+            self._ansible_procs.append(proc)
             self.send(dap.RunInTerminalResponse(request_seq=resp.seq, process_id=proc.pid))
 
             if expected_terminated:
-                err = self.wait_for_message(dap.ErrorResponse)
+                err = self.wait_for_message(dap.ErrorResponse, timeout=connect_timeout)
                 assert err.command == dap.Command.LAUNCH
                 assert "ansible-playbook process ended before it connected" in (err.message or "")
                 self.wait_for_message(dap.TerminatedEvent)
                 return proc
 
             else:
-                self.wait_for_message(dap.LaunchResponse)
+                self.wait_for_message(dap.LaunchResponse, timeout=connect_timeout)
 
         self.wait_for_message(dap.InitializedEvent)
 
@@ -310,3 +338,88 @@ class DAPClient:
         stderr: io.BytesIO,
     ) -> None:
         self._stderr = stderr.read()
+
+
+class AnsibleProcess:
+    """Popen-like wrapper for the ansible-playbook process that cannot hang a test.
+
+    The output pipes are drained by background threads so Ansible never blocks
+    on a full pipe and any partial output is available when a test fails.
+    """
+
+    def __init__(
+        self,
+        args: list[str],
+        cwd: str | pathlib.Path | None,
+        env: dict[str, str],
+    ) -> None:
+        self._proc = subprocess.Popen(
+            args,
+            cwd=cwd or None,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            # Own process group so signals also reach the Ansible workers.
+            start_new_session=True,
+        )
+        self._stdout = bytearray()
+        self._stderr = bytearray()
+        self._threads = [
+            threading.Thread(target=self._read, args=(self._proc.stdout, self._stdout), daemon=True),
+            threading.Thread(target=self._read, args=(self._proc.stderr, self._stderr), daemon=True),
+        ]
+        for thread in self._threads:
+            thread.start()
+
+    @property
+    def pid(self) -> int:
+        return self._proc.pid
+
+    @property
+    def returncode(self) -> int | None:
+        return self._proc.returncode
+
+    def poll(self) -> int | None:
+        return self._proc.poll()
+
+    def communicate(self, timeout: float = PROC_TIMEOUT) -> tuple[bytes, bytes]:
+        """Waits for the process to end, raises TimeoutExpired if it doesn't."""
+        self._proc.wait(timeout=timeout)
+        for thread in self._threads:
+            # A grandchild outside the process group could keep the pipe open.
+            thread.join(timeout=5)
+
+        return bytes(self._stdout), bytes(self._stderr)
+
+    def stop(self) -> None:
+        """Ends the process, SIGINT first for a graceful exit then SIGKILL."""
+        if self._proc.poll() is None:
+            try:
+                os.killpg(self._proc.pid, signal.SIGINT)
+                self._proc.wait(timeout=5)
+            except ProcessLookupError:
+                pass
+            except subprocess.TimeoutExpired:
+                pass
+
+        try:
+            # Also reaps any leftover workers in the group.
+            os.killpg(self._proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+        try:
+            self.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+
+    def format_output(self) -> str:
+        return (
+            f"Ansible process {self.pid} rc {self.returncode}\n"
+            f"STDOUT:\n{self._stdout.decode(errors='replace')}\n"
+            f"STDERR:\n{self._stderr.decode(errors='replace')}"
+        )
+
+    def _read(self, pipe: t.IO[bytes], buffer: bytearray) -> None:
+        while data := os.read(pipe.fileno(), 65536):
+            buffer += data
