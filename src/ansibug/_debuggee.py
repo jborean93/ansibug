@@ -24,12 +24,12 @@ from ._mp_queue import ClientMPQueue, MPProtocol, MPQueue, ServerMPQueue
 from ._singleton import Singleton
 from ._socket_helper import CancelledError, SocketCancellationToken
 
-HAS_DEBUGPY = True
+# Only used when debugging ansibug itself so it isn't a dependency.
 try:  # pragma: nocover
-    import debugpy
+    import debugpy  # pyright: ignore[reportMissingImports]
 
 except Exception:  # pragma: nocover
-    HAS_DEBUGPY = False
+    debugpy = None
 
 log = logging.getLogger(__name__)
 
@@ -69,7 +69,7 @@ class DebugConfiguration:
 
     OUTPUT_CATEGORY: t.ClassVar[str] = "ansibug_debug_configuration"
 
-    path_mappings: t.List[PathMapping] = dataclasses.field(default_factory=list)
+    path_mappings: list[PathMapping] = dataclasses.field(default_factory=list)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -77,11 +77,11 @@ class PlaybookProcessInfo:
     pid: int
     address: str
     use_tls: bool
-    playbook_file: t.Optional[str]
+    playbook_file: str | None
 
     @classmethod
     def from_json(
-        self,
+        cls,
         data: dict[str, t.Any],
     ) -> PlaybookProcessInfo:
         return PlaybookProcessInfo(
@@ -131,7 +131,7 @@ class DAProtocol(MPProtocol):
             log.exception("Exception while processing msg seq %d", msg.seq)
 
             # The DA Server will only ever send a Request msg here, this just
-            # satisfies mypy.
+            # satisfies the type checker.
             req = t.cast(dap.Request, msg)
             resp = dap.ErrorResponse(
                 command=req.command,
@@ -601,7 +601,7 @@ class AnsibleDebugger(metaclass=Singleton):
     @classmethod
     def _enable_debugpy(cls) -> None:  # pragma: nocover
         """This is only meant for debugging ansibug in Ansible purposes."""
-        if not HAS_DEBUGPY:
+        if not debugpy:
             raise Exception("Failed to enable debugging because debugpy is not installed")
 
         elif not debugpy.is_client_connected():

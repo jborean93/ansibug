@@ -1,0 +1,54 @@
+name: Publish ansibug
+
+# Publishes the assets of the release ci.yml drafted for a tag.
+on:
+  release:
+    types:
+      - published
+
+permissions: {}
+
+jobs:
+  publish:
+    name: Publish to PyPI
+    if: startsWith(github.event.release.tag_name, 'v')
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/ansibug/${{ steps.download.outputs.version }}/
+    permissions:
+      contents: read  # Download the release assets
+      attestations: read  # Verify the assets' build provenance
+      id-token: write  # PyPI trusted publishing
+    steps:
+      - name: Download the sdist and wheel from the release
+        id: download
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          gh release download "$TAG" --pattern '*.tar.gz' --pattern '*.whl' --dir dist --repo "$GITHUB_REPOSITORY"
+          ls dist
+
+          # The version, in its PEP 440 form, for the environment's URL, from ansibug-<version>.tar.gz.
+          sdist=(dist/ansibug-*.tar.gz)
+          version="${sdist[0]#dist/ansibug-}"
+          echo "version=${version%.tar.gz}" >> "$GITHUB_OUTPUT"
+
+      # Anyone with write access can add files to a release, so only publish what ci.yml built from this tag.
+      - name: Verify the sdist and wheel were built by ci.yml from the tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          for file in dist/*; do
+            echo "Verifying ci.yml built $file from $TAG"
+            gh attestation verify "$file" \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/ci.yml" \
+              --source-ref "refs/tags/$TAG" \
+              --deny-self-hosted-runners
+          done
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3

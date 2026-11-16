@@ -6,6 +6,7 @@ from __future__ import annotations
 import base64
 import dataclasses
 import functools
+import io
 import json
 import logging
 import os
@@ -68,15 +69,15 @@ class AttachArguments:
         path_mappings: A list of paths to map between a local and remote root.
     """
 
-    process_id: t.Optional[int]
+    process_id: int | None
     address: str
     connect_timeout: float
     use_tls: bool
-    tls_verification: t.Union[t.Literal["verify", "ignore"], str]
-    tls_cert: t.Optional[str]
-    tls_key: t.Optional[str]
-    tls_key_password: t.Optional[str]
-    path_mappings: t.List[PathMapping]
+    tls_verification: t.Literal["verify", "ignore"] | str
+    tls_cert: str | None
+    tls_key: str | None
+    tls_key_password: str | None
+    path_mappings: list[PathMapping]
 
     def get_connection_tuple(self) -> tuple[str, bool]:
         """Gets the address and use_tls settings for this request."""
@@ -146,13 +147,13 @@ class LaunchArguments:
     """
 
     playbook: str
-    args: t.List[str]
+    args: list[str]
     cwd: str
-    env: t.Dict[str, t.Optional[str]]
+    env: dict[str, str | None]
     console: t.Literal["integrated", "external"]
     connect_timeout: float
-    path_mappings: t.List[PathMapping]
-    log_file: t.Optional[str]
+    path_mappings: list[PathMapping]
+    log_file: str | None
     log_level: LogLevel
 
     @classmethod
@@ -275,7 +276,8 @@ class DAServer:
         by the client. This continues until the client has sent the disconnect
         message.
         """
-        stdin = sys.stdin.buffer.raw  # type: ignore[union-attr]
+        # The raw stream so read() returns what's available rather than waiting for the full 4096 bytes.
+        stdin = t.cast(io.BufferedReader, sys.stdin.buffer).raw
         adapter = self._adapter
 
         is_connected = True

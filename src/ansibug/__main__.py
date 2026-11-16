@@ -14,11 +14,10 @@ import sys
 from ._debug_adapter import start_dap
 from ._exec_playbook import exec_playbook_connect, exec_playbook_listen
 
-HAS_ARGCOMPLETE = True
 try:
     import argcomplete
 except ImportError:  # pragma: nocover
-    HAS_ARGCOMPLETE = False
+    argcomplete = None
 
 
 def _add_launch_common_args(parser: argparse.ArgumentParser) -> None:
@@ -26,7 +25,7 @@ def _add_launch_common_args(parser: argparse.ArgumentParser) -> None:
         "--no-wait",
         action="store_true",
         help="Do not wait for the client to connect and send the "
-        "configurationDone request before starting the playbook.",
+        + "configurationDone request before starting the playbook.",
     )
 
     parser.add_argument(
@@ -60,10 +59,10 @@ def _add_tls_server_args(parser: argparse.ArgumentParser) -> None:
         action="store",
         type=_parse_path,
         help="The path to the TLS server certificate pem. This can either be "
-        "the certificate by itself or a bundle of the certificate and key as "
-        "a PEM file. Use --tls-key to specify a separate key file and "
-        "--tls-key-pass if the key is password protected. If no certificate "
-        "is specified, the server will exchange data without TLS.",
+        + "the certificate by itself or a bundle of the certificate and key as "
+        + "a PEM file. Use --tls-key to specify a separate key file and "
+        + "--tls-key-pass if the key is password protected. If no certificate "
+        + "is specified, the server will exchange data without TLS.",
     )
 
     parser.add_argument(
@@ -71,9 +70,9 @@ def _add_tls_server_args(parser: argparse.ArgumentParser) -> None:
         action="store",
         type=_parse_path,
         help="The path to the TLS server certificate key pem. This can be "
-        "used if the --tls-cert only contains the certificate and the key is "
-        "located in another file. Use --tls-key-pass to specify the password "
-        "to decrypt the key if needed.",
+        + "used if the --tls-cert only contains the certificate and the key is "
+        + "located in another file. Use --tls-key-pass to specify the password "
+        + "to decrypt the key if needed.",
     )
 
     parser.add_argument(
@@ -82,8 +81,8 @@ def _add_tls_server_args(parser: argparse.ArgumentParser) -> None:
         default=os.environ.get("ANSIBUG_TLS_KEY_PASS", None),
         type=str,
         help="The password for the TLS key if it is encrypted. The "
-        "environment variable ANSIBUG_TLS_KEY_PASS can also be used to "
-        "provide the password without passing it through the command line.",
+        + "environment variable ANSIBUG_TLS_KEY_PASS can also be used to "
+        + "provide the password without passing it through the command line.",
     )
 
     parser.add_argument(
@@ -91,11 +90,11 @@ def _add_tls_server_args(parser: argparse.ArgumentParser) -> None:
         action="store",
         type=_parse_path,
         help="The path to a TLS CA bundle file or directory to use with "
-        "verifying the identity of the client. If set the client must "
-        "provide a certificate signed by a CA in the bundle specified for it "
-        "to connect. There are no checks on the client provided cert's key "
-        "usage or extended key usage, just the isssuer. If not set then no "
-        "client authentication is needed.",
+        + "verifying the identity of the client. If set the client must "
+        + "provide a certificate signed by a CA in the bundle specified for it "
+        + "to connect. There are no checks on the client provided cert's key "
+        + "usage or extended key usage, just the isssuer. If not set then no "
+        + "client authentication is needed.",
     )
 
 
@@ -122,9 +121,9 @@ def parse_args(
     connect = action.add_parser(
         "connect",
         description="Has the new ansible-playbook process start in connect "
-        "mode. The connect mode will have the new process connect to an "
-        "existing DA server that has set up a listener. The addr must be "
-        "specified for the ansible-playbook process to connect to.",
+        + "mode. The connect mode will have the new process connect to an "
+        + "existing DA server that has set up a listener. The addr must be "
+        + "specified for the ansible-playbook process to connect to.",
         help="Launch a debuggable ansible-playbook process in connect mode.",
     )
 
@@ -143,10 +142,10 @@ def parse_args(
     dap = action.add_parser(
         "dap",
         description="Start a new Debug Adapter Protocol process for a client "
-        "to communicate with over stdin and stdout. This process is in "
-        "charge of interacting with the DAP client and coordinating the debug "
-        "session. All relevant debug information is passed in through stdin "
-        "using the DAP protocol messages.",
+        + "to communicate with over stdin and stdout. This process is in "
+        + "charge of interacting with the DAP client and coordinating the debug "
+        + "session. All relevant debug information is passed in through stdin "
+        + "using the DAP protocol messages.",
         help="Start an executable Debug Adapter Protocol process",
     )
     _add_log_args(dap)
@@ -157,10 +156,10 @@ def parse_args(
         # default="/tmp/abc",
         type=_parse_path,
         help="The temporary directory to use for storing the launch scripts "
-        "used when starting an ansible-playbook process. If not set, the "
-        "temporary directory will be created in the system's temporary "
-        "directory as returned by tempfile.mkstemp(). This directory must "
-        "be writable by the user running the DAP process.",
+        + "used when starting an ansible-playbook process. If not set, the "
+        + "temporary directory will be created in the system's temporary "
+        + "directory as returned by tempfile.mkstemp(). This directory must "
+        + "be writable by the user running the DAP process.",
     )
 
     # Listen
@@ -168,9 +167,9 @@ def parse_args(
     listen = action.add_parser(
         "listen",
         description="Has the new ansible-playbook process start in listen "
-        "mode. The listen mode allows the debug client to attach to the "
-        "playbook later on through an attach request either locally by the "
-        "playbook process id or through the host:port it is listening on.",
+        + "mode. The listen mode allows the debug client to attach to the "
+        + "playbook later on through an attach request either locally by the "
+        + "playbook process id or through the host:port it is listening on.",
         help="Launch a debuggable ansible-playbook process in listen mode.",
     )
 
@@ -180,15 +179,15 @@ def parse_args(
         default="uds://",
         type=str,
         help="Specify the socket address to listen on. The address can "
-        "either be a TCP or UDS address in the format 'tcp://hostname:port' "
-        "or 'uds:///path/to/uds'. The default behavior is to create a UDS "
-        "socket that only allows the current user to connect. Using a TCP "
-        "address can allow connections from another host on that socket. For "
-        "example 'tcp://:0' will bind a random port to all IPs on the "
-        "current host. Using 'tcp://127.0.0.1:0' will bind a random port for "
-        "localhost communication. Using the address 'uds://' will create a "
-        "random Unix Domain Socket automatically. The address used will be "
-        "displayed on the console when it is available.",
+        + "either be a TCP or UDS address in the format 'tcp://hostname:port' "
+        + "or 'uds:///path/to/uds'. The default behavior is to create a UDS "
+        + "socket that only allows the current user to connect. Using a TCP "
+        + "address can allow connections from another host on that socket. For "
+        + "example 'tcp://:0' will bind a random port to all IPs on the "
+        + "current host. Using 'tcp://127.0.0.1:0' will bind a random port for "
+        + "localhost communication. Using the address 'uds://' will create a "
+        + "random Unix Domain Socket automatically. The address used will be "
+        + "displayed on the console when it is available.",
     )
     _add_log_args(listen)
     _add_launch_common_args(listen)
@@ -199,7 +198,7 @@ def parse_args(
     )
     _add_tls_server_args(listen)
 
-    if HAS_ARGCOMPLETE:  # pragma: nocover
+    if argcomplete:  # pragma: nocover
         argcomplete.autocomplete(parser)
 
     return parser.parse_args(args)

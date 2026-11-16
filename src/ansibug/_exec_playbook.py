@@ -206,7 +206,7 @@ def _configure_ansible_env() -> dict[str, str]:
         sys.stderr.write(raw_config_dump.stderr)
         sys.stderr.write(
             f"ansibug: failed to get Ansible config, '{shlex.join(raw_config_dump.args)}' "
-            f"exited with rc {raw_config_dump.returncode}\n"
+            + f"exited with rc {raw_config_dump.returncode}\n"
         )
         sys.exit(raw_config_dump.returncode)
     config_dump = json.loads(raw_config_dump.stdout)

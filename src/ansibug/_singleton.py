@@ -7,13 +7,13 @@ import typing as t
 class Singleton(type):
     """Singleton used to ensure only instance of a class exists."""
 
-    __instances: dict[type, object] = {}
+    __instances: dict["Singleton", t.Any] = {}
 
     def __call__(
         cls,
         *args: t.Any,
         **kwargs: t.Any,
-    ) -> object:
+    ) -> t.Any:
         if cls not in cls.__instances:
             cls.__instances[cls] = super().__call__(*args, **kwargs)
 

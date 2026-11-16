@@ -54,13 +54,15 @@ def test_connect_with_cancel_macos() -> None:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
             cancel_token = sh.SocketCancellationToken()
 
-            def client_connect(s: socket.socket, cancel_token: sh.SocketCancellationToken, state: dict) -> None:
+            def client_connect(
+                s: socket.socket, cancel_token: sh.SocketCancellationToken, state: dict[str, t.Any]
+            ) -> None:
                 try:
                     cancel_token.connect(s, ("localhost", server_port))
                 except Exception as e:
                     state["exp"] = e
 
-            state: dict = {}
+            state: dict[str, t.Any] = {}
             connect_thread = threading.Thread(
                 target=client_connect,
                 args=(client, cancel_token, state),
@@ -96,13 +98,15 @@ def test_connect_with_cancel_linux() -> None:
             # The second client will hang until the backlog is freed.
             cancel_token = sh.SocketCancellationToken()
 
-            def client_connect(s: socket.socket, cancel_token: sh.SocketCancellationToken, state: dict) -> None:
+            def client_connect(
+                s: socket.socket, cancel_token: sh.SocketCancellationToken, state: dict[str, t.Any]
+            ) -> None:
                 try:
                     cancel_token.connect(s, ("localhost", server_port))
                 except Exception as e:
                     state["exp"] = e
 
-            state: dict = {}
+            state: dict[str, t.Any] = {}
             connect_thread = threading.Thread(
                 target=client_connect,
                 args=(client2, cancel_token, state),
@@ -129,13 +133,15 @@ def test_recv_with_cancel() -> None:
             c_helper = sh.SocketHelper("client", client)
             cancel_token = sh.SocketCancellationToken()
 
-            def client_recv(s: sh.SocketHelper, cancel_token: sh.SocketCancellationToken, state: dict) -> None:
+            def client_recv(
+                s: sh.SocketHelper, cancel_token: sh.SocketCancellationToken, state: dict[str, t.Any]
+            ) -> None:
                 try:
                     s.recv(1, cancel_token)
                 except Exception as e:
                     state["exp"] = e
 
-            state: dict = {}
+            state: dict[str, t.Any] = {}
             recv_thread = threading.Thread(
                 target=client_recv,
                 args=(c_helper, cancel_token, state),
@@ -163,7 +169,9 @@ def test_send_with_cancel() -> None:
             c_helper = sh.SocketHelper("client", client)
             cancel_token = sh.SocketCancellationToken()
 
-            def client_send(s: sh.SocketHelper, cancel_token: sh.SocketCancellationToken, state: dict) -> None:
+            def client_send(
+                s: sh.SocketHelper, cancel_token: sh.SocketCancellationToken, state: dict[str, t.Any]
+            ) -> None:
                 try:
                     # Even though SO_SNDBUF is set to 4 I still need to send a
                     # lot of data to have this become blocking.
@@ -171,7 +179,7 @@ def test_send_with_cancel() -> None:
                 except Exception as e:
                     state["exp"] = e
 
-            state: dict = {}
+            state: dict[str, t.Any] = {}
             send_thread = threading.Thread(
                 target=client_send,
                 args=(c_helper, cancel_token, state),
@@ -199,7 +207,9 @@ def test_send_with_broken_pipe() -> None:
             c_helper = sh.SocketHelper("client", client)
             cancel_token = sh.SocketCancellationToken()
 
-            def client_send(s: sh.SocketHelper, cancel_token: sh.SocketCancellationToken, state: dict) -> None:
+            def client_send(
+                s: sh.SocketHelper, cancel_token: sh.SocketCancellationToken, state: dict[str, t.Any]
+            ) -> None:
                 try:
                     # Even though SO_SNDBUF is set to 4 I still need to send a
                     # lot of data to have this become blocking.
@@ -207,7 +217,7 @@ def test_send_with_broken_pipe() -> None:
                 except Exception as e:
                     state["exp"] = e
 
-            state: dict = {}
+            state: dict[str, t.Any] = {}
             send_thread = threading.Thread(
                 target=client_send,
                 args=(c_helper, cancel_token, state),

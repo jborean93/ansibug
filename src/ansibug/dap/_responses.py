@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import dataclasses
-import typing as t
 
 from ._messages import Command, Response
 from ._types import (
@@ -76,12 +75,12 @@ class EvaluateResponse(
     command = Command.EVALUATE
 
     result: str
-    type: t.Optional[str] = None
-    presentation_hint: t.Optional[VariablePresentationHint] = None
+    type: str | None = None
+    presentation_hint: VariablePresentationHint | None = None
     variables_reference: int = 0
-    named_variables: t.Optional[int] = None
-    indexed_variables: t.Optional[int] = None
-    memory_reference: t.Optional[str] = None
+    named_variables: int | None = None
+    indexed_variables: int | None = None
+    memory_reference: str | None = None
 
 
 @dataclasses.dataclass()
@@ -127,8 +126,8 @@ class RunInTerminalResponse(Response, dap={"body": {"processId": "process_id", "
 
     command = Command.RUN_IN_TERMINAL
 
-    process_id: t.Optional[int] = None
-    shell_process_id: t.Optional[int] = None
+    process_id: int | None = None
+    shell_process_id: int | None = None
 
 
 @dataclasses.dataclass()
@@ -144,7 +143,7 @@ class ScopesResponse(Response, dap={"body": {"scopes": "scopes"}}):
 
     command = Command.SCOPES
 
-    scopes: t.List[Scope] = dataclasses.field(default_factory=list)
+    scopes: list[Scope] = dataclasses.field(default_factory=list)
 
 
 @dataclasses.dataclass()
@@ -161,7 +160,7 @@ class SetBreakpointsResponse(Response, dap={"body": {"breakpoints": "breakpoints
 
     command = Command.SET_BREAKPOINTS
 
-    breakpoints: t.List[Breakpoint] = dataclasses.field(default_factory=list)
+    breakpoints: list[Breakpoint] = dataclasses.field(default_factory=list)
 
 
 @dataclasses.dataclass()
@@ -178,7 +177,7 @@ class SetExceptionBreakpointsResponse(Response, dap={"body": {"breakpoints": "br
 
     command = Command.SET_EXCEPTION_BREAKPOINTS
 
-    breakpoints: t.List[Breakpoint] = dataclasses.field(default_factory=list)
+    breakpoints: list[Breakpoint] = dataclasses.field(default_factory=list)
 
 
 @dataclasses.dataclass()
@@ -199,10 +198,10 @@ class SetVariableResponse(
     command = Command.SET_VARIABLE
 
     value: str
-    type: t.Optional[str] = None
-    variables_reference: t.Optional[int] = None
-    named_variables: t.Optional[int] = None
-    indexed_variables: t.Optional[int] = None
+    type: str | None = None
+    variables_reference: int | None = None
+    named_variables: int | None = None
+    indexed_variables: int | None = None
 
 
 @dataclasses.dataclass()
@@ -219,8 +218,8 @@ class StackTraceResponse(Response, dap={"body": {"stackFrames": "stack_frames", 
 
     command = Command.STACK_TRACE
 
-    stack_frames: t.List[StackFrame] = dataclasses.field(default_factory=list)
-    total_frames: t.Optional[int] = None
+    stack_frames: list[StackFrame] = dataclasses.field(default_factory=list)
+    total_frames: int | None = None
 
 
 @dataclasses.dataclass()
@@ -256,7 +255,7 @@ class ThreadsResponse(Response, dap={"body": {"threads": "threads"}}):
 
     command = Command.THREADS
 
-    threads: t.List[Thread] = dataclasses.field(default_factory=list)
+    threads: list[Thread] = dataclasses.field(default_factory=list)
 
 
 @dataclasses.dataclass()
@@ -271,7 +270,7 @@ class VariablesResponse(Response, dap={"body": {"variables": "variables"}}):
 
     command = Command.VARIABLES
 
-    variables: t.List[Variable] = dataclasses.field(default_factory=list)
+    variables: list[Variable] = dataclasses.field(default_factory=list)
 
 
 @dataclasses.dataclass()
@@ -289,5 +288,5 @@ class ErrorResponse(Response, dap={"message": "message", "body": {"error": "erro
 
     success: bool = dataclasses.field(init=False, default=False)
     command: Command = dataclasses.field(init=True)
-    message: t.Optional[str] = None
-    error: t.Optional[Message] = None
+    message: str | None = None
+    error: Message | None = None

@@ -7,7 +7,8 @@ import argparse
 import dataclasses
 import shlex
 import typing as t
-from typing import IO
+
+ReplCommandName = t.Literal["remove_option", "set_option", "set_hostvar", "template"]
 
 
 class ReturnErrorMessage(Exception): ...
@@ -17,13 +18,13 @@ class ErrorCapturingParser(argparse.ArgumentParser):
     def error(self, message: str) -> t.NoReturn:
         raise ReturnErrorMessage(message)
 
-    def print_help(self, file: IO[str] | None = None) -> None:
+    def print_help(self, file: t.Any = None) -> None:
         raise ReturnErrorMessage(self.format_help())
 
 
 @dataclasses.dataclass(frozen=True)
 class ReplCommand:
-    command: t.Literal["remove_option", "set_option", "set_hostvar", "template"]
+    command: ReplCommandName
 
 
 @dataclasses.dataclass(frozen=True)
@@ -58,7 +59,7 @@ def parse_repl_args(
         ReplCommand | str: The ReplCommand instance if it's a valid command,
         otherwise the string to display back to the client.
     """
-    aliases = {
+    aliases: dict[ReplCommandName, list[str]] = {
         "remove_option": ["ro"],
         "set_option": ["so"],
         "set_hostvar": ["sh"],
@@ -113,7 +114,7 @@ def parse_repl_args(
         "template",
         aliases=["t"],
         description="Templates the expression provided after the command and returns the result. The expression "
-        "provided should not be wrapped in {{ ... }} as the value is already treated as an expression.",
+        + "provided should not be wrapped in {{ ... }} as the value is already treated as an expression.",
         help="Template an expression",
     )
 

@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import collections.abc
-import datetime
 
 
 def get_canonicalized_variable_type(

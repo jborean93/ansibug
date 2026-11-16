@@ -32,7 +32,7 @@ class AttachRequest(Request, dap={"arguments": {"__restart": "restart"}}):
 
     command = Command.ATTACH
 
-    arguments: t.Dict[str, t.Any]
+    arguments: dict[str, t.Any]
     restart: t.Any = None
 
     def pack(self) -> dict[str, t.Any]:
@@ -69,8 +69,8 @@ class CancelRequest(Request, dap={"arguments": {"requestId": "request_id", "prog
 
     command = Command.CANCEL
 
-    request_id: t.Optional[int] = None
-    progress_id: t.Optional[int] = None
+    request_id: int | None = None
+    progress_id: int | None = None
 
 
 @dataclasses.dataclass()
@@ -130,7 +130,7 @@ class DisconnectRequest(
     command = Command.DISCONNECT
 
     restart: bool = False
-    terminate_debuggee: t.Optional[bool] = None
+    terminate_debuggee: bool | None = None
     suspend_debuggee: bool = False
 
 
@@ -161,9 +161,9 @@ class EvaluateRequest(
     command = Command.EVALUATE
 
     expression: str
-    frame_id: t.Optional[int] = None
-    context: t.Optional[t.Union[str, t.Literal["variables", "watch", "repl", "hover", "clipboard"]]] = None
-    format: t.Optional[ValueFormat] = None
+    frame_id: int | None = None
+    context: str | t.Literal["variables", "watch", "repl", "hover", "clipboard"] | None = None
+    format: ValueFormat | None = None
 
 
 @dataclasses.dataclass()
@@ -216,9 +216,9 @@ class InitializeRequest(
     command = Command.INITIALIZE
 
     adapter_id: str
-    client_id: t.Optional[str] = None
-    client_name: t.Optional[str] = None
-    locale: t.Optional[str] = None
+    client_id: str | None = None
+    client_name: str | None = None
+    locale: str | None = None
     lines_start_at_1: bool = True
     columns_start_at_1: bool = True
     path_format: t.Literal["path", "uri"] = "path"
@@ -247,7 +247,7 @@ class LaunchRequest(Request, dap={"arguments": {"noDebug": "no_debug", "__restar
 
     command = Command.LAUNCH
 
-    arguments: t.Dict[str, t.Any]
+    arguments: dict[str, t.Any]
     no_debug: bool = False
     restart: t.Any = None
 
@@ -333,10 +333,10 @@ class RunInTerminalRequest(
     command = Command.RUN_IN_TERMINAL
 
     kind: t.Literal["integrated", "external"] = "integrated"
-    title: t.Optional[str] = None
+    title: str | None = None
     cwd: str = ""
-    args: t.List[str] = dataclasses.field(default_factory=list)
-    env: t.Dict[str, t.Optional[str]] = dataclasses.field(default_factory=dict)
+    args: list[str] = dataclasses.field(default_factory=list)
+    env: dict[str, str | None] = dataclasses.field(default_factory=dict)
 
 
 @dataclasses.dataclass
@@ -382,8 +382,8 @@ class SetBreakpointsRequest(
     command = Command.SET_BREAKPOINTS
 
     source: Source
-    breakpoints: t.List[SourceBreakpoint] = dataclasses.field(default_factory=list)
-    lines: t.List[int] = dataclasses.field(default_factory=list)
+    breakpoints: list[SourceBreakpoint] = dataclasses.field(default_factory=list)
+    lines: list[int] = dataclasses.field(default_factory=list)
     source_modified: bool = False
 
 
@@ -413,9 +413,9 @@ class SetExceptionBreakpointsRequest(
 
     command = Command.SET_EXCEPTION_BREAKPOINTS
 
-    filters: t.List[str] = dataclasses.field(default_factory=list)
-    filter_options: t.List[ExceptionFilterOptions] = dataclasses.field(default_factory=list)
-    exception_options: t.List[ExceptionOptions] = dataclasses.field(default_factory=list)
+    filters: list[str] = dataclasses.field(default_factory=list)
+    filter_options: list[ExceptionFilterOptions] = dataclasses.field(default_factory=list)
+    exception_options: list[ExceptionOptions] = dataclasses.field(default_factory=list)
 
 
 @dataclasses.dataclass()
@@ -446,7 +446,7 @@ class SetVariableRequest(
     variables_reference: int
     name: str
     value: str
-    format: t.Optional[ValueFormat] = None
+    format: ValueFormat | None = None
 
 
 @dataclasses.dataclass()
@@ -476,9 +476,9 @@ class StackTraceRequest(
     command = Command.STACK_TRACE
 
     thread_id: int
-    start_frame: t.Optional[int] = None
-    levels: t.Optional[int] = None
-    format: t.Optional[StackFrameFormat] = None
+    start_frame: int | None = None
+    levels: int | None = None
+    format: StackFrameFormat | None = None
 
 
 @dataclasses.dataclass()
@@ -509,7 +509,7 @@ class StepInRequest(
 
     thread_id: int
     single_thread: bool = False
-    target_id: t.Optional[int] = None
+    target_id: int | None = None
     granularity: t.Literal["statement", "line", "instruction"] = "statement"
 
 
@@ -599,7 +599,7 @@ class VariablesRequest(
     command = Command.VARIABLES
 
     variables_reference: int
-    filter: t.Optional[t.Literal["indexed", "named"]] = None
-    start: t.Optional[int] = None
-    count: t.Optional[int] = None
-    format: t.Optional[ValueFormat] = None
+    filter: t.Literal["indexed", "named"] | None = None
+    start: int | None = None
+    count: int | None = None
+    format: ValueFormat | None = None

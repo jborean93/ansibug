@@ -33,19 +33,37 @@ homepage = "https://github.com/jborean93/ansibug"
 dev = [
     "ansible-core >= 2.16.0",
     "argcomplete",
+    "basedpyright >= 1.40.2",
     # Support for source_pkgs
     "coverage[toml] >= 5.3",
     "cryptography",
-    "black == 24.10.0",
-    "isort == 5.13.2",
-    "mypy == 1.13.0",
     "pre-commit",
     "pytest",
     "pytest-timeout",
     "pytest-xdist",
-    "tox >= 4.0.0",
-    "tox-uv>=1.34.0",
+    "ruff >= 0.17.0",
+    "tox-uv >= 1.34.0",
 ]
+# The ansible-core release each tox ansible_X.Y factor tests against, locked in uv.lock like the rest. The markers
+# leave out the Pythons a release doesn't support so uv can still lock the group for 3.10.
+ansible-2-16 = ["ansible-core >= 2.16.0, < 2.17.0"]
+ansible-2-17 = ["ansible-core >= 2.17.0, < 2.18.0"]
+ansible-2-18 = ["ansible-core >= 2.18.0, < 2.19.0; python_version >= '3.11'"]
+ansible-2-19 = ["ansible-core >= 2.19.0, < 2.20.0; python_version >= '3.11'"]
+ansible-2-20 = ["ansible-core >= 2.20.0, < 2.21.0; python_version >= '3.12'"]
+ansible-2-21 = ["ansible-core >= 2.21.0, < 2.22.0; python_version >= '3.12'"]
+ansible-2-22 = ["ansible-core >= 2.22.0, < 2.23.0; python_version >= '3.13'"]
+
+[tool.uv]
+conflicts = [[
+    { group = "ansible-2-16" },
+    { group = "ansible-2-17" },
+    { group = "ansible-2-18" },
+    { group = "ansible-2-19" },
+    { group = "ansible-2-20" },
+    { group = "ansible-2-21" },
+    { group = "ansible-2-22" },
+]]
 
 [project.optional-dependencies]
 
@@ -61,52 +79,43 @@ where = ["src"]
 [tool.setuptools.package-data]
 ansibug = ["py.typed"]
 
-[tool.black]
+[tool.ruff]
 line-length = 120
-include = '\.pyi?$'
-exclude = '''
-/(
-    \.git
-  | \.hg
-  | \.mypy_cache
-  | \.tox
-  | \.venv
-  | _build
-  | buck-out
-  | build
-  | dist
-)/
-'''
 
-[tool.isort]
-profile = "black"
+[tool.ruff.lint]
+select = [
+    "I",  # isort
+    "UP",  # pyupgrade, the typing aliases basedpyright reports as deprecated
+]
 
-[tool.mypy]
-exclude = "docs/|build/"
-mypy_path = "$MYPY_CONFIG_FILE_DIR/src:$MYPY_CONFIG_FILE_DIR/tests/utils"
-python_version = "3.10"
-explicit_package_bases = true
-show_error_codes = true
-show_column_numbers = true
-# disallow_any_unimported = true  # Ansible doesn't have much annotation
-disallow_untyped_calls = true
-disallow_untyped_defs = true
-disallow_incomplete_defs = true
-check_untyped_defs = true
-disallow_untyped_decorators = true
-no_implicit_reexport = true
-warn_redundant_casts = true
-warn_unused_ignores = true
-warn_no_return = true
-warn_unreachable = true
+[tool.ruff.lint.isort]
+known-first-party = ["ansibug"]
 
-[[tool.mypy.overrides]]
-module = "ansible.*"
-ignore_missing_imports = true
+[tool.basedpyright]
+include = ["src", "tests"]
+pythonVersion = "3.10"
+extraPaths = ["src", "tests/utils"]
+reportAny = false
+# typing.override is 3.12+, and the 3.10 floor would need typing_extensions for it.
+reportImplicitOverride = false
+# ansible-core ships no type stubs or py.typed, and ansibug supports several releases of it, so it's treated as
+# untyped rather than inferred from the source of whichever release is installed.
+reportMissingTypeStubs = false
+useLibraryCodeForTypes = false
+reportPrivateUsage = false
+reportUnannotatedClassAttribute = false
+reportUnknownArgumentType = false
+reportUnknownMemberType = false
+reportUnusedCallResult = false
 
-[[tool.mypy.overrides]]
-module = "debugpy.*"
-ignore_missing_imports = true
+executionEnvironments = [
+    # Ansible plugins subclass and call into ansible-core, which is untyped, overriding methods whose parameters they
+    # may not use, and set flags such as POST_DATATAGGING from the ansible-core release they import from.
+    { root = "src/ansibug/ansible_collections", reportConstantRedefinition = false, reportUnknownParameterType = false, reportUnknownVariableType = false, reportUnusedParameter = false, reportUntypedBaseClass = false },
+    { root = "tests/data", reportUnknownParameterType = false, reportUnknownVariableType = false, reportUnusedParameter = false, reportUntypedBaseClass = false },
+    # pytest fixtures are parameters a test may not use, and monkeypatch.setattr takes an untyped lambda.
+    { root = "tests", extraPaths = ["src", "tests/utils"], reportUntypedFunctionDecorator = false, reportUnusedParameter = false, reportUnknownLambdaType = false },
+]
 
 [tool.pytest.ini_options]
 addopts = "--import-mode=importlib"
@@ -153,18 +162,23 @@ min_version = 4.0
 [testenv]
 package = wheel
 wheel_build_env = .pkg
-runner = uv-venv-runner
-dependency_groups = dev
+runner = uv-venv-lock-runner
+# The runner images can carry pre-release Pythons uv would otherwise prefer, use uv's own builds everywhere.
+uv_python_preference = only-managed
+dependency_groups =
+    dev
+    ansible_2.16: ansible-2-16
+    ansible_2.17: ansible-2-17
+    ansible_2.18: ansible-2-18
+    ansible_2.19: ansible-2-19
+    ansible_2.20: ansible-2-20
+    ansible_2.21: ansible-2-21
+    ansible_2.22: ansible-2-22
 
-deps:
-    ansible_2.16: ansible-core >=2.16.0,<2.17.0
-    ansible_2.17: ansible-core >=2.17.0,<2.18.0
-    ansible_2.18: ansible-core >=2.18.0,<2.19.0
-    ansible_2.19: ansible-core >=2.19.0,<2.20.0
-    ansible_2.20: ansible-core >=2.20.0,<2.21.0
-    ansible_2.21: ansible-core >=2.21.0,<2.22.0
-    ansible_2.22: ansible-core >=2.22.0,<2.23.0
-    ansible_devel: https://github.com/ansible/ansible/archive/devel.tar.gz
+# devel moves with every commit so it can't be locked, it replaces the locked ansible-core after the sync. The lock
+# runner ignores deps so it's installed here.
+allowlist_externals =
+    ansible_devel: uv
 
 passenv =
     GITHUB_ACTIONS
@@ -175,12 +189,13 @@ set_env =
     tests: PROJECT_ROOT={toxinidir}
 
 commands_pre =
+    ansible_devel: uv pip install --python {env_python} https://github.com/ansible/ansible/archive/devel.tar.gz
     tests: python -c 'import pathlib; pathlib.Path("{env_site_packages_dir}/cov.pth").write_text("import coverage; coverage.process_startup()")'
 
 commands =
-    sanity: python -m black . --check
-    sanity: python -m isort . --check-only
-    sanity: python -m mypy .
+    sanity: python -m ruff check .
+    sanity: python -m ruff format . --check
+    sanity: python -m basedpyright --warnings
 
     tests: python -m ansible adhoc --version
     tests: python -m coverage run -m pytest -v {posargs:-n auto}

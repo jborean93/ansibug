@@ -38,7 +38,7 @@ class BreakpointEvent(Event, dap={"body": {"reason": "reason", "breakpoint": "br
 
     event = EventType.BREAKPOINT
 
-    reason: t.Union[str, t.Literal["changed", "new", "removed"]]
+    reason: str | t.Literal["changed", "new", "removed"]
     breakpoint: Breakpoint
 
 
@@ -103,13 +103,13 @@ class OutputEvent(
 
     event = EventType.OUTPUT
 
-    category: t.Union[t.Literal["console", "important", "stdout", "stderr", "telemetry"], str]
+    category: t.Literal["console", "important", "stdout", "stderr", "telemetry"] | str
     output: str
-    group: t.Optional[t.Literal["start", "startCollapsed", "end"]] = None
-    variables_reference: t.Optional[int] = None
-    source: t.Optional[Source] = None
-    line: t.Optional[int] = None
-    column: t.Optional[int] = None
+    group: t.Literal["start", "startCollapsed", "end"] | None = None
+    variables_reference: int | None = None
+    source: Source | None = None
+    line: int | None = None
+    column: int | None = None
     data: t.Any = None
 
 
@@ -146,10 +146,10 @@ class StoppedEvent(
     event = EventType.STOPPED
 
     reason: StoppedReason
-    description: t.Optional[str] = None
-    thread_id: t.Optional[int] = None
+    description: str | None = None
+    thread_id: int | None = None
     preserve_focus_hint: bool = False
-    text: t.Optional[str] = None
+    text: str | None = None
     all_threads_stopped: bool = False
     hit_breakpoint_ids: list[int] = dataclasses.field(default_factory=list)
 

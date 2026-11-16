@@ -1,8 +1,6 @@
 {
     "recommendations": [
-        "ms-python.black-formatter",
-        "ms-python.isort",
-        "ms-python.mypy-type-checker",
-        "ms-python.vscode-pylance",
+        "charliermarsh.ruff",
+        "detachhead.basedpyright"
     ]
 }

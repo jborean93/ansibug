@@ -1,0 +1,26 @@
+version: 2
+
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+
+  # pyproject.toml's lower bounds are the oldest versions ansibug supports.
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    versioning-strategy: increase-if-necessary
+    groups:
+      uv:
+        patterns:
+          - "*"

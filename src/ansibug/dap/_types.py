@@ -47,16 +47,16 @@ class Breakpoint(
         offset: Optional offset from the instruction reference.
     """
 
-    id: t.Optional[int] = None
+    id: int | None = None
     verified: bool = False
-    message: t.Optional[str] = None
-    source: t.Optional[Source] = None
-    line: t.Optional[int] = None
-    column: t.Optional[int] = None
-    end_line: t.Optional[int] = None
-    end_column: t.Optional[int] = None
-    instruction_reference: t.Optional[str] = None
-    offset: t.Optional[int] = None
+    message: str | None = None
+    source: Source | None = None
+    line: int | None = None
+    column: int | None = None
+    end_line: int | None = None
+    end_column: int | None = None
+    instruction_reference: str | None = None
+    offset: int | None = None
 
 
 @dataclasses.dataclass()
@@ -226,7 +226,7 @@ class ExceptionFilterOptions(metaclass=DAPObjectMeta, dap={"filterId": "filter_i
     """
 
     filter_id: str
-    condition: t.Optional[str] = None
+    condition: str | None = None
 
 
 @dataclasses.dataclass()
@@ -242,7 +242,7 @@ class ExceptionOptions(metaclass=DAPObjectMeta, dap={"path": "path", "breakMode"
         break_mode: Condition when a thrown exception should result in a break.
     """
 
-    path: t.List[ExceptionPathSegment]
+    path: list[ExceptionPathSegment]
     break_mode: t.Literal["never", "always", "unhandled", "userUnhandled"]
 
 
@@ -259,7 +259,7 @@ class ExceptionPathSegment(metaclass=DAPObjectMeta, dap={"negate": "negate", "na
     """
 
     negate: bool = False
-    names: t.List[str] = dataclasses.field(default_factory=list)
+    names: list[str] = dataclasses.field(default_factory=list)
 
 
 @dataclasses.dataclass()
@@ -282,11 +282,11 @@ class Message(
 
     id: int
     format: str
-    variables: t.Dict[str, str] = dataclasses.field(default_factory=dict)
+    variables: dict[str, str] = dataclasses.field(default_factory=dict)
     send_telemetry: bool = False
     show_user: bool = False
-    url: t.Optional[str] = None
-    url_label: t.Optional[str] = None
+    url: str | None = None
+    url_label: str | None = None
 
 
 @dataclasses.dataclass()
@@ -327,15 +327,15 @@ class Scope(
 
     name: str
     variables_reference: int
-    presentation_hint: t.Optional[t.Union[str, t.Literal["arguments", "locals", "registers"]]] = None
-    named_variables: t.Optional[int] = None
-    indexed_variables: t.Optional[int] = None
+    presentation_hint: str | t.Literal["arguments", "locals", "registers"] | None = None
+    named_variables: int | None = None
+    indexed_variables: int | None = None
     expensive: bool = False
-    source: t.Optional[Source] = None
-    line: t.Optional[int] = None
-    column: t.Optional[int] = None
-    end_line: t.Optional[int] = None
-    end_column: t.Optional[int] = None
+    source: Source | None = None
+    line: int | None = None
+    column: int | None = None
+    end_line: int | None = None
+    end_column: int | None = None
 
 
 @dataclasses.dataclass()
@@ -375,14 +375,14 @@ class Source(
         checksums: Checksum associated with this file.
     """
 
-    name: t.Optional[str] = None
-    path: t.Optional[str] = None
+    name: str | None = None
+    path: str | None = None
     source_reference: int = 0
     presentation_hint: t.Literal["normal", "emphasize", "deemphasize"] = "normal"
-    origin: t.Optional[str] = None
-    sources: t.List[Source] = dataclasses.field(default_factory=list)
+    origin: str | None = None
+    sources: list[Source] = dataclasses.field(default_factory=list)
     adapter_data: t.Any = None
-    checksums: t.List[Checksum] = dataclasses.field(default_factory=list)
+    checksums: list[Checksum] = dataclasses.field(default_factory=list)
 
 
 @dataclasses.dataclass()
@@ -411,10 +411,10 @@ class SourceBreakpoint(
     """
 
     line: int
-    column: t.Optional[int] = None
-    condition: t.Optional[str] = None
-    hit_condition: t.Optional[str] = None
-    log_message: t.Optional[str] = None
+    column: int | None = None
+    condition: str | None = None
+    hit_condition: str | None = None
+    log_message: str | None = None
 
 
 @dataclasses.dataclass()
@@ -457,14 +457,14 @@ class StackFrame(
 
     id: int
     name: str
-    source: t.Optional[Source] = None
+    source: Source | None = None
     line: int = 0
     column: int = 0
-    end_line: t.Optional[int] = None
-    end_column: t.Optional[int] = None
+    end_line: int | None = None
+    end_column: int | None = None
     can_restart: bool = False
-    instruction_pointer_reference: t.Optional[str] = None
-    module_id: t.Optional[t.Union[int, str]] = None
+    instruction_pointer_reference: str | None = None
+    module_id: int | str | None = None
     presentation_hint: t.Literal["normal", "label", "subtle"] = "normal"
 
 
@@ -569,13 +569,13 @@ class Variable(
 
     name: str
     value: str
-    type: t.Optional[str] = None
-    presentation_hint: t.Optional[VariablePresentationHint] = None
-    evaluate_name: t.Optional[str] = None
+    type: str | None = None
+    presentation_hint: VariablePresentationHint | None = None
+    evaluate_name: str | None = None
     variables_reference: int = 0
-    named_variables: t.Optional[int] = None
-    indexed_variables: t.Optional[int] = None
-    memory_reference: t.Optional[str] = None
+    named_variables: int | None = None
+    indexed_variables: int | None = None
+    memory_reference: str | None = None
 
 
 @dataclasses.dataclass
@@ -600,38 +600,35 @@ class VariablePresentationHint(
         lazy: The value can be retrieved through a specific request.
     """
 
-    kind: t.Optional[
-        t.Union[
-            str,
-            t.Literal[
-                "property",
-                "method",
-                "class",
-                "data",
-                "event",
-                "baseClass",
-                "innerClass",
-                "interface",
-                "mostDerivedClass",
-                "virtual",
-                "dataBreakpoint",
-            ],
+    kind: (
+        str
+        | t.Literal[
+            "property",
+            "method",
+            "class",
+            "data",
+            "event",
+            "baseClass",
+            "innerClass",
+            "interface",
+            "mostDerivedClass",
+            "virtual",
+            "dataBreakpoint",
         ]
-    ] = None
-    attributes: t.List[
-        t.Union[
-            str,
-            t.Literal[
-                "static",
-                "constant",
-                "readOnly",
-                "rawString",
-                "hasObjectId",
-                "canHaveObjectId",
-                "hasSideEffect",
-                "hasDataBreakpoint",
-            ],
+        | None
+    ) = None
+    attributes: list[
+        str
+        | t.Literal[
+            "static",
+            "constant",
+            "readOnly",
+            "rawString",
+            "hasObjectId",
+            "canHaveObjectId",
+            "hasSideEffect",
+            "hasDataBreakpoint",
         ]
     ] = dataclasses.field(default_factory=list)
-    visibility: t.Optional[t.Union[str, t.Literal["public", "private", "protected", "internal"]]] = None
+    visibility: str | t.Literal["public", "private", "protected", "internal"] | None = None
     lazy: bool = False
