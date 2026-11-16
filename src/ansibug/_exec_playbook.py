@@ -175,9 +175,9 @@ def _configure_ansible_env() -> dict[str, str]:
     # config the subsequent ansible-playbook call will use as it's run in the
     # same cwd with the same env vars.
 
-    # Explicitly set verbosity so it doesn't display version info breaking
-    # the json parsing.
-    dump_env = os.environ | {"ANSIBLE_VERBOSITY": "0"}
+    # Explicitly set verbosity and debug so it doesn't display version info or
+    # debug lines on stdout breaking the json parsing.
+    dump_env = os.environ | {"ANSIBLE_VERBOSITY": "0", "ANSIBLE_DEBUG": "False"}
 
     # Output is captured so Ansible won't detect a tty, force colour to keep
     # error output looking the same as a normal run. JSON output is uncoloured.

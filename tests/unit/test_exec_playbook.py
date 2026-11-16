@@ -28,6 +28,17 @@ def test_config_dump_failure(
     assert f"exited with rc {e.value.code}" in stderr
 
 
+def test_config_dump_with_ansible_debug(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # ANSIBLE_DEBUG writes debug lines to stdout which breaks the json parsing.
+    monkeypatch.setenv("ANSIBLE_DEBUG", "True")
+
+    env = _configure_ansible_env()
+
+    assert "ansibug.dap.debug" in env["ANSIBLE_CALLBACKS_ENABLED"]
+
+
 @pytest.mark.parametrize(
     "isatty, env, expected",
     [
