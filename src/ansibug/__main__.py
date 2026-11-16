@@ -61,8 +61,8 @@ def _add_tls_server_args(parser: argparse.ArgumentParser) -> None:
         help="The path to the TLS server certificate pem. This can either be "
         + "the certificate by itself or a bundle of the certificate and key as "
         + "a PEM file. Use --tls-key to specify a separate key file and "
-        + "--tls-key-pass if the key is password protected. If no certificate "
-        + "is specified, the server will exchange data without TLS.",
+        + "--tls-key-pass if the key is password protected. This is required "
+        + "when --wrap-tls is set.",
     )
 
     parser.add_argument(
@@ -201,7 +201,11 @@ def parse_args(
     if argcomplete:  # pragma: nocover
         argcomplete.autocomplete(parser)
 
-    return parser.parse_args(args)
+    parsed = parser.parse_args(args)
+    if getattr(parsed, "wrap_tls", False) and not parsed.tls_cert:
+        parser.error("--wrap-tls requires --tls-cert")
+
+    return parsed
 
 
 def main() -> None:

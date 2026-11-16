@@ -237,6 +237,13 @@ def _configure_ansible_env() -> dict[str, str]:
         if not to_check:
             break
 
+    # The user's values for these would be silently dropped, i.e. if Ansible
+    # renamed them.
+    for name in sorted(to_check):
+        sys.stderr.write(
+            f"ansibug: config '{name}' was not found in the Ansible config dump, any value set for it will be ignored\n"
+        )
+
     # Insert this module into the first PYTHONPATH so Ansible can import it.
     python_path = [e for e in os.environ.get("PYTHONPATH", "").split(os.pathsep) if e]
     python_path.insert(0, str(ansibug_path.parent))

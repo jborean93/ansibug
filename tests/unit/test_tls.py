@@ -166,3 +166,8 @@ def _do_tls_handshake(
 
     assert c.version() == s.version()
     assert c.cipher() == s.cipher()
+
+
+def test_server_no_certfile() -> None:
+    with pytest.raises(ValueError, match="A TLS server certificate must be specified"):
+        create_server_tls_context(certfile=None)

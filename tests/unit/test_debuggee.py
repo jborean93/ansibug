@@ -11,7 +11,7 @@ import threading
 import pytest
 
 import ansibug.dap as dap
-from ansibug._debuggee import AnsibleDebugger, DebuggeeShutdownError
+from ansibug._debuggee import AnsibleDebugger, DebuggeeShutdownError, _replace_root
 from ansibug._logging import configure_file_logging
 
 
@@ -73,3 +73,20 @@ def test_configure_file_logging_once(tmp_path: pathlib.Path) -> None:
         for h in logger.handlers[len(existing) :]:
             logger.removeHandler(h)
             h.close()
+
+
+@pytest.mark.parametrize(
+    ["path", "root", "expected"],
+    [
+        ("/foo/main.yml", "/foo", "/new/main.yml"),
+        ("/foo/main.yml", "/foo/", "/new/main.yml"),
+        ("/foo", "/foo", "/new"),
+        ("/foobar/main.yml", "/foo", None),
+        ("/other/main.yml", "/foo", None),
+        ("C:\\foo\\main.yml", "C:\\foo", "/new\\main.yml"),
+        ("C:\\foobar\\main.yml", "C:\\foo", None),
+    ],
+)
+def test_replace_root(path: str, root: str, expected: str | None) -> None:
+    new_root = "/new/" if root.endswith("/") else "/new"
+    assert _replace_root(path, root, new_root) == expected

@@ -122,32 +122,30 @@ def parse_repl_args(
     # to a command line and parse the known args. We only do the known args
     # because some commands need the raw value provided outside of a cmd split
     # processing argparse uses.
-    split_args = shlex.split(args)
+    try:
+        split_args = shlex.split(args)
+    except ValueError as e:
+        # Unbalanced quotes.
+        return f"Failed to parse repl command: {e}"
 
     try:
         parsed_args = parser.parse_known_args(split_args)[0]
     except ReturnErrorMessage as e:
         return str(e)
 
+    # command is what was typed, it could be an alias of the command name.
     command = str(parsed_args.command)
-    if command not in aliases:
-        # Need to resolve the alias back to the expected command name.
-        for final, cmd_aliases in aliases.items():  # pragma: nocover
-            for a in cmd_aliases:
-                if command == a:
-                    parsed_args.command = final
-                    break
+    command_name: ReplCommandName = next(
+        name for name, cmd_aliases in aliases.items() if command == name or command in cmd_aliases
+    )
 
-            if command != parsed_args.command:
-                break
-
-    if parsed_args.command == "template":
+    if command_name == "template":
         # The value after the command needs to be extracted.
         expr = args[args.index(command) + len(command) :].lstrip()
 
         return TemplateCommand(command="template", expression=expr)
 
-    elif parsed_args.command in ["set_option", "set_hostvar"]:
+    elif command_name in ("set_option", "set_hostvar"):
         # The value after the option/var name needs to be extracted.
         remaining = args[args.index(command) + len(command) :].lstrip()
         remaining = remaining[remaining.index(parsed_args.name) + len(parsed_args.name) :]
@@ -156,7 +154,7 @@ def parse_repl_args(
 
         expr = remaining.lstrip()
 
-        return SetVarCommand(parsed_args.command, parsed_args.name, expr)
+        return SetVarCommand(command_name, parsed_args.name, expr)
 
     else:
-        return RemoveVarCommand(parsed_args.command, parsed_args.name)
+        return RemoveVarCommand(command_name, parsed_args.name)

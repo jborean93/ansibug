@@ -100,3 +100,18 @@ def test_launch_request_unpack() -> None:
         "type": "launch",
         "foo": "bar",
     }
+
+
+def test_step_in_request_unpack_target_id() -> None:
+    actual = dap.ProtocolMessage.unpack(
+        {
+            "seq": 1,
+            "type": "request",
+            "command": "stepIn",
+            "arguments": {"threadId": 2, "targetId": 3},
+        }
+    )
+
+    assert isinstance(actual, dap.StepInRequest)
+    assert actual.thread_id == 2
+    assert actual.target_id == 3

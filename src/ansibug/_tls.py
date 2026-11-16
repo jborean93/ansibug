@@ -56,15 +56,15 @@ def create_client_tls_context(
 
 
 def create_server_tls_context(
-    certfile: str,
+    certfile: str | None,
     keyfile: str | None = None,
     password: str | None = None,
     ca_trust: str | None = None,
 ) -> ssl.SSLContext:
     """Creates a server TLS context.
 
-    Creates a TLS context with the certificate settings specified. If no
-    certfile is specified, the platforms defaults are used.
+    Creates a TLS context with the certificate settings specified. A server
+    needs its own certificate so certfile must be set.
 
     Args:
         certfile: The path to the certificate and optional key used for the
@@ -77,6 +77,9 @@ def create_server_tls_context(
     Returns:
         ssl.SSLContext: The configured server TLS context.
     """
+    if not certfile:
+        raise ValueError("A TLS server certificate must be specified when TLS is enabled")
+
     ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
     ssl_context.load_cert_chain(
         certfile,

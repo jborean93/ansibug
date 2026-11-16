@@ -61,6 +61,7 @@ def _state_with_frame(task_vars: dict[str, t.Any]) -> tuple[AnsibleDebugState, A
 
     task = MagicMock()
     task.args = {"opt": "value"}
+    task.copy.return_value = task
     sf = state.stackframes[1] = AnsibleStackFrame(id=1, task=task, task_vars=task_vars, debugger=debugger)
 
     return state, sf
