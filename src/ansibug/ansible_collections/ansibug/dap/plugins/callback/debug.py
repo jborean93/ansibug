@@ -200,6 +200,8 @@ class CallbackModule(CallbackBase):
         if not no_wait_for_config_done:
             log.info("Waiting for configuration done request to be received in Ansible")
             self._debugger.wait_for_config_done(timeout=None)
+            if not self._debugger.adapter_connected:
+                display.warning("Ansibug debug adapter is not connected, running the playbook without the debugger")
 
     def v2_playbook_on_stats(
         self,

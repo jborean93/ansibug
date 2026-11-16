@@ -4,8 +4,9 @@
 from __future__ import annotations
 
 import pathlib
+import sys
 
-from dap_client import DAPClient
+from dap_client import AnsibleProcess, DAPClient, get_test_env
 
 import ansibug.dap as dap
 
@@ -61,3 +62,31 @@ def test_unknown_message_on_debuggee(
     play_out = proc.communicate()
     if rc := proc.returncode:
         raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
+
+
+def test_connect_failure_does_not_hang(
+    tmp_path: pathlib.Path,
+) -> None:
+    playbook = tmp_path / "main.yml"
+    playbook.write_text(
+        r"""
+- hosts: localhost
+  gather_facts: false
+  tasks:
+  - name: ping test
+    ping:
+"""
+    )
+
+    proc = AnsibleProcess(
+        [sys.executable, "-m", "ansibug", "connect", "--addr", f"uds://{tmp_path / 'missing.sock'}", str(playbook)],
+        cwd=tmp_path,
+        env=get_test_env(),
+    )
+    try:
+        _, stderr = proc.communicate()
+    finally:
+        proc.stop()
+
+    assert proc.returncode == 0, proc.format_output()
+    assert b"Ansibug debug adapter is not connected" in stderr
