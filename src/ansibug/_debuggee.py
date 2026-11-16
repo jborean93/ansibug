@@ -239,6 +239,12 @@ class DebugState(t.Protocol):
     ) -> dap.EvaluateResponse:
         raise NotImplementedError()  # pragma: nocover
 
+    def exception_info(
+        self,
+        request: dap.ExceptionInfoRequest,
+    ) -> dap.ExceptionInfoResponse | dap.ErrorResponse:
+        raise NotImplementedError()  # pragma: nocover
+
     def get_scopes(
         self,
         request: dap.ScopesRequest,
@@ -345,7 +351,8 @@ class AnsibleDebugger(metaclass=Singleton):
         self._variable_counter = itertools.count(1)
 
         # Stores all the client breakpoints, key is the breakpoint number/id
-        self._breakpoint_exceptions: dict[str, bool] = {}
+        # The enabled exception filter ids and their optional condition.
+        self._exception_filters: dict[str, str | None] = {}
         self._breakpoints: dict[int, AnsibleLineBreakpoint] = {}
         self._breakpoint_counter = itertools.count(1)
         self._function_breakpoints: list[AnsibleFunctionBreakpoint] = []
@@ -383,17 +390,13 @@ class AnsibleDebugger(metaclass=Singleton):
     def adapter_connected(self) -> bool:
         return self._adapter_connected
 
-    @property
-    def should_stop_on_error(self) -> bool:
-        return self._breakpoint_exceptions.get(ExceptionBreakpointType.ON_ERROR.value, False)
-
-    @property
-    def should_stop_on_unreachable(self) -> bool:
-        return self._breakpoint_exceptions.get(ExceptionBreakpointType.ON_UNREACHABLE.value, False)
-
-    @property
-    def should_stop_on_skipped(self) -> bool:
-        return self._breakpoint_exceptions.get(ExceptionBreakpointType.ON_SKIPPED.value, False)
+    def get_exception_filter(
+        self,
+        filter_type: ExceptionBreakpointType,
+    ) -> tuple[bool, str | None]:
+        """Gets whether the exception filter is enabled and its condition."""
+        filters = self._exception_filters
+        return filter_type.value in filters, filters.get(filter_type.value)
 
     @contextlib.contextmanager
     def with_strategy(
@@ -794,6 +797,14 @@ class AnsibleDebugger(metaclass=Singleton):
     @process_message.register
     def _(
         self,
+        msg: dap.ExceptionInfoRequest,
+    ) -> None:
+        strategy = self._get_strategy()
+        self.queue_msg(strategy.exception_info(msg))
+
+    @process_message.register
+    def _(
+        self,
         msg: dap.NextRequest,
     ) -> None:
         strategy = self._get_strategy()
@@ -814,9 +825,12 @@ class AnsibleDebugger(metaclass=Singleton):
         self,
         msg: dap.SetExceptionBreakpointsRequest,
     ) -> None:
-        self._breakpoint_exceptions = {}
-        for breakpoint_type in msg.filters:
-            self._breakpoint_exceptions[breakpoint_type] = True
+        # A client that supports filter options sends the enabled filters
+        # there instead with the optional condition.
+        filters: dict[str, str | None] = dict.fromkeys(msg.filters)
+        for option in msg.filter_options:
+            filters[option.filter_id] = option.condition or None
+        self._exception_filters = filters
 
         resp = dap.SetExceptionBreakpointsResponse(request_seq=msg.seq)
         self.queue_msg(resp)

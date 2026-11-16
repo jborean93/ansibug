@@ -16,6 +16,13 @@
     + The name is a glob matched against the module as written, the module it resolved to, and the task name
     + For example `ansible.builtin.package` stops on every `package` task, `*.foo` on `foo` from any collection, and `Install *` on tasks named `Install ...`
     + Wrap a glob character in brackets to match it literally, for example `Restart [*]` only matches a task named `Restart *`
++ Exception breakpoints
+  + Added conditions to the `Uncaught Failures`, `Unreachable Hosts`, and `Skipped Tasks` exception breakpoints
+    + The condition is an Ansible conditional with the task result available as `result`
+    + For example `inventory_hostname == 'db1'` only stops when `db1` fails and `'Permission denied' in result.msg` only stops on that error
+  + Added the `exceptionInfo` request so clients like can show the error in the exception widget
+    + Some clients, like VSCode already used this info, this is to provide other clients another way to retrieve the exception info
+    + The error message and the module traceback, if Ansible captured one, are shown separately
 
 ### Changes
 
@@ -79,6 +86,7 @@
   + Fix path mappings matching a partial directory name, a root now has to match whole directory names
     + For example a `remoteRoot` of `/foo` previously also mapped `/foobar/main.yml`, now it only maps paths under `/foo/`
   + Fix race conditions between the client setting breakpoints and Ansible loading new files that could fail the strategy or leave a breakpoint unverified
+  + Fix the exception breakpoint details showing the raw `ErrorSummary(...)` value on Ansible 2.20 and newer instead of the formatted error
 + Variables and the debug console
   + Fix `!so` and `!ro` changing the module options of the task for every host, they now only apply to the host of the stopped thread
   + Fix `!so` and `!ro` failing when the client has not requested the scopes of the frame yet

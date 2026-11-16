@@ -79,6 +79,8 @@ class Capabilities(
         "supportSuspendDebuggee": "supports_suspend_debuggee",
         "supportsTerminateRequest": "supports_terminate_request",
         "supportsClipboardContext": "supports_clipboard_context",
+        "supportsExceptionInfoRequest": "supports_exception_info_request",
+        "supportsExceptionFilterOptions": "supports_exception_filter_options",
         "supportsLogPoints": "supports_log_points",
     },
 ):
@@ -139,7 +141,7 @@ class Capabilities(
     # supports_restart_request
     # supports_exception_options
     # supports_value_formatting_options
-    # supports_exception_info_request
+    supports_exception_info_request: bool = False
     supports_terminate_debuggee: bool = False
     supports_suspend_debuggee: bool = False
     # supports_delayed_stack_trace_loading
@@ -157,7 +159,7 @@ class Capabilities(
     supports_clipboard_context: bool = False
     # supports_stepping_granularity
     # supports_instruction_breakpoints
-    # supports_exception_filter_options
+    supports_exception_filter_options: bool = False
     # supports_single_thread_execution_requests
 
 
@@ -656,3 +658,35 @@ class FunctionBreakpoint(
     name: str
     condition: str | None = None
     hit_condition: str | None = None
+
+
+@dataclasses.dataclass()
+class ExceptionDetails(
+    metaclass=DAPObjectMeta,
+    dap={
+        "message": "message",
+        "typeName": "type_name",
+        "fullTypeName": "full_type_name",
+        "evaluateName": "evaluate_name",
+        "stackTrace": "stack_trace",
+        "innerException": "inner_exception",
+    },
+):
+    """Detailed information about an exception that has occurred.
+
+    Args:
+        message: Message contained in the exception.
+        type_name: Short type name of the exception object.
+        full_type_name: Fully-qualified type name of the exception object.
+        evaluate_name: An expression that can be evaluated in the current scope
+            to obtain the exception object.
+        stack_trace: Stack trace at the time the exception was thrown.
+        inner_exception: Details of the exception contained by this exception.
+    """
+
+    message: str | None = None
+    type_name: str | None = None
+    full_type_name: str | None = None
+    evaluate_name: str | None = None
+    stack_trace: str | None = None
+    inner_exception: list[ExceptionDetails] = dataclasses.field(default_factory=list)
