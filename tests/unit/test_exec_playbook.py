@@ -64,7 +64,7 @@ def test_config_dump_force_color(
 
     run_env: dict[str, str] = {}
 
-    def run(args: list[str], **kwargs: t.Any) -> subprocess.CompletedProcess:
+    def run(args: list[str], **kwargs: t.Any) -> subprocess.CompletedProcess[str]:
         run_env.update(kwargs["env"])
         return subprocess.CompletedProcess(args, 0, stdout="[]", stderr="")
 

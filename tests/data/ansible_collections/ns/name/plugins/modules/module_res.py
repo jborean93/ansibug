@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import datetime
-
 from ansible.module_utils.basic import AnsibleModule
 
 

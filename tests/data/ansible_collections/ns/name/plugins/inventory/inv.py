@@ -46,7 +46,7 @@ class InventoryModule(BaseInventoryPlugin, Constructable):
         self._read_config_data(path)
 
         hosts_file = self.get_option("hosts_file")
-        with open(hosts_file, mode="r") as fd:
+        with open(hosts_file) as fd:
             for host in fd:
                 hostname = host.rstrip()
                 inventory.add_host(hostname)

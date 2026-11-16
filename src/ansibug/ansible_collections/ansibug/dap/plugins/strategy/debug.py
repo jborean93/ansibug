@@ -387,7 +387,7 @@ class AnsibleListVariable(AnsibleVariable):
         index: str,
         value: t.Any,
     ) -> None:
-        self._ds[int(index)] = value  # type: ignore[index]
+        self._ds[int(index)] = value  # pyright: ignore[reportIndexIssue]
 
 
 class AnsibleDictVariable(AnsibleVariable):
@@ -414,14 +414,14 @@ class AnsibleDictVariable(AnsibleVariable):
         index: str,
     ) -> None:
         if index in self._ds:
-            del self._ds[index]  # type: ignore[attr-defined]
+            del self._ds[index]  # pyright: ignore[reportIndexIssue]
 
     def set(
         self,
         index: str,
         value: t.Any,
     ) -> None:
-        self._ds[index] = value  # type: ignore[index]
+        self._ds[index] = value  # pyright: ignore[reportIndexIssue]
 
 
 class AnsibleDictWithRawStoreVariable(AnsibleDictVariable):
@@ -572,11 +572,11 @@ class AnsibleDebugState(DebugState):
         if POST_DATATAGGING:
 
             def eval_condition(condition: str) -> bool:
-                template = trust_as_template(condition)
+                template = trust_as_template(condition)  # pyright: ignore[reportPossiblyUnboundVariable]
 
                 try:
                     return templar.evaluate_conditional(template)
-                except (AnsibleBrokenConditionalError, AnsibleUndefinedVariable):
+                except (AnsibleBrokenConditionalError, AnsibleUndefinedVariable):  # pyright: ignore[reportPossiblyUnboundVariable]
                     return False
 
         else:
@@ -900,9 +900,11 @@ class AnsibleDebugState(DebugState):
             if isinstance(value, HostVars):
                 # Data Tagging (2.19) removed the repr for HostVars so we just
                 # manually create the repr.
+                # HostVars is from the untyped ansible-core so the isinstance check doesn't narrow value.
+                host_vars: t.Any = value
                 hostvars = {}
-                for inventory_host in value:
-                    hostvars[inventory_host] = value.get(inventory_host)
+                for inventory_host in host_vars:
+                    hostvars[inventory_host] = host_vars.get(inventory_host)
                 value_repr = repr(hostvars)
             else:
                 value_repr = repr(value)
@@ -1042,16 +1044,16 @@ class AnsibleDebugState(DebugState):
         variables: dict[t.Any, t.Any],
     ) -> t.Any:
         templar = Templar(loader=self._loader, variables=variables)
-        expression = "{{ %s }}" % value
+        expression = "{{ %s }}" % value  # noqa: UP031 # format() would need the Jinja braces escaped
 
         if POST_DATATAGGING:
-            expression = trust_as_template(expression)
+            expression = trust_as_template(expression)  # pyright: ignore[reportPossiblyUnboundVariable]
 
         elif not C.DEFAULT_JINJA2_NATIVE:
             # Always use native types even if the config has not been enabled as
             # it allows expressions like `1` to be returned as an int and keeps
             # things consistent.
-            templar = templar.copy_with_new_env(environment_class=AnsibleNativeEnvironment)
+            templar = templar.copy_with_new_env(environment_class=AnsibleNativeEnvironment)  # pyright: ignore[reportPossiblyUnboundVariable]
 
         return templar.template(expression)
 
@@ -1076,7 +1078,7 @@ class StrategyModule(LinearStrategy):
         # warnings. The run() method will unset the deferred warning context.
         self._warning_ctx = None
         if POST_DATATAGGING:
-            self._warning_ctx = _DeferredWarningContext(variables={})
+            self._warning_ctx = _DeferredWarningContext(variables={})  # pyright: ignore[reportPossiblyUnboundVariable]
             self._warning_ctx.__enter__()
 
     def _execute_meta(
@@ -1091,7 +1093,7 @@ class StrategyModule(LinearStrategy):
         # involve too many internal attributes so just get it from the parent
         # locals.
 
-        task_vars = inspect.currentframe().f_back.f_locals["task_vars"]  # type: ignore[union-attr]  # I know this is bad
+        task_vars = inspect.currentframe().f_back.f_locals["task_vars"]  # pyright: ignore[reportOptionalMemberAccess]  # I know this is bad
         self._debug_state.start_task(target_host, task, task_vars)
         res = super()._execute_meta(task, play_context, iterator, target_host)
 

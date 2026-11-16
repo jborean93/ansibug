@@ -186,6 +186,7 @@ inventory = ns.name.inv.yml
 
     hosts_file.write_text("host1\nhost2\nhost3\n")
 
+    assert stopped_event.thread_id is not None
     dap_client.send(dap.ContinueRequest(thread_id=stopped_event.thread_id), dap.ContinueResponse)
 
     # Existing hosts are removed
@@ -204,6 +205,7 @@ inventory = ns.name.inv.yml
 
     stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
     assert stopped_event.thread_id == host1_tid
+    assert stopped_event.thread_id is not None
     dap_client.send(dap.ContinueRequest(thread_id=stopped_event.thread_id), dap.ContinueResponse)
 
     thread_event = dap_client.wait_for_message(dap.ThreadEvent)
@@ -212,6 +214,7 @@ inventory = ns.name.inv.yml
 
     stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
     assert stopped_event.thread_id == host2_tid
+    assert stopped_event.thread_id is not None
     dap_client.send(dap.ContinueRequest(thread_id=stopped_event.thread_id), dap.ContinueResponse)
 
     thread_event = dap_client.wait_for_message(dap.ThreadEvent)
@@ -229,6 +232,7 @@ inventory = ns.name.inv.yml
 
     stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
     assert stopped_event.thread_id == host1_tid
+    assert stopped_event.thread_id is not None
     dap_client.send(dap.ContinueRequest(thread_id=stopped_event.thread_id), dap.ContinueResponse)
 
     thread_event = dap_client.wait_for_message(dap.ThreadEvent)
@@ -237,6 +241,7 @@ inventory = ns.name.inv.yml
 
     stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
     assert stopped_event.thread_id == host2_tid
+    assert stopped_event.thread_id is not None
     dap_client.send(dap.ContinueRequest(thread_id=stopped_event.thread_id), dap.ContinueResponse)
 
     thread_event = dap_client.wait_for_message(dap.ThreadEvent)
@@ -245,6 +250,7 @@ inventory = ns.name.inv.yml
 
     stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
     assert stopped_event.thread_id == host3_tid
+    assert stopped_event.thread_id is not None
     dap_client.send(dap.ContinueRequest(thread_id=stopped_event.thread_id), dap.ContinueResponse)
 
     dap_client.wait_for_message(dap.ThreadEvent)
@@ -329,6 +335,7 @@ inventory = ns.name.inv.yml
 
     hosts_file.write_text("host1\n")
 
+    assert stopped_event.thread_id is not None
     dap_client.send(dap.ContinueRequest(thread_id=stopped_event.thread_id), dap.ContinueResponse)
 
     # Existing hosts are removed
@@ -347,6 +354,7 @@ inventory = ns.name.inv.yml
 
     stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
     assert stopped_event.thread_id == host1_tid
+    assert stopped_event.thread_id is not None
     dap_client.send(dap.ContinueRequest(thread_id=stopped_event.thread_id), dap.ContinueResponse)
 
     thread_event = dap_client.wait_for_message(dap.ThreadEvent)
@@ -360,6 +368,7 @@ inventory = ns.name.inv.yml
 
     stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
     assert stopped_event.thread_id == host1_tid
+    assert stopped_event.thread_id is not None
     dap_client.send(dap.ContinueRequest(thread_id=stopped_event.thread_id), dap.ContinueResponse)
 
     dap_client.wait_for_message(dap.ThreadEvent)
@@ -422,6 +431,7 @@ host2 ansible_host=127.0.0.1 ansible_connection=local ansible_python_interpreter
     assert stopped_event.thread_id == host1_tid
     assert stopped_event.hit_breakpoint_ids == [bp_resp.breakpoints[0].id]
 
+    assert stopped_event.thread_id is not None
     dap_client.send(dap.ContinueRequest(thread_id=stopped_event.thread_id), dap.ContinueResponse)
 
     thread_event = dap_client.wait_for_message(dap.ThreadEvent)
@@ -432,6 +442,7 @@ host2 ansible_host=127.0.0.1 ansible_connection=local ansible_python_interpreter
     assert stopped_event.thread_id == host2_tid
     assert stopped_event.hit_breakpoint_ids == [bp_resp.breakpoints[0].id]
 
+    assert stopped_event.thread_id is not None
     dap_client.send(dap.ContinueRequest(thread_id=stopped_event.thread_id), dap.ContinueResponse)
 
     stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
@@ -439,6 +450,7 @@ host2 ansible_host=127.0.0.1 ansible_connection=local ansible_python_interpreter
     assert stopped_event.thread_id == host2_tid
     assert stopped_event.hit_breakpoint_ids == [bp_resp.breakpoints[1].id]
 
+    assert stopped_event.thread_id is not None
     dap_client.send(dap.ContinueRequest(thread_id=stopped_event.thread_id), dap.ContinueResponse)
 
     dap_client.wait_for_message(dap.ThreadEvent)
@@ -501,6 +513,7 @@ host2 ansible_host=127.0.0.1 ansible_connection=local ansible_python_interpreter
     assert stopped_event.thread_id == host1_tid
     assert stopped_event.hit_breakpoint_ids == [bp_resp.breakpoints[0].id]
 
+    assert stopped_event.thread_id is not None
     dap_client.send(dap.ContinueRequest(thread_id=stopped_event.thread_id), dap.ContinueResponse)
 
     thread_event = dap_client.wait_for_message(dap.ThreadEvent)
@@ -511,6 +524,7 @@ host2 ansible_host=127.0.0.1 ansible_connection=local ansible_python_interpreter
     assert stopped_event.thread_id == host2_tid
     assert stopped_event.hit_breakpoint_ids == [bp_resp.breakpoints[0].id]
 
+    assert stopped_event.thread_id is not None
     dap_client.send(dap.ContinueRequest(thread_id=stopped_event.thread_id), dap.ContinueResponse)
 
     dap_client.wait_for_message(dap.ThreadEvent)

@@ -10,8 +10,8 @@ import ansibug.dap as dap
 
 def test_connection_no_data() -> None:
     conn = dap.DebugAdapterConnection()
-    conn.data_to_send() == b""
-    conn.data_to_send(n=10) == b""
+    assert conn.data_to_send() == b""
+    assert conn.data_to_send(n=10) == b""
 
 
 def test_connection_all_data() -> None:

@@ -1,63 +1,89 @@
 name: Test ansibug
+
 on:
   push:
     branches:
-    - main
+      - main
+    tags:
+      # A version tag also drafts its GitHub release, with the sdist and wheel; publishing that draft publishes to PyPI
+      # (publish.yml). Tag the release with the version in src/ansibug/_version.py, as the build checks they match.
+      #   TAG="v$(uv run python -c 'from ansibug._version import __version__; print(__version__)')" && git tag -a "$TAG" -m "$TAG" && git push origin "$TAG"
+      - 'v*'
 
   pull_request:
     branches:
-    - main
+      - main
 
-  release:
-    types:
-    - published
+permissions: {}
+
+env:
+  # Kept strict to support reproducible builds.
+  UV_VERSION: "0.13.8"
 
 jobs:
   sanity:
-    name: run sanity checks
+    name: Sanity
     runs-on: ubuntu-latest
+    permissions:
+      contents: read  # Repo checkout
     steps:
-    - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-    - uses: actions/setup-python@v6
-      with:
-        python-version: "3.12"
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: ${{ env.UV_VERSION }}
+          cache-suffix: sanity
 
-    - name: Run sanity tests
-      shell: bash
-      run: |
-        set -ex
+      - name: Check uv.lock is up to date
+        run: uv lock --check
 
-        python -Im pip install uv
-        uv run tox run -f sanity
+      - name: Run sanity checks
+        run: |
+          uv sync --no-install-project
+          uv run --no-sync tox run -f sanity
 
   build:
-    name: build sdist and wheel
-    needs:
-    - sanity
-
+    name: Build sdist and wheel
+    needs: sanity
     runs-on: ubuntu-latest
+    permissions:
+      contents: read  # Repo checkout
     steps:
-    - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-    - name: build sdist and wheel
-      run: |
-        set -ex
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: ${{ env.UV_VERSION }}
+          cache-suffix: build
 
-        python -m pip install build
-        python -m build
+      - name: Build
+        run: uv build
 
-    - uses: actions/upload-artifact@v7
-      with:
-        name: artifact
-        path: ./dist/*
+      - name: Verify tag matches project version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          PROJECT_VERSION="$(tar -xzOf dist/*.tar.gz --wildcards '*/PKG-INFO' | sed -n 's/^Version: //p')"
+          if [ "${GITHUB_REF_NAME}" != "v${PROJECT_VERSION}" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match project version ${PROJECT_VERSION}"
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: artifact
+          path: dist/
+          if-no-files-found: error
 
   test:
-    name: test
-    needs:
-      - build
-
+    name: Test (${{ matrix.os }}, Python ${{ matrix.python-version }}, ansible ${{ matrix.ansible-version }})
+    needs: build
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read  # Repo checkout
     strategy:
       fail-fast: false
       matrix:
@@ -156,79 +182,92 @@ jobs:
           ansible-version: devel
 
     steps:
-      - uses: actions/checkout@v6
-
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          python-version: ${{ matrix.python-version }}
-          cache: pip
-          cache-dependency-path: |
-            pyproject.toml
+          persist-credentials: false
 
-      - uses: actions/download-artifact@v8
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: ${{ env.UV_VERSION }}
+          cache-suffix: test-${{ matrix.python-version }}-${{ matrix.ansible-version }}
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: artifact
-          path: ./dist
+          path: dist/
 
-      - name: Calculate env vars
-        shell: bash
+      - name: Run tests
         run: |
-          set -ex
-          OS=$( echo '${{ matrix.os }}' | tr '-' ' ' | awk '{print $1}' )
-          echo "OS=${OS}" >> $GITHUB_ENV
-
-          TOX_PYTHON=py$( echo '${{ matrix.python-version }}' | tr -d . )
-          echo "TOX_PYTHON=${TOX_PYTHON}" >> $GITHUB_ENV
-
-      - name: Test
-        shell: bash
-        run: |
-          set -ex
-
-          python -Im pip install uv
-          uv run tox run \
-              -f ${{ env.TOX_PYTHON }} ansible_${{ matrix.ansible-version }} \
-              --installpkg dist/*.whl
+          TOX_PYTHON="py$(echo "${PYTHON_VERSION}" | tr -d .)"
+          # tox and the tools only, not ansibug, which is the wheel given.
+          uv sync --no-install-project
+          uv run --no-sync tox run -f "${TOX_PYTHON}" "ansible_${ANSIBLE_VERSION}" --installpkg dist/*.whl
         env:
+          PYTHON_VERSION: ${{ matrix.python-version }}
+          ANSIBLE_VERSION: ${{ matrix.ansible-version }}
           PYTEST_ADDOPTS: --color=yes --junitxml junit/test-results.xml
 
       - name: Upload Test Results
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: Unit Test Results (${{ matrix.os }} ${{ matrix.python-version }} ansible_${{ matrix.ansible-version }})
           path: ./junit/test-results.xml
 
       - name: Upload Coverage Results
         if: always() && !startsWith(github.ref, 'refs/tags/v')
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: Coverage Results (${{ matrix.os }} ${{ matrix.python-version }} ansible_${{ matrix.ansible-version }})
           path: ./coverage.xml
 
       - name: Upload Coverage to codecov
         if: always()
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           files: ./coverage.xml
-          flags: ${{ env.OS }},py${{ matrix.python-version }},ansible_${{ matrix.ansible-version }}
+          flags: ${{ runner.os }},py${{ matrix.python-version }},ansible_${{ matrix.ansible-version }}
           token: ${{ secrets.CODECOV_TOKEN }}
 
-  publish:
-    name: publish
-    needs:
-    - test
+  draft:
+    name: Draft release
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
-      # IMPORTANT: this permission is mandatory for trusted publishing
-      id-token: write
-
+      contents: write  # Create the draft release
+      id-token: write  # Sigstore signing certificate, for the attestations
+      attestations: write  # Store the attestations
+      artifact-metadata: write  # The attestations' storage records
     steps:
-    - uses: actions/download-artifact@v8
-      with:
-        name: artifact
-        path: ./dist
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: artifact
+          path: dist/
 
-    - name: Publish
-      if: startsWith(github.ref, 'refs/tags/v')
-      uses: pypa/gh-action-pypi-publish@release/v1
+      # publish.yml only uploads files these attestations show were built here from the tag.
+      - name: Attest the sdist and wheel
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/*
+
+      - name: Create or update the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if is_draft="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null)"; then
+            if [ "$is_draft" != "true" ]; then
+              echo "::error::Release $TAG is already published, its assets cannot be changed. Release a new version instead."
+              exit 1
+            fi
+
+            gh release upload "$TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$TAG" dist/* \
+              --draft \
+              --verify-tag \
+              --title "$TAG" \
+              --generate-notes \
+              --repo "$GITHUB_REPOSITORY"
+          fi

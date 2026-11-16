@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import pathlib
 
-import ansible
 import pytest
 from dap_client import DAPClient
 
@@ -134,6 +133,7 @@ host2 ansible_host=127.0.0.1 ansible_connection=local ansible_python_interpreter
     )
     assert "host1" in [v.name for v in global_host_vars.variables]
     assert "host2" in [v.name for v in global_host_vars.variables]
+    assert stopped_event.thread_id is not None
     dap_client.send(dap.ContinueRequest(thread_id=stopped_event.thread_id), dap.ContinueResponse)
 
     thread_event = dap_client.wait_for_message(dap.ThreadEvent)
@@ -174,6 +174,7 @@ host2 ansible_host=127.0.0.1 ansible_connection=local ansible_python_interpreter
         dap.SetVariableResponse,
     )
 
+    assert stopped_event.thread_id is not None
     dap_client.send(dap.ContinueRequest(thread_id=stopped_event.thread_id), dap.ContinueResponse)
 
     stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
@@ -196,6 +197,7 @@ host2 ansible_host=127.0.0.1 ansible_connection=local ansible_python_interpreter
         dap.SetVariableResponse,
     )
 
+    assert stopped_event.thread_id is not None
     dap_client.send(dap.ContinueRequest(thread_id=stopped_event.thread_id), dap.ContinueResponse)
 
     stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
@@ -218,6 +220,7 @@ host2 ansible_host=127.0.0.1 ansible_connection=local ansible_python_interpreter
         dap.SetVariableResponse,
     )
 
+    assert stopped_event.thread_id is not None
     dap_client.send(dap.ContinueRequest(thread_id=stopped_event.thread_id), dap.ContinueResponse)
 
     stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
@@ -242,6 +245,7 @@ host2 ansible_host=127.0.0.1 ansible_connection=local ansible_python_interpreter
     else:
         raise Exception("Failed to find set_var in host vars")
 
+    assert stopped_event.thread_id is not None
     dap_client.send(dap.ContinueRequest(thread_id=stopped_event.thread_id), dap.ContinueResponse)
 
     stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
@@ -266,6 +270,7 @@ host2 ansible_host=127.0.0.1 ansible_connection=local ansible_python_interpreter
     else:
         raise Exception("Failed to find set_var in host vars")
 
+    assert stopped_event.thread_id is not None
     dap_client.send(dap.ContinueRequest(thread_id=stopped_event.thread_id), dap.ContinueResponse)
 
     thread_event = dap_client.wait_for_message(dap.ThreadEvent)
@@ -1504,6 +1509,7 @@ def test_module_res_types(
 
     assert len(to_find) == 0
 
+    assert stopped_event.thread_id is not None
     dap_client.send(dap.ContinueRequest(thread_id=stopped_event.thread_id), dap.ContinueResponse)
 
     thread_event = dap_client.wait_for_message(dap.ThreadEvent)

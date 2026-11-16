@@ -41,36 +41,41 @@ python -m pip install ansibug
 To test out the changes locally run the following:
 ```bash
 git clone https://github.com/jborean93/ansibug.git
+cd ansibug
 
 uv sync
-pre-commit install
+uv run pre-commit install
 ```
 
 This will install the current code in editable mode and also include some development libraries needed for testing or other development features.
 
+The dependency versions, including each ansible-core release tested, are pinned in `uv.lock`, which CI and tox install from.
+After changing a dependency in `pyproject.toml` run `uv lock` and commit the updated `uv.lock`, CI fails if it is out of date.
+Use `uv lock --upgrade` or `uv lock --upgrade-package <name>` to move the pinned versions forward.
+
 # Testing
 This library uses [tox](https://tox.wiki/) to run the sanity and integration tests.
-Once the dev extras for this library has been installed, all the tests can be run by running the `tox` command.
+Once `uv sync` has been run, all the tests can be run with `uv run tox`.
 
 As the support matrix for this library can take some time to run it might be beneficial to run only certain tests.
 The following factors are available in tox
 
 + `sanity`
-+ `py3{10,11,12,13,14}`
-+ `ansible_{2.16,2.17,2.18,2.19,2.20,devel}`
++ `py3{10,11,12,13,14,15}`
++ `ansible_{2.16,2.17,2.18,2.19,2.20,2.21,2.22,devel}`
 
 Here are some example factors that can be invoked with tox:
 
 ```bash
 # Run only the sanity tests
-tox run -f sanity
+uv run tox run -f sanity
 
 # Run Ansible 2.16 on all its supported Python versions
-tox run -f ansible_2.16
+uv run tox run -f ansible_2.16
 
 # Run Python 3.12 on all the supported Ansible versions
-tox run -f py312
+uv run tox run -f py312
 
 # Run Ansible 2.16 tests on Python 3.12
-tox run -f py312 ansible_2.16
+uv run tox run -f py312 ansible_2.16
 ```

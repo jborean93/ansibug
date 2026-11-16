@@ -60,6 +60,7 @@ host2 ansible_host=127.0.0.1 ansible_connection=local ansible_python_interpreter
     assert stopped_event.thread_id == host1_tid
     assert stopped_event.hit_breakpoint_ids == [bid]
 
+    assert stopped_event.thread_id is not None
     dap_client.send(dap.ContinueRequest(thread_id=stopped_event.thread_id), dap.ContinueResponse)
 
     thread_event = dap_client.wait_for_message(dap.ThreadEvent)
@@ -80,6 +81,7 @@ host2 ansible_host=127.0.0.1 ansible_connection=local ansible_python_interpreter
     assert all_threads.threads[2].id == host2_tid
     assert all_threads.threads[2].name == "host2"
 
+    assert stopped_event.thread_id is not None
     dap_client.send(dap.ContinueRequest(thread_id=stopped_event.thread_id), dap.ContinueResponse)
 
     thread_event = dap_client.wait_for_message(dap.ThreadEvent)
@@ -163,6 +165,7 @@ host1 ansible_host=127.0.0.1 ansible_connection=local ansible_python_interpreter
     assert stopped_event.hit_breakpoint_ids == [bp_resp.breakpoints[0].id]
 
     # The new host should not be added until the new play
+    assert stopped_event.thread_id is not None
     dap_client.send(dap.StepInRequest(thread_id=stopped_event.thread_id), dap.StepInResponse)
 
     stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
@@ -170,6 +173,7 @@ host1 ansible_host=127.0.0.1 ansible_connection=local ansible_python_interpreter
     assert stopped_event.thread_id == host1_tid
     assert stopped_event.hit_breakpoint_ids == []
 
+    assert stopped_event.thread_id is not None
     dap_client.send(dap.ContinueRequest(thread_id=stopped_event.thread_id), dap.ContinueResponse)
 
     thread_event = dap_client.wait_for_message(dap.ThreadEvent)
@@ -188,6 +192,7 @@ host1 ansible_host=127.0.0.1 ansible_connection=local ansible_python_interpreter
     assert len(st_resp.stack_frames) == 1
     assert st_resp.stack_frames[0].name == "ping test"
 
+    assert stopped_event.thread_id is not None
     dap_client.send(dap.ContinueRequest(thread_id=stopped_event.thread_id), dap.ContinueResponse)
 
     thread_event = dap_client.wait_for_message(dap.ThreadEvent)
@@ -202,6 +207,7 @@ host1 ansible_host=127.0.0.1 ansible_connection=local ansible_python_interpreter
     assert len(st_resp.stack_frames) == 1
     assert st_resp.stack_frames[0].name == "ping test"
 
+    assert stopped_event.thread_id is not None
     dap_client.send(dap.ContinueRequest(thread_id=stopped_event.thread_id), dap.ContinueResponse)
 
     thread_event = dap_client.wait_for_message(dap.ThreadEvent)

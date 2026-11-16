@@ -4,16 +4,23 @@
         120
     ],
     "files.trimTrailingWhitespace": true,
+    // Directories tools write, which VS Code needn't watch: .tox alone has a venv per tox env, and watching
+    // them uses up the user's inotify watches (fs.inotify.max_user_watches).
+    "files.watcherExclude": {
+        "**/.pytest_cache/**": true,
+        "**/.ruff_cache/**": true,
+        "**/.tox/**": true,
+        "**/.venv/**": true,
+        "**/build/**": true,
+        "**/dist/**": true
+    },
     "editor.trimAutoWhitespace": true,
-    "black-formatter.importStrategy": "fromEnvironment",
-    "isort.importStrategy": "fromEnvironment",
-    "mypy-type-checker.importStrategy": "fromEnvironment",
-    "python.analysis.extraPaths": [
-        "src",
-        "tests/utils"
-    ],
+    "ruff.importStrategy": "fromEnvironment",
+    // basedpyright reads its config from pyproject.toml, these stop the mypy extension and Pylance duplicating it.
+    "mypy-type-checker.ignorePatterns": ["*"],
+    "python.languageServer": "None",
     "[python]": {
-        "editor.defaultFormatter": "ms-python.black-formatter",
+        "editor.defaultFormatter": "charliermarsh.ruff",
         "editor.formatOnSave": true,
         "editor.codeActionsOnSave": {
             "source.organizeImports": "explicit"

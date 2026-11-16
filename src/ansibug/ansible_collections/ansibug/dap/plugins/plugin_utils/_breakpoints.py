@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import typing as t
+
 from ansible.playbook.block import Block
 from ansible.playbook.play import Play
 from ansible.playbook.task import Task
@@ -19,13 +21,13 @@ except ImportError:
 from ansibug._debuggee import AnsibleDebugger
 
 
-def _format_exception(result: dict) -> str:
+def _format_exception(result: dict[str, t.Any]) -> str:
     text = str(result.get("msg", result.get("stdout", "Unknown error")))
 
     if exc := result.get("exception"):
         # Data Tagging has special method to format the exception tuple
-        if HAS_FORMAT_MESSAGE and isinstance(exc, ErrorSummary):
-            return _format_message(exc, False)
+        if HAS_FORMAT_MESSAGE and isinstance(exc, ErrorSummary):  # pyright: ignore[reportPossiblyUnboundVariable]
+            return _format_message(exc, False)  # pyright: ignore[reportPossiblyUnboundVariable]
 
         text += f"\n\n{exc}"
 

@@ -62,7 +62,7 @@ def certs(tmp_path_factory: pytest.TempPathFactory) -> CertFixture:
             (ca_key_usage, True),
         ],
     )
-    ca_aki = x509.AuthorityKeyIdentifier.from_issuer_public_key(ca[0].public_key())  # type: ignore[arg-type]
+    ca_aki = x509.AuthorityKeyIdentifier.from_issuer_public_key(ca[0].public_key())  # pyright: ignore[reportArgumentType]
 
     server = generate_cert(
         "ansibug-server",
@@ -82,7 +82,7 @@ def certs(tmp_path_factory: pytest.TempPathFactory) -> CertFixture:
     cert_dir = tmp_path_factory.mktemp(basename="certificates")
     test_certs = CertFixture(
         ca=cert_dir / "ca.pem",
-        password="".join(secrets.choice(string.ascii_letters + string.digits) for i in range(16)),
+        password="".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(16)),
         client_invalid=cert_dir / "client-invalid.pem",
         client_combined=cert_dir / "client-combined.pem",
         client_cert_only=cert_dir / "client-cert.pem",

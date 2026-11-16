@@ -8,6 +8,7 @@ import enum
 import json
 import queue
 import sys
+import types
 import typing as t
 
 
@@ -61,15 +62,15 @@ class EventType(enum.Enum):
 
 
 class DAPEncoder(json.JSONEncoder):
-    def default(self, obj: t.Any) -> t.Any:
-        if isinstance(obj.__class__, DAPObjectMeta) and hasattr(obj, "pack"):
-            return obj.pack()
+    def default(self, o: t.Any) -> t.Any:
+        if isinstance(o.__class__, DAPObjectMeta) and hasattr(o, "pack"):
+            return o.pack()
 
-        elif isinstance(obj, enum.Enum):
-            return obj.value
+        elif isinstance(o, enum.Enum):
+            return o.value
 
         else:
-            return str(obj)
+            return str(o)
 
 
 def _parse_field_type(obj: type, value: str) -> t.Callable[[t.Any], t.Any] | None:
@@ -77,17 +78,18 @@ def _parse_field_type(obj: type, value: str) -> t.Callable[[t.Any], t.Any] | Non
     base_locals = dict(vars(obj))
     evaled_type = eval(value, base_globals, base_locals)
 
+    # The origin is checked first as Python 3.10 treats list[X] as an instance of type.
     attr_type = None
-    if isinstance(evaled_type, type):
+    type_origin = t.get_origin(evaled_type)
+    # X | None is a types.UnionType before 3.14, which made it the same as t.Union.
+    if type_origin in (t.Union, types.UnionType):  # pyright: ignore[reportDeprecated]
+        union_types = t.get_args(evaled_type)
+        if len(union_types) == 2 and type(None) in union_types:
+            attr_type = union_types[0]
+    elif type_origin is list:
+        attr_type = t.get_args(evaled_type)[0]
+    elif isinstance(evaled_type, type):
         attr_type = evaled_type
-    else:
-        type_origin = t.get_origin(evaled_type)
-        if type_origin is t.Union:
-            union_types = t.get_args(evaled_type)
-            if len(union_types) == 2 and type(None) in union_types:
-                attr_type = union_types[0]
-        elif type_origin is list:
-            attr_type = t.get_args(evaled_type)[0]
 
     if not attr_type:
         return None
@@ -123,9 +125,9 @@ class DAPObjectMeta(type):
 
         # Build the DAP key mapping dictionary for each type, merge it with the
         # base class definition.
-        dap = dap or {}
+        dap_map: dict[str, t.Any] = dap or {}
         for base in reversed(bases):
-            dap = getattr(base, "_dap", {}) | dap
+            dap_map = getattr(base, "_dap", {}) | dap_map
 
         # We cannot refer to these types directly as they are created by this
         # metaclass, store them for easier referencing later.
@@ -138,7 +140,7 @@ class DAPObjectMeta(type):
         elif name == "Response" and namespace["__module__"] == DAPObjectMeta.__module__:
             DAPObjectMeta.RESPONSE_TYPE = cls
 
-        setattr(cls, "_dap", dap)
+        setattr(cls, "_dap", dap_map)
 
         # Only add pack to the first class in inheritance.
         if "pack" not in cls.__dict__:
@@ -146,11 +148,12 @@ class DAPObjectMeta(type):
 
         # Use the explicitly defined unpack class method if it's present
         # otherwise use ours.
-        if not (unpack := namespace.get("unpack", None)):
+        unpack: t.Callable[[dict[str, t.Any]], t.Any]
+        if namespace.get("unpack", None):
+            unpack = getattr(cls, "unpack")
+        else:
             unpack = lambda d: DAPObjectMeta.default_unpack(cls, d)
             setattr(cls, "unpack", unpack)
-        else:
-            unpack = getattr(cls, "unpack")
 
         # Register the unpack methods for each message according to the type
         # and type identifier.
@@ -191,7 +194,7 @@ class DAPObjectMeta(type):
     ) -> dict[str, t.Any]:
         packed_value: dict[str, t.Any] = {}
 
-        todo: queue.Queue[tuple[t.Dict[str, t.Any], t.Dict[str, t.Any]]] = queue.Queue()
+        todo: queue.Queue[tuple[dict[str, t.Any], dict[str, t.Any]]] = queue.Queue()
         todo.put((getattr(self.__class__, "_dap", {}), packed_value))
 
         while True:
@@ -215,12 +218,12 @@ class DAPObjectMeta(type):
         data: dict[str, t.Any],
     ) -> t.Any:
         dap = getattr(cls, "_dap", {})
-        type_info = dap.get("__types", {})
+        type_info: dict[str, tuple[bool, t.Callable[[t.Any], t.Any] | None]] = dap.get("__types", {})
         if not type_info and dataclasses.is_dataclass(cls):
-            field_info = dataclasses.fields(cls)  # type: ignore[unreachable]
+            field_info = dataclasses.fields(cls)
 
             type_info = {}
-            cls_fields = {}
+            cls_fields: dict[str, type] = {}
             for base_cls in cls.__mro__:
                 if not dataclasses.is_dataclass(base_cls):
                     continue
@@ -238,7 +241,7 @@ class DAPObjectMeta(type):
         kwargs: dict[str, t.Any] = {}
         manual_set: dict[str, t.Any] = {}
 
-        todo: queue.Queue[tuple[t.Dict[str, t.Any], t.Dict[str, t.Any]]] = queue.Queue()
+        todo: queue.Queue[tuple[dict[str, t.Any], dict[str, t.Any]]] = queue.Queue()
         todo.put((dap, data))
 
         while True:
@@ -256,13 +259,12 @@ class DAPObjectMeta(type):
                     todo.put((field_meta, value))
                     continue
 
-                can_init, unpack_func = type_info.get(field_meta, None)
-                if not unpack_func:
-                    unpack_func = lambda v: v
+                can_init, field_unpack = type_info[field_meta]
+                unpack_func: t.Callable[[t.Any], t.Any] = field_unpack or (lambda v: v)
 
                 dict_to_update = kwargs if can_init else manual_set
                 if isinstance(value, list):
-                    dict_to_update[field_meta] = [unpack_func(v) for v in value]
+                    dict_to_update[field_meta] = [unpack_func(v) for v in t.cast("list[t.Any]", value)]
                 else:
                     dict_to_update[field_meta] = unpack_func(value)
 
@@ -280,7 +282,7 @@ class ProtocolMessage(metaclass=DAPObjectMeta, dap={"seq": "seq", "type": "messa
     seq: int = dataclasses.field(init=False, default=0)
     message_type: MessageType = dataclasses.field(init=False)
 
-    def pack(self) -> dict[str, t.Any]:  # type: ignore[empty-body] # Defined in metaclass
+    def pack(self) -> dict[str, t.Any]:  # Defined in metaclass
         ...  # pragma: no cover
 
     @classmethod

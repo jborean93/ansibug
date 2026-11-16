@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import collections.abc
 import logging
 import pathlib
 import pickle
@@ -25,11 +26,11 @@ log = logging.getLogger(__name__)
 
 
 class MPProtocol:
-    def on_msg_received(self, msg: ProtocolMessage) -> None:
+    def on_msg_received(self, msg: ProtocolMessage) -> None:  # pyright: ignore[reportUnusedParameter]
         """Called when a message has been received from the peer."""
         return  # pragma: nocover
 
-    def connection_closed(self, exp: Exception | None) -> None:
+    def connection_closed(self, exp: Exception | None) -> None:  # pyright: ignore[reportUnusedParameter]
         """Called when the connection is closed, exp will contain an exception if an error occurred."""
         return  # pragma: nocover
 
@@ -82,7 +83,7 @@ class MPQueue:
 
     def start(
         self,
-        timeout: float = 0,
+        timeout: float = 0,  # pyright: ignore[reportUnusedParameter] # Used by the subclasses
     ) -> None:
         self._recv_thread = threading.Thread(
             target=self._recv_handler,
@@ -143,7 +144,7 @@ class ClientMPQueue(MPQueue):
         self,
         timeout: float = 0,
     ) -> None:
-        addr_info: list[
+        addr_info: collections.abc.Sequence[
             tuple[
                 socket.AddressFamily,
                 socket.SocketKind,
