@@ -24,6 +24,10 @@ from .dap import ProtocolMessage
 
 log = logging.getLogger(__name__)
 
+# How long the server waits for an accepted client to complete the handshake
+# before dropping it and waiting for another connection.
+SERVER_HANDSHAKE_TIMEOUT = 10.0
+
 
 class MPProtocol:
     def on_msg_received(self, msg: ProtocolMessage) -> None:  # pyright: ignore[reportUnusedParameter]
@@ -38,7 +42,7 @@ class MPProtocol:
 class MPQueue:
     def __init__(
         self,
-        sock: SocketHelper,
+        sock: SocketHelper | None,
         proto: t.Callable[[], MPProtocol],
         cancel_token: SocketCancellationToken | None = None,
     ) -> None:
@@ -61,17 +65,14 @@ class MPQueue:
 
     @property
     def address(self) -> str:
-        if self._socket.family == socket.AddressFamily.AF_UNIX:
-            host = self._socket.getsockname()
-            return f"uds://{host}"
+        raise NotImplementedError()  # pragma: nocover
 
-        elif self._socket.family == socket.AddressFamily.AF_INET6:
-            host, port, _, _ = self._socket.getsockname()
-            return f"tcp://[{host}]:{port}"
+    @property
+    def _connection(self) -> SocketHelper:
+        if not self._socket:
+            raise RuntimeError("The MPQueue has not been started")
 
-        else:
-            host, port = self._socket.getsockname()
-            return f"tcp://{host}:{port}"
+        return self._socket
 
     def send(
         self,
@@ -79,7 +80,7 @@ class MPQueue:
     ) -> None:
         b_data = pickle.dumps(data)
         b_len = len(b_data).to_bytes(4, byteorder="little")
-        self._socket.send(b_len + b_data, self._cancel_token)
+        self._connection.send(b_len + b_data, self._cancel_token)
 
     def start(
         self,
@@ -99,18 +100,19 @@ class MPQueue:
             self._recv_thread.join(timeout=5)
         self._recv_thread = None
 
-        self._socket.shutdown(socket.SHUT_RDWR)
-        self._socket.close()
+        if self._socket:
+            self._socket.shutdown(socket.SHUT_RDWR)
+            self._socket.close()
 
     def _recv_handler(self) -> None:
         try:
             while True:
-                b_data_len = self._socket.recv(4, self._cancel_token)
+                b_data_len = self._connection.recv(4, self._cancel_token)
                 if not b_data_len:
                     break
 
                 data_len = int.from_bytes(b_data_len, byteorder="little", signed=False)
-                b_data = self._socket.recv(data_len, self._cancel_token)
+                b_data = self._connection.recv(data_len, self._cancel_token)
 
                 py_obj = pickle.loads(b_data)
                 obj = t.cast(ProtocolMessage, py_obj)
@@ -135,10 +137,15 @@ class ClientMPQueue(MPQueue):
         ssl_context: ssl.SSLContext | None = None,
         cancel_token: SocketCancellationToken | None = None,
     ) -> None:
-        # Use a blank socket, the real one is created in start()
-        super().__init__(SocketHelper("client", socket.socket()), proto, cancel_token=cancel_token)
+        # The socket is created in start().
+        super().__init__(None, proto, cancel_token=cancel_token)
+        self._raw_address = address
         self._address = parse_addr_string(address)
         self._ssl_context = ssl_context
+
+    @property
+    def address(self) -> str:
+        return self._raw_address
 
     def start(
         self,
@@ -179,25 +186,28 @@ class ClientMPQueue(MPQueue):
                 sock.close()
             sock = None
 
-        if sock:
-            self._socket = SocketHelper("client", sock)
-        else:
+        if not sock:
             raise error
 
+        conn = self._socket = SocketHelper("client", sock)
+
+        # The handshake must also complete within the connect timeout.
+        conn.settimeout(timeout or None)
         if self._ssl_context:
-            self._socket.wrap_tls(
+            conn.wrap_tls(
                 self._ssl_context,
+                self._cancel_token,
                 server_side=False,
                 server_hostname=ssl_hostname,
             )
-            # TLS 1.3 won't validate their cert was accepted until its first
-            # read. This ensures the connection is validated before it is
-            # going to be used.
-            self._socket.recv(1, self._cancel_token)
-        else:
-            # Ensures that the server is actually connected to us and we aren't
-            # in the backlog waiting for an accept().
-            self._socket.recv(1, self._cancel_token)
+
+        # Ensures that the server is actually connected to us and we aren't
+        # in the backlog waiting for an accept(). With TLS 1.3 this also
+        # validates the server accepted our cert as that is only reported on
+        # the first read.
+        if not conn.recv(1, self._cancel_token):
+            raise ConnectionError("The server closed the connection during the handshake")
+        conn.settimeout(None)
 
         super().start()
 
@@ -230,69 +240,74 @@ class ServerMPQueue(MPQueue):
 
             sock = socket.create_server(
                 parsed_addr,
-                # If port 0 is requested, don't set SO_REUSEPORT
-                reuse_port=parsed_addr[1] != 0,
                 backlog=0,
                 **sock_kwargs,
             )
 
-        super().__init__(SocketHelper("server", sock), proto, cancel_token=cancel_token)
+        self._listener = SocketHelper("server", sock)
+        super().__init__(None, proto, cancel_token=cancel_token)
         self._ssl_context = ssl_context
+
+    @property
+    def address(self) -> str:
+        sock = self._socket or self._listener
+        if sock.family == socket.AddressFamily.AF_UNIX:
+            host = sock.getsockname()
+            return f"uds://{host}"
+
+        elif sock.family == socket.AddressFamily.AF_INET6:
+            host, port, _, _ = sock.getsockname()
+            return f"tcp://[{host}]:{port}"
+
+        else:
+            host, port = sock.getsockname()
+            return f"tcp://{host}:{port}"
 
     def start(
         self,
         timeout: float = 0,
-        cancel_queue: MPQueue | None = None,
+        cancel_queue: ServerMPQueue | None = None,
     ) -> None:
-        cancel_socket = None
-        if cancel_queue:
-            cancel_socket = cancel_queue._socket
+        # A connection to the cancel queue's listener cancels the accept.
+        cancel_socket = cancel_queue._listener if cancel_queue else None
 
-        conn = self._socket.accept(
-            self._cancel_token,
-            timeout=timeout,
-            cancel_socket=cancel_socket,
-        )
+        # If a client fails the handshake we don't want to shutdown the
+        # listener, instead wait for a new client to connect. This allows an
+        # attach request to be retried if the server mandates a certificate
+        # but the client does not offer one (or is rejected), and stops a
+        # client that connects and resets or sends nothing from ending it.
+        while True:
+            conn = self._listener.accept(
+                self._cancel_token,
+                timeout=timeout,
+                cancel_socket=cancel_socket,
+            )
 
-        if self._ssl_context:
-            # If the server fails to complete the TLS handshake we don't want
-            # to shutdown the socket, instead this will recreate it allowing a
-            # new client to connect. This allows an attach request to be
-            # retried if the server mandates a certificate but the client does
-            # not offer one (or is rejected).
-            while True:
-                try:
+            try:
+                conn.settimeout(SERVER_HANDSHAKE_TIMEOUT)
+                if self._ssl_context:
                     conn.wrap_tls(
                         self._ssl_context,
+                        self._cancel_token,
                         server_side=True,
                     )
-                    # The client will read a single byte after the handshake to
-                    # verify it was able to auth correctly. TLS 1.3 only errors
-                    # on the client side on the first recv/send call after the
-                    # handshake.
-                    conn.send(b"\x00", self._cancel_token)
 
-                except ssl.SSLError:
-                    log.exception("Server TLS handshake failed, trying again")
-                    conn.close()
-                    conn = self._socket.accept(
-                        self._cancel_token,
-                        timeout=timeout,
-                        cancel_socket=cancel_socket,
-                    )
+                # The client will read a single byte after the connection to
+                # verify it is actually connected to a server and not just
+                # part of the backlog. With TLS 1.3 this also lets the client
+                # see whether its cert was accepted.
+                conn.send(b"\x00", self._cancel_token)
+                conn.settimeout(None)
 
-                else:
-                    break
+            except OSError:
+                log.exception("Server handshake failed, waiting for a new connection")
+                conn.close()
 
-        else:
-            # The client will read a single byte after the connection to verify
-            # it is actually connected to a server and not just part of the
-            # backlog.
-            conn.send(b"\x00", self._cancel_token)
+            else:
+                break
 
-        # The original server socket is no longer needed, replace it with the
-        # client connection one.
-        self._socket.close()
+        # The listener is no longer needed once a client is connected.
+        self._listener.close()
         self._socket = conn
 
         super().start()
@@ -302,3 +317,4 @@ class ServerMPQueue(MPQueue):
             pathlib.Path(self._uds_path).unlink(missing_ok=True)
 
         super().stop()
+        self._listener.close()

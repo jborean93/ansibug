@@ -3,11 +3,17 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import socket
+import struct
+import time
 
 import pytest
+from tls_info import CertFixture
 
 from ansibug import _mp_queue as mpq
+from ansibug._socket_helper import CancelledError, SocketCancellationToken
+from ansibug._tls import create_client_tls_context, create_server_tls_context
 
 
 def test_connect_failure_unknown_target() -> None:
@@ -26,3 +32,89 @@ def test_connect_failure_refused() -> None:
     with mpq.ClientMPQueue(f"tcp://{addr[0]}:{addr[1]}", mpq.MPProtocol) as client:
         with pytest.raises(OSError, match="Connection refused"):
             client.start()
+
+
+def _start_server(server: mpq.ServerMPQueue) -> concurrent.futures.Future[None]:
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    fut = pool.submit(server.start)
+    pool.shutdown(wait=False)
+    return fut
+
+
+def _connect_raw(address: str) -> socket.socket:
+    host, port = address.removeprefix("tcp://").rsplit(":", 1)
+    return socket.create_connection((host.strip("[]"), int(port)))
+
+
+def test_server_survives_client_reset() -> None:
+    server = mpq.ServerMPQueue("tcp://:0", mpq.MPProtocol)
+    with server:
+        # Connect and reset before the server accepts it.
+        raw = _connect_raw(server.address)
+        raw.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+        raw.close()
+
+        server_fut = _start_server(server)
+        with mpq.ClientMPQueue(server.address, mpq.MPProtocol) as client:
+            client.start(timeout=5)
+            server_fut.result(timeout=5)
+
+
+def test_server_tls_handshake_timeout(
+    certs: CertFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(mpq, "SERVER_HANDSHAKE_TIMEOUT", 0.5)
+    server_ctx = create_server_tls_context(certfile=str(certs.server_combined))
+    client_ctx = create_client_tls_context(verify="ignore")
+
+    server = mpq.ServerMPQueue("tcp://:0", mpq.MPProtocol, ssl_context=server_ctx)
+    with server:
+        # A client that connects but never sends the TLS hello.
+        with _connect_raw(server.address):
+            server_fut = _start_server(server)
+
+            with mpq.ClientMPQueue(server.address, mpq.MPProtocol, ssl_context=client_ctx) as client:
+                client.start(timeout=5)
+                server_fut.result(timeout=5)
+
+
+def test_server_tls_handshake_cancel(certs: CertFixture) -> None:
+    server_ctx = create_server_tls_context(certfile=str(certs.server_combined))
+    token = SocketCancellationToken()
+
+    server = mpq.ServerMPQueue("tcp://:0", mpq.MPProtocol, ssl_context=server_ctx, cancel_token=token)
+    with server:
+        with _connect_raw(server.address):
+            server_fut = _start_server(server)
+            time.sleep(0.5)  # Give the server time to reach the handshake.
+            token.cancel()
+
+            # Must not wait for SERVER_HANDSHAKE_TIMEOUT.
+            with pytest.raises(CancelledError):
+                server_fut.result(timeout=mpq.SERVER_HANDSHAKE_TIMEOUT / 2)
+
+
+def test_client_handshake_timeout() -> None:
+    # The connection sits in the backlog and the server never sends anything.
+    with socket.create_server(("127.0.0.1", 0)) as listener:
+        host, port = listener.getsockname()
+        with mpq.ClientMPQueue(f"tcp://{host}:{port}", mpq.MPProtocol) as client:
+            with pytest.raises(TimeoutError):
+                client.start(timeout=0.5)
+
+
+def test_client_handshake_server_closed() -> None:
+    with socket.create_server(("127.0.0.1", 0)) as listener:
+        host, port = listener.getsockname()
+
+        def accept_and_close() -> None:
+            conn, _ = listener.accept()
+            conn.close()
+
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            fut = pool.submit(accept_and_close)
+            with mpq.ClientMPQueue(f"tcp://{host}:{port}", mpq.MPProtocol) as client:
+                with pytest.raises(ConnectionError, match="closed the connection during the handshake"):
+                    client.start(timeout=5)
+            fut.result(timeout=5)
