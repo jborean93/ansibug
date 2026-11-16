@@ -4,15 +4,19 @@
 from __future__ import annotations
 
 import concurrent.futures
+import json
 import socket
 import struct
 import time
+import typing as t
 
 import pytest
 from tls_info import CertFixture
 
+import ansibug.dap as dap
 from ansibug import _mp_queue as mpq
-from ansibug._socket_helper import CancelledError, SocketCancellationToken
+from ansibug._debuggee import DebugConfiguration, PathMapping
+from ansibug._socket_helper import CancelledError, SocketCancellationToken, SocketHelper
 from ansibug._tls import create_client_tls_context, create_server_tls_context
 
 
@@ -118,3 +122,20 @@ def test_client_handshake_server_closed() -> None:
                 with pytest.raises(ConnectionError, match="closed the connection during the handshake"):
                     client.start(timeout=5)
             fut.result(timeout=5)
+
+
+def test_send_is_json() -> None:
+    config = DebugConfiguration(path_mappings=[PathMapping(local_root="/local", remote_root="/remote")])
+    msg = dap.OutputEvent(category=DebugConfiguration.OUTPUT_CATEGORY, output="", data=config.to_json())
+
+    sender_sock, receiver_sock = socket.socketpair()
+    with receiver_sock, mpq.MPQueue(SocketHelper("sender", sender_sock), mpq.MPProtocol) as sender:
+        sender.send(msg)
+
+        data_len = int.from_bytes(receiver_sock.recv(4), byteorder="little")
+        actual = dap.ProtocolMessage.unpack(json.loads(receiver_sock.recv(data_len)))
+
+    assert isinstance(actual, dap.OutputEvent)
+    assert actual.category == DebugConfiguration.OUTPUT_CATEGORY
+    assert isinstance(actual.data, dict)
+    assert DebugConfiguration.from_json(t.cast(dict[str, t.Any], actual.data)) == config

@@ -30,6 +30,7 @@
 + Drop a client that connects to the `listen` socket but does not complete the handshake within 10 seconds, previously it blocked the listener and shutdown forever
 + Fix attach hanging when the target accepts the connection but never responds, the handshake now honours `connectTimeout`
 + Fix socket connect and accept failing when the process has more than 1024 file descriptors open
++ Use JSON instead of `pickle` for the messages between the debug adapter and `ansible-playbook`, attaching to an untrusted address can no longer run code in the debug adapter process. An older ansibug version on one side cannot communicate with this version or newer on the other side
 
 ## 0.3.2 - 2025-11-22
 

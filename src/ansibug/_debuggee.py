@@ -72,6 +72,23 @@ class DebugConfiguration:
 
     path_mappings: list[PathMapping] = dataclasses.field(default_factory=list)
 
+    @classmethod
+    def from_json(
+        cls,
+        data: dict[str, t.Any],
+    ) -> DebugConfiguration:
+        return DebugConfiguration(
+            path_mappings=[
+                PathMapping(local_root=m["local_root"], remote_root=m["remote_root"])
+                for m in data.get("path_mappings", [])
+            ],
+        )
+
+    def to_json(self) -> dict[str, t.Any]:
+        return {
+            "path_mappings": [dataclasses.asdict(m) for m in self.path_mappings],
+        }
+
 
 @dataclasses.dataclass(frozen=True)
 class PlaybookProcessInfo:
@@ -854,12 +871,10 @@ class AnsibleDebugger(metaclass=Singleton):
     ) -> None:
         # This should always be this category as only the da server sends this
         # message to the debuggee.
-        if msg.category != DebugConfiguration.OUTPUT_CATEGORY or not isinstance(
-            msg.data, DebugConfiguration
-        ):  # pragma: nocover
+        if msg.category != DebugConfiguration.OUTPUT_CATEGORY or not isinstance(msg.data, dict):  # pragma: nocover
             return
 
-        self._debug_config = msg.data
+        self._debug_config = DebugConfiguration.from_json(t.cast(dict[str, t.Any], msg.data))
 
         # Wait until the debug adapter has sent this message before sending the
         # InitializedEvent to the client.
