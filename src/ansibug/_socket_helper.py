@@ -11,7 +11,7 @@ import logging
 import os
 import os.path
 import pathlib
-import select
+import selectors
 import socket
 import ssl
 import tempfile
@@ -206,6 +206,12 @@ class SocketHelper:
             log.debug("Socket %s send: '%s'", self.use, base64.b64encode(data).decode())
         cancel_token.sendall(self._sock, data)
 
+    def settimeout(
+        self,
+        timeout: float | None,
+    ) -> None:
+        self._sock.settimeout(timeout)
+
     def shutdown(
         self,
         how: int,
@@ -218,13 +224,15 @@ class SocketHelper:
     def wrap_tls(
         self,
         ssl_context: ssl.SSLContext,
+        cancel_token: SocketCancellationToken,
         *,
         server_side: bool = True,
         server_hostname: str | None = None,
     ) -> None:
         log.debug("Wrapping socket with TLS context")
-        self._sock = ssl_context.wrap_socket(
+        self._sock = cancel_token.wrap_tls(
             self._sock,
+            ssl_context,
             server_side=server_side,
             server_hostname=server_hostname,
         )
@@ -243,39 +251,15 @@ class SocketCancellationToken:
         timeout: float = 0,
         cancel_socket: socket.socket | None = None,
     ) -> tuple[socket.socket, t.Any]:
-        def _cancel() -> None:
-            # Using shutdown(socket.SHUT_RDWR) fails on macOS with 'Socket is
-            # not connected'. Fallback to close() if the shutdown failed.
-            try:
-                sock.shutdown(socket.SHUT_RDWR)
-            except OSError:
-                sock.close()
+        socks = [(sock, selectors.EVENT_READ)]
+        if cancel_socket:
+            socks.append((cancel_socket, selectors.EVENT_READ))
 
-        with self.with_cancel(_cancel):
-            try:
-                # When cancelled, select will detect that sock is ready for a
-                # read and accept() will raise OSError. In the rare event the
-                # socket was connected to and closed/shutdown between select
-                # and the subsequent recv/send on the socket will act like it's
-                # disconnected
-                socks = [sock]
-                if cancel_socket:
-                    socks.append(cancel_socket)
+        ready = self._wait(socks, timeout, "Timed out waiting for socket.accept()")
+        if cancel_socket and cancel_socket in ready:
+            raise CancelledError()
 
-                rd, _, _ = select.select(socks, [], [], timeout or None)
-                if not rd:
-                    raise TimeoutError("Timed out waiting for socket.accept()")
-                elif cancel_socket and cancel_socket in rd:
-                    raise CancelledError()
-
-                return rd[0].accept()
-
-            except OSError:
-                # On macOS, the socket fd is closed on cancel
-                if self._cancelled:
-                    raise CancelledError()
-                else:
-                    raise
+        return sock.accept()
 
     def connect(
         self,
@@ -283,28 +267,58 @@ class SocketCancellationToken:
         addr: t.Any,
         timeout: float = 0,
     ) -> None:
-        with self.with_cancel(lambda: sock.shutdown(socket.SHUT_RDWR)):
-            # There seems to be a bug in some Linux kernel versions where
-            # trying to shutdown a socket during a connect() fails with EBUSY.
-            # This was reproduced in Ubuntu 22.04 (Linux 5.15.0) but could not
-            # be reproduced in Fedora 38 (Linux 6.2) or Arch at Linux 6.5.9.
-            # Using select is an option to wait until the socket is writable.
-            sock.setblocking(False)
+        # A non-blocking connect is waited on rather than cancelling a blocked
+        # connect() with shutdown, which fails with EBUSY on some Linux
+        # kernels (seen on Ubuntu 22.04 with Linux 5.15.0).
+        if self._cancelled:
+            raise CancelledError()
 
-            try:
-                sock.connect(addr)
-            except BlockingIOError:
-                pass
+        sock.setblocking(False)
 
-            _, wd, _ = select.select([], [sock], [], timeout or None)
-            if not wd:
-                raise TimeoutError("Timed out waiting for socket.connect")
-            elif self._cancelled:
+        try:
+            sock.connect(addr)
+        except BlockingIOError:
+            pass
+
+        self._wait([(sock, selectors.EVENT_WRITE)], timeout, "Timed out waiting for socket.connect")
+        if err := sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR):
+            raise OSError(err, os.strerror(err))
+
+        sock.setblocking(True)
+
+    def _wait(
+        self,
+        socks: list[tuple[socket.socket, int]],
+        timeout: float,
+        timeout_msg: str,
+    ) -> list[socket.socket]:
+        """Waits for the sockets to be ready, or the token to be cancelled.
+
+        Cancelling writes to a socketpair registered with the selector rather
+        than closing the waited on socket. A closed fd is silently removed
+        from an epoll/kqueue selector so the wait would never wake up.
+
+        Returns:
+            list[socket.socket]: The sockets that are ready.
+        """
+        wake_r, wake_w = socket.socketpair()
+        with wake_r, wake_w, selectors.DefaultSelector() as selector:
+            selector.register(wake_r, selectors.EVENT_READ)
+            for sock, events in socks:
+                selector.register(sock, events)
+
+            def _wake() -> None:
+                wake_w.send(b"\x00")
+
+            with self.with_cancel(_wake):
+                ready = selector.select(timeout or None)
+
+            if self._cancelled:
                 raise CancelledError()
-            elif err := sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR):
-                raise OSError(err, os.strerror(err))
+            elif not ready:
+                raise TimeoutError(timeout_msg)
 
-            sock.setblocking(True)
+            return [t.cast(socket.socket, key.fileobj) for key, _ in ready]
 
     def recv_into(
         self,
@@ -333,13 +347,46 @@ class SocketCancellationToken:
                 else:
                     raise
 
+    def wrap_tls(
+        self,
+        sock: socket.socket,
+        ssl_context: ssl.SSLContext,
+        *,
+        server_side: bool,
+        server_hostname: str | None,
+    ) -> ssl.SSLSocket:
+        # wrap_socket detaches sock so the cancel must act on the new socket.
+        # SSLSocket.shutdown also clears its TLS state, bypass it to only
+        # shutdown the underlying socket.
+        ssl_sock = ssl_context.wrap_socket(
+            sock,
+            server_side=server_side,
+            server_hostname=server_hostname,
+            do_handshake_on_connect=False,
+        )
+        with self.with_cancel(lambda: socket.socket.shutdown(ssl_sock, socket.SHUT_RDWR)):
+            try:
+                ssl_sock.do_handshake()
+            except OSError:
+                if self._cancelled:
+                    raise CancelledError()
+                else:
+                    raise
+
+        return ssl_sock
+
     def cancel(self) -> None:
         with self._lock:
             self._cancelled = True
 
             for cancel_id, func in self._cancel_funcs.items():
                 log.debug("Cancelling function with id %d", cancel_id)
-                func()
+                try:
+                    func()
+                except OSError:
+                    # The peer may have already reset the socket, the other
+                    # functions still need to be cancelled.
+                    log.debug("Failed to cancel function with id %d", cancel_id, exc_info=True)
 
             self._cancel_funcs = {}
 

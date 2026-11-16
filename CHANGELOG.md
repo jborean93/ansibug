@@ -26,6 +26,10 @@
 + Fix race conditions between the client setting breakpoints and Ansible loading new files that could fail the strategy or leave a breakpoint unverified
 + Fix race condition when the client requests the threads while hosts are being added or removed
 + Ignore `continue` and step requests for a thread that has already exited
++ Fix the `listen` socket no longer accepting connections after a client connected and then reset the connection or failed the handshake
++ Drop a client that connects to the `listen` socket but does not complete the handshake within 10 seconds, previously it blocked the listener and shutdown forever
++ Fix attach hanging when the target accepts the connection but never responds, the handshake now honours `connectTimeout`
++ Fix socket connect and accept failing when the process has more than 1024 file descriptors open
 
 ## 0.3.2 - 2025-11-22
 

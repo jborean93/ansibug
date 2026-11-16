@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import concurrent.futures
+import errno
 import platform
 import socket
 import tempfile
@@ -327,3 +329,32 @@ def test_parse_addr_tcp_invalid_port() -> None:
 def test_fail_to_create_uds_invalid_path() -> None:
     with pytest.raises(FileNotFoundError):
         sh.create_uds_with_mask("/invalid/path/uds", 0o700)
+
+
+def test_cancel_continues_after_failure() -> None:
+    token = sh.SocketCancellationToken()
+    called: list[bool] = []
+
+    def fail() -> None:
+        raise OSError(errno.ENOTCONN, "Transport endpoint is not connected")
+
+    with token.with_cancel(fail), token.with_cancel(lambda: called.append(True)):
+        token.cancel()
+
+    assert called == [True]
+
+
+def test_accept_with_cancel() -> None:
+    token = sh.SocketCancellationToken()
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
+        server.bind(("127.0.0.1", 0))
+        server.listen()
+
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            fut = pool.submit(token.accept, server)
+            time.sleep(0.5)
+            token.cancel()
+
+            with pytest.raises(sh.CancelledError):
+                fut.result(timeout=5)
