@@ -198,7 +198,7 @@ host1 ansible_host=127.0.0.1 ansible_connection=local ansible_python_interpreter
     assert stopped_event.thread_id == host2_tid
     assert stopped_event.hit_breakpoint_ids == [bp_resp.breakpoints[1].id]
 
-    st_resp = dap_client.send(dap.StackTraceRequest(thread_id=host1_tid), dap.StackTraceResponse)
+    st_resp = dap_client.send(dap.StackTraceRequest(thread_id=host2_tid), dap.StackTraceResponse)
     assert len(st_resp.stack_frames) == 1
     assert st_resp.stack_frames[0].name == "ping test"
 
