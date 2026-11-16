@@ -15,7 +15,8 @@ from ansibug.ansible_collections.ansibug.dap.plugins.strategy.debug import (
 
 def test_exit_threads_removes_stackframes() -> None:
     state = AnsibleDebugState(MagicMock(), MagicMock(), MagicMock())
-    thread = state.threads[2] = AnsibleThread(id=2, host=MagicMock())
+    host = MagicMock()
+    thread = state.threads[2] = state._host_threads[host] = AnsibleThread(id=2, host=host)
     for sfid in [1, 2]:
         state.stackframes[sfid] = AnsibleStackFrame(id=sfid, task=MagicMock(), task_vars={}, debugger=MagicMock())
         thread.stack_frames.insert(0, sfid)
@@ -25,6 +26,7 @@ def test_exit_threads_removes_stackframes() -> None:
     state.exit_threads()
 
     assert list(state.threads) == [1]
+    assert state._host_threads == {}
     assert state.stackframes == {}
     assert state.variables == {}
 

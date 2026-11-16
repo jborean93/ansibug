@@ -503,6 +503,8 @@ class AnsibleDebugState(DebugState):
         variable_manager: VariableManager,
     ) -> None:
         self.threads: dict[int, AnsibleThread] = {1: AnsibleThread(id=1, host=None)}
+        # Lookup of threads by host as it is needed for every task on every host.
+        self._host_threads: dict[Host, AnsibleThread] = {}
         self.stackframes: dict[int, AnsibleStackFrame] = {}
         self.variables: dict[int, AnsibleVariable] = {}
 
@@ -528,12 +530,7 @@ class AnsibleDebugState(DebugState):
             task: The task to process.
             task_vars: The task variables.
         """
-        thread: AnsibleThread | None = next(
-            iter([t for t in self.threads.values() if t.host == host]),
-            None,
-        )
-        if not thread:
-            thread = self._add_thread(host)
+        thread = self._host_threads.get(host) or self._add_thread(host)
 
         # Remove the frames of any includes that have ended, the top frame
         # should be the task's parent include.
@@ -574,29 +571,6 @@ class AnsibleDebugState(DebugState):
         path = path_and_line[0]
         line = int(path_and_line[1])
 
-        templar = Templar(loader=self._loader, variables=sf.task_vars)
-
-        if POST_DATATAGGING:
-
-            def eval_condition(condition: str) -> bool:
-                template = trust_as_template(condition)  # pyright: ignore[reportPossiblyUnboundVariable]
-
-                try:
-                    return templar.evaluate_conditional(template)
-                except (AnsibleBrokenConditionalError, AnsibleUndefinedVariable):  # pyright: ignore[reportPossiblyUnboundVariable]
-                    return False
-
-        else:
-
-            def eval_condition(condition: str) -> bool:
-                cond = Conditional(loader=self._loader)
-                cond.when = [condition]
-
-                try:
-                    return cond.evaluate_conditional(templar, templar.available_variables)
-                except AnsibleError:
-                    return False
-
         with self._waiting_condition:
             tid = thread.id
 
@@ -604,7 +578,7 @@ class AnsibleDebugState(DebugState):
             if (
                 line_breakpoint
                 and line_breakpoint.source_breakpoint.condition
-                and not eval_condition(line_breakpoint.source_breakpoint.condition)
+                and not self._eval_condition(line_breakpoint.source_breakpoint.condition, sf.task_vars)
             ):
                 line_breakpoint = None
 
@@ -633,7 +607,7 @@ class AnsibleDebugState(DebugState):
             result: The task result to process.
         """
         task = result.task
-        thread = next(iter([t for t in self.threads.values() if t.host == result.host]))
+        thread = self._host_threads[result.host]
 
         with self._waiting_condition:
             stopped_event = thread.should_stop_on_exception(
@@ -671,6 +645,8 @@ class AnsibleDebugState(DebugState):
 
             with self._waiting_condition:
                 thread = self.threads.pop(tid)
+                if thread.host:
+                    self._host_threads.pop(thread.host, None)
                 while thread.stack_frames:
                     self._pop_stackframe(thread)
 
@@ -680,6 +656,30 @@ class AnsibleDebugState(DebugState):
                     thread_id=tid,
                 )
             )
+
+    def _eval_condition(
+        self,
+        condition: str,
+        task_vars: dict[str, t.Any],
+    ) -> bool:
+        templar = Templar(loader=self._loader, variables=task_vars)
+
+        if POST_DATATAGGING:
+            template = trust_as_template(condition)  # pyright: ignore[reportPossiblyUnboundVariable]
+
+            try:
+                return templar.evaluate_conditional(template)
+            except (AnsibleBrokenConditionalError, AnsibleUndefinedVariable):  # pyright: ignore[reportPossiblyUnboundVariable]
+                return False
+
+        else:
+            cond = Conditional(loader=self._loader)
+            cond.when = [condition]
+
+            try:
+                return cond.evaluate_conditional(templar, templar.available_variables)
+            except AnsibleError:
+                return False
 
     def _pop_stackframe(
         self,
@@ -994,7 +994,7 @@ class AnsibleDebugState(DebugState):
         tid = self._debugger.next_thread_id()
 
         with self._waiting_condition:
-            thread = self.threads[tid] = AnsibleThread(
+            thread = self.threads[tid] = self._host_threads[host] = AnsibleThread(
                 id=tid,
                 host=host,
             )
