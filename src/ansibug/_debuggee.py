@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import atexit
 import collections.abc
 import contextlib
 import dataclasses
@@ -31,6 +32,10 @@ except Exception:  # pragma: nocover
     HAS_DEBUGPY = False
 
 log = logging.getLogger(__name__)
+
+
+class DebuggeeShutdownError(Exception):
+    """The debuggee is shutting down and no strategy will be available."""
 
 
 class ExceptionBreakpointType(enum.Enum):
@@ -238,6 +243,7 @@ class AnsibleDebugger(metaclass=Singleton):
         self._strategy_connected = threading.Condition()
         self._strategy: DebugState | None = None
         self._terminated = False
+        self._shutting_down = False
 
         self._thread_counter = 2  # 1 is always the main thread
         self._stackframe_counter = 1
@@ -430,12 +436,19 @@ class AnsibleDebugger(metaclass=Singleton):
 
         log.debug("MPQueue set on address %s", addr)
 
+        with self._strategy_connected:
+            self._shutting_down = False
+
         self._send_thread = threading.Thread(
             target=self._send_task,
             args=(mp_queue,),
             name="ansibug-debugger",
+            # Daemon so a crash that skips v2_playbook_on_stats doesn't block
+            # interpreter exit; the atexit shutdown still flushes and closes it.
+            daemon=True,
         )
         self._send_thread.start()
+        atexit.register(self.shutdown)
 
         return addr
 
@@ -454,6 +467,12 @@ class AnsibleDebugger(metaclass=Singleton):
         """
         log.debug("Shutting down DebugServer")
 
+        # Wake up any request waiting in _get_strategy so the recv thread can
+        # exit, no new strategy will be set once we are shutting down.
+        with self._strategy_connected:
+            self._shutting_down = True
+            self._strategy_connected.notify_all()
+
         if not from_send_thread and self._send_thread:
             # If we aren't connected we need to cancel the queue start method
             # before trying to join the thread. If we are connected we want to
@@ -463,7 +482,10 @@ class AnsibleDebugger(metaclass=Singleton):
                 self._cancel_token.cancel()
 
             self.queue_msg(None)
-            self._send_thread.join()
+            # The thread is a daemon so don't block the exit if it is stuck.
+            self._send_thread.join(timeout=5)
+            if self._send_thread.is_alive():
+                log.warning("Timed out waiting for the debuggee send thread to stop")
             self._send_thread = None
 
         # If the strategy is still running we don't want it to fire on any
@@ -588,8 +610,11 @@ class AnsibleDebugger(metaclass=Singleton):
 
     def _get_strategy(self) -> DebugState:
         with self._strategy_connected:
-            self._strategy_connected.wait_for(lambda: self._strategy is not None)
-            return t.cast(DebugState, self._strategy)
+            self._strategy_connected.wait_for(lambda: self._strategy is not None or self._shutting_down)
+            if self._strategy is None:
+                raise DebuggeeShutdownError("The debuggee is shutting down and cannot process the request")
+
+            return self._strategy
 
     @functools.singledispatchmethod
     def process_message(
@@ -863,7 +888,12 @@ class AnsibleDebugger(metaclass=Singleton):
         self._debug_config = DebugConfiguration()
         self._breakpoints = {}
 
-        strategy = self._get_strategy()
+        try:
+            strategy = self._get_strategy()
+        except DebuggeeShutdownError:
+            # Nothing is running that needs to be released or ended.
+            return
+
         strategy.disconnect(msg)
 
     def _send_task(

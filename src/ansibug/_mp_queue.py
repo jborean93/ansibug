@@ -93,7 +93,9 @@ class MPQueue:
     def stop(self) -> None:
         self._cancel_token.cancel()
         if self._recv_thread:
-            self._recv_thread.join()
+            # Don't block forever on a stuck handler, closing the socket below
+            # also unblocks a recv.
+            self._recv_thread.join(timeout=5)
         self._recv_thread = None
 
         self._socket.shutdown(socket.SHUT_RDWR)
