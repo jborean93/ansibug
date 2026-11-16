@@ -153,6 +153,27 @@ def test_launch_process_ends_before_connect(
     assert dap_client._dap_proc.wait() == 0
 
 
+def test_launch_failure_after_connect(
+    dap_client: DAPClient,
+    tmp_path: pathlib.Path,
+) -> None:
+    playbook = tmp_path / "main.yml"
+    playbook.write_text(
+        r"""
+- hosts: '{{ undefined_var }}'
+  gather_facts: false
+  tasks: []
+"""
+    )
+
+    # Fails after the debuggee connected so v2_playbook_on_stats never runs.
+    proc = dap_client.launch(playbook, playbook_dir=tmp_path)
+    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
+
+    proc.communicate(timeout=30)
+    assert proc.returncode != 0
+
+
 def test_launch_with_disconnect(
     dap_client: DAPClient,
     tmp_path: pathlib.Path,
