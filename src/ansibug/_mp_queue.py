@@ -4,9 +4,9 @@
 from __future__ import annotations
 
 import collections.abc
+import json
 import logging
 import pathlib
-import pickle
 import socket
 import ssl
 import threading
@@ -21,6 +21,7 @@ from ._socket_helper import (
     parse_addr_string,
 )
 from .dap import ProtocolMessage
+from .dap._messages import DAPEncoder
 
 log = logging.getLogger(__name__)
 
@@ -78,7 +79,7 @@ class MPQueue:
         self,
         data: ProtocolMessage,
     ) -> None:
-        b_data = pickle.dumps(data)
+        b_data = json.dumps(data.pack(), cls=DAPEncoder).encode()
         b_len = len(b_data).to_bytes(4, byteorder="little")
         self._connection.send(b_len + b_data, self._cancel_token)
 
@@ -114,8 +115,7 @@ class MPQueue:
                 data_len = int.from_bytes(b_data_len, byteorder="little", signed=False)
                 b_data = self._connection.recv(data_len, self._cancel_token)
 
-                py_obj = pickle.loads(b_data)
-                obj = t.cast(ProtocolMessage, py_obj)
+                obj = ProtocolMessage.unpack(json.loads(b_data))
                 self._proto.on_msg_received(obj)
 
         except CancelledError:

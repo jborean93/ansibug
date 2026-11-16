@@ -503,7 +503,7 @@ class DAServer:
             dap.OutputEvent(
                 category=DebugConfiguration.OUTPUT_CATEGORY,
                 output="",
-                data=DebugConfiguration(path_mappings=attach_args.path_mappings),
+                data=DebugConfiguration(path_mappings=attach_args.path_mappings).to_json(),
             )
         )
 
@@ -652,6 +652,6 @@ rm -f "$0"
                 dap.OutputEvent(
                     category=DebugConfiguration.OUTPUT_CATEGORY,
                     output="",
-                    data=DebugConfiguration(path_mappings=details.arguments.path_mappings),
+                    data=DebugConfiguration(path_mappings=details.arguments.path_mappings).to_json(),
                 )
             )
