@@ -30,11 +30,11 @@ A more in depth overview of DAP can be found on their [Overview page](https://mi
 When the debug adapter is started by client it will send these two messages first:
 
 + [Initialize Request](https://microsoft.github.io/debug-adapter-protocol/specification#Requests_Initialize)
-  + Contains the capabilities of the VSCode client
-  + Adapter responds with the `Initialize Response` that contains the capabilities of `ansibug`
+    + Contains the capabilities of the VSCode client
+    + Adapter responds with the `Initialize Response` that contains the capabilities of `ansibug`
 + [Launch Request](https://microsoft.github.io/debug-adapter-protocol/specification#Requests_Launch) or [Attach Request](https://microsoft.github.io/debug-adapter-protocol/specification#Requests_Attach)
-  + This contains the information inside the `launch.json`
-  + The arguments is dependent of the request type
+    + This contains the information inside the `launch.json`
+    + The arguments is dependent of the request type
 
 If a `Launch Request` was sent the debug adapter will reply with a [RunInTerminal Request](https://microsoft.github.io/debug-adapter-protocol/specification#Reverse_Requests_RunInTerminal).
 This request contains the command the client should run in its terminal alongside other details like the working directory and environment variables.

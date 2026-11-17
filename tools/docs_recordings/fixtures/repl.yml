@@ -1,0 +1,9 @@
+- name: play 1
+  hosts: localhost
+  gather_facts: false
+  vars:
+    foo: bar
+  tasks:
+  - name: ping task
+    ansible.builtin.ping:
+      data: foo

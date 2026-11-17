@@ -5,7 +5,7 @@ This guide will go over how it is done in Visual Studio Code, the scopes that ar
 ## Scopes
 There are current four scopes that are implemented in `ansibug`:
 
-![variable_scopes](./images/variable_scopes.png)
+![variable_scopes](./images/variable_scopes.png){ width="238" }
 
 Module Options are options set on the module itself.
 For example:
@@ -31,7 +31,7 @@ In Ansible they are commonly accessed through `{{ vars }}`.
 ## Setting Variables
 It is possible to set a variable through the client by right clicking the variable and specifying the new value.
 
-![set_variable](./images/set_variable.gif)
+<video src="./images/set_variable.mp4" poster="./images/set_variable.png" width="960" height="600" autoplay loop muted playsinline controls preload="metadata"></video>
 
 The value provided is templated automatically by `ansibug` so it is important to quote the value when a string value is set.
 In other words, the value provided will be automatically wrapped with `{{ ... }}` by `ansibug`.
@@ -39,7 +39,7 @@ In other words, the value provided will be automatically wrapped with `{{ ... }}
 For example setting `'string value'` will set the literal string value `string value`.
 Setting `foo` will be evaluating `{{ foo }}` so will set it to the value of that variable.
 
-![set_variable_template](./images/set_variable_template.gif)
+<video src="./images/set_variable_template.mp4" poster="./images/set_variable_template.png" width="960" height="600" autoplay loop muted playsinline controls preload="metadata"></video>
 
 Attempting to set a poorly formed template or a template that fails will fail.
 A template has access to all the task variables of the current task as well as lookups and filters available in any other template operation.
@@ -50,10 +50,23 @@ See [Debug Evaluation](./repl.md) for more details there.
 ## Watch
 Using the `Watch` panel, it is possible to set an expression that will be automatically validated on each step.
 
-![watch_expression](./images/watch_expression.gif)
+<video src="./images/watch_expression.mp4" poster="./images/watch_expression.png" width="960" height="600" autoplay loop muted playsinline controls preload="metadata"></video>
 
 In the above example a watch has been added for the expression `foo` which just returns the value of `foo`.
 The first task has the expression equal to `bar` which is the original value but the next task after it has changed will show the updated value.
 
 Just like setting a variable value, the expression for the watch is also templated automatically by `ansibug`.
 Do not wrap the expression with `{{ ... }}` as it will cause errors during the templating operation.
+
+To watch a nested value, right click it in the `VARIABLES` pane and select `Add to Watch`.
+It is added as the expression for that value, for example `app['ports'][0]`, which is evaluated again on each step.
+`Copy as Expression` copies the same expression to use elsewhere, like the Debug Console.
+
+<video src="./images/add_to_watch.mp4" poster="./images/add_to_watch.png" width="960" height="600" autoplay loop muted playsinline controls preload="metadata"></video>
+
+## Hover
+While stopped, hover over a variable name or path in the playbook, like `app.ports`, to see its value.
+
+<video src="./images/hover.mp4" poster="./images/hover.png" width="960" height="600" autoplay loop muted playsinline controls preload="metadata"></video>
+
+The value is shown as it is defined and is not templated, templating could run lookups or other plugins with side effects.

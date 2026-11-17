@@ -59,6 +59,7 @@
 
 ### Bugfixes
 
++ Fix setting a module option to `omit` with Ansible 2.19 or newer, through the variables view or `!set_option`, it now removes the option instead of failing with `AnsibleValueOmittedError`
 + Launching and attaching
   + Return a descriptive launch error when `ansible-playbook` exits before connecting to the debug adapter, previously a confusing `NotImplementedError` for `DisconnectRequest` was shown - https://github.com/jborean93/ansibug/issues/50
   + Run the launch script through `/bin/sh` so it works when the temporary directory is mounted with `noexec` - https://github.com/jborean93/ansibug/issues/47

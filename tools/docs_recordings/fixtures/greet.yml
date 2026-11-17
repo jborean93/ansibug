@@ -1,0 +1,7 @@
+- name: Ping playbook
+  hosts: localhost
+  gather_facts: false
+  tasks:
+  - name: Ping with my_var
+    ansible.builtin.ping:
+      data: '{{ my_var | default("not set") }}'

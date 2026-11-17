@@ -1,0 +1,16 @@
+- name: play 1
+  hosts: web
+  gather_facts: false
+  tasks:
+  - name: add third host
+    ansible.builtin.add_host:
+      name: web3
+      groups: web
+  - name: task still in original play
+    ansible.builtin.ping:
+- name: play 2
+  hosts: web
+  gather_facts: false
+  tasks:
+  - name: task in new play
+    ansible.builtin.ping:

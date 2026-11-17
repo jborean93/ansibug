@@ -1,0 +1,6 @@
+- name: Include playbook
+  hosts: web
+  gather_facts: false
+  tasks:
+  - name: include tasks
+    ansible.builtin.include_tasks: tasks.yml

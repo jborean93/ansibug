@@ -1,0 +1,7 @@
+- name: Conditional playbook
+  hosts: web
+  gather_facts: false
+  tasks:
+  - name: Ping test
+    ansible.builtin.ping:
+      data: my value

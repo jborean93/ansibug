@@ -1,0 +1,12 @@
+- name: play 1
+  hosts: localhost
+  gather_facts: false
+  vars:
+    foo: bar
+  tasks:
+  - name: change value
+    ansible.builtin.set_fact:
+      foo: biz
+  - name: Task to stop on
+    ansible.builtin.debug:
+      msg: '{{ foo }}'

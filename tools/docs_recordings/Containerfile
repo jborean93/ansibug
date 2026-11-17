@@ -1,0 +1,31 @@
+# Pins everything that affects how a recording looks: OS, fonts, GTK, Node, Ansible.
+# Built and run by run.sh, the repo is mounted at /repo.
+FROM docker.io/library/node:22-trixie-slim
+
+RUN export DEBIAN_FRONTEND=noninteractive \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        dbus-x11 \
+        ffmpeg \
+        fonts-dejavu-core \
+        fonts-noto-color-emoji \
+        libasound2 \
+        libgbm1 \
+        libgtk-3-0 \
+        libnss3 \
+        libsecret-1-0 \
+        libxkbfile1 \
+        libxss1 \
+        python3 \
+        python3-venv \
+        xauth \
+        xvfb \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python3 -m venv /opt/ansible \
+    && /opt/ansible/bin/pip install --no-cache-dir 'ansible-core==2.22.*'
+
+# ansibug has no dependencies so the source is used directly from the mounted repo.
+ENV LANG=C.UTF-8 \
+    PATH=/opt/ansible/bin:$PATH \
+    PYTHONPATH=/repo/src

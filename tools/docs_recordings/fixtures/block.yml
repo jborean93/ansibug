@@ -1,0 +1,13 @@
+- name: Block playbook
+  hosts: localhost
+  gather_facts: false
+  tasks:
+  - block:
+    - name: task 1
+      ansible.builtin.ping:
+    rescue:
+    - name: task 2
+      ansible.builtin.ping:
+    always:
+    - name: task 3
+      ansible.builtin.ping:

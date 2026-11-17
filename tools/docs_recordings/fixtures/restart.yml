@@ -1,0 +1,9 @@
+- name: Read config
+  hosts: localhost
+  gather_facts: false
+  tasks:
+  - name: Read app config
+    ansible.builtin.slurp:
+      src: /etc/app.conf
+  - name: Done
+    ansible.builtin.ping:

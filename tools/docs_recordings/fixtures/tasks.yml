@@ -1,0 +1,3 @@
+- name: task inside include
+  ansible.builtin.ping:
+    data: "{{ inventory_hostname }}"

@@ -1,0 +1,11 @@
+- name: Relocation playbook
+  hosts: localhost
+  gather_facts: false
+  tasks:
+  - name: task 1
+    ansible.builtin.ping:
+      data: my data
+
+  - name: task 2
+    ansible.builtin.ping:
+

@@ -1,0 +1,11 @@
+- name: Show app
+  hosts: localhost
+  gather_facts: false
+  vars:
+    app:
+      name: demo
+      ports: [80, 443]
+  tasks:
+  - name: Show app port
+    ansible.builtin.debug:
+      msg: "{{ app.name }} listens on {{ app.ports[0] }}"
