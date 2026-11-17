@@ -1,0 +1,54 @@
+# The user documentation, built from docs/ with `uv run --no-sync tox run -e docs`.
+
+[project]
+site_name = "ansibug"
+site_description = "A Debug Adapter Protocol implementation for Ansible playbooks."
+site_url = "https://jborean93.github.io/ansibug/"
+repo_url = "https://github.com/jborean93/ansibug"
+repo_name = "jborean93/ansibug"
+# Keeps the page.html URLs the old Jekyll site had, so existing links still work.
+use_directory_urls = false
+
+nav = [
+  { "Home" = "index.md" },
+  { "Protocol details" = "protocol_details.md" },
+  { "Breakpoints" = "breakpoints.md" },
+  { "Stepping" = "stepping.md" },
+  { "Threads and frames" = "threads_and_frames.md" },
+  { "Variables" = "variables.md" },
+  { "Debug console" = "repl.md" },
+  { "Remote debugging" = "remote_debugging.md" },
+]
+
+[project.theme]
+language = "en"
+features = [
+  "content.code.copy",
+  "navigation.footer",
+  "navigation.top",
+  "search.highlight",
+]
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme)"
+toggle.icon = "lucide/sun-moon"
+toggle.name = "Switch to light mode"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: light)"
+scheme = "default"
+toggle.icon = "lucide/sun"
+toggle.name = "Switch to dark mode"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: dark)"
+scheme = "slate"
+toggle.icon = "lucide/moon"
+toggle.name = "Switch to system preference"
+
+[project.markdown_extensions]
+admonition = {}
+attr_list = {}
+toc.permalink = true
+pymdownx.highlight = {}
+pymdownx.superfences = {}

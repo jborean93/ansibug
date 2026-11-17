@@ -30,6 +30,8 @@ dependencies = []
 homepage = "https://github.com/jborean93/ansibug"
 
 [dependency-groups]
+# The marker lets uv still lock the group for 3.10, zensical needs 3.11+. tox runs the docs env on 3.14.
+docs = ["zensical >= 0.0.71; python_version >= '3.11'"]
 dev = [
     "ansible-core >= 2.16.0",
     "argcomplete",
@@ -204,4 +206,11 @@ commands_post =
     tests: python -m coverage combine --quiet
     tests: python -m coverage report
     tests: python -m coverage xml
+
+[testenv:docs]
+base_python = py314
+dependency_groups = docs
+skip_install = true
+commands =
+    zensical build --strict
 """

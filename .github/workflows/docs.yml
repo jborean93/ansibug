@@ -1,0 +1,63 @@
+name: ansibug Docs
+
+on:
+  push:
+    branches:
+      - main
+    paths: &docs-paths
+      - docs/**
+      - zensical.toml
+      - pyproject.toml
+      - uv.lock
+      - .github/workflows/docs.yml
+
+  pull_request:
+    branches:
+      - main
+    paths: *docs-paths
+
+permissions: {}
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read  # Repo checkout
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          cache-suffix: docs
+
+      - name: Build the docs
+        run: |
+          uv sync --no-install-project
+          uv run --no-sync tox run -e docs
+
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        if: github.event_name == 'push'
+        with:
+          path: site/
+
+  deploy:
+    name: Deploy
+    needs: build
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    permissions:
+      pages: write
+      id-token: write
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
