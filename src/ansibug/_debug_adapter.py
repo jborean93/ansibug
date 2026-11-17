@@ -494,6 +494,7 @@ class DAServer:
                     supports_function_breakpoints=True,
                     supports_hit_conditional_breakpoints=True,
                     supports_log_points=True,
+                    supports_restart_frame=True,
                     supports_set_variable=True,
                     # We could support suspend for debug in an attach but
                     # launch is harder as nothing can reattach to it. I'm not

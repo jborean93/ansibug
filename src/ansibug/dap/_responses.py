@@ -123,6 +123,13 @@ class PauseResponse(Response):
 
 
 @dataclasses.dataclass()
+class RestartFrameResponse(Response):
+    """Response to a RestartFrameRequest."""
+
+    command = Command.RESTART_FRAME
+
+
+@dataclasses.dataclass()
 class RunInTerminalResponse(Response, dap={"body": {"processId": "process_id", "shellProcessId": "shell_process_id"}}):
     """Response to RunInTerminalRequest.
 

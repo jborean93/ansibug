@@ -650,6 +650,22 @@ class PauseRequest(Request, dap={"arguments": {"threadId": "thread_id"}}):
 
 
 @dataclasses.dataclass()
+class RestartFrameRequest(Request, dap={"arguments": {"frameId": "frame_id"}}):
+    """Request to restart the execution of a stack frame.
+
+    The debug adapter responds and then sends a StoppedEvent with the reason
+    restart once the frame has been restarted.
+
+    Args:
+        frame_id: The stack frame to restart.
+    """
+
+    command = Command.RESTART_FRAME
+
+    frame_id: int
+
+
+@dataclasses.dataclass()
 class CompletionsRequest(
     Request,
     dap={
