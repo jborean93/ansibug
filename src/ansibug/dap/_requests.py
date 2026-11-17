@@ -647,3 +647,32 @@ class PauseRequest(Request, dap={"arguments": {"threadId": "thread_id"}}):
     command = Command.PAUSE
 
     thread_id: int
+
+
+@dataclasses.dataclass()
+class CompletionsRequest(
+    Request,
+    dap={
+        "arguments": {
+            "frameId": "frame_id",
+            "text": "text",
+            "column": "column",
+            "line": "line",
+        }
+    },
+):
+    """Returns completion proposals for text in the debug console.
+
+    Args:
+        text: The text typed in the debug console.
+        column: The position within text the completions are for.
+        frame_id: The stack frame the completions are for.
+        line: The line within text the completions are for.
+    """
+
+    command = Command.COMPLETIONS
+
+    text: str
+    column: int
+    frame_id: int | None = None
+    line: int | None = None

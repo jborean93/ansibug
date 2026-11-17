@@ -23,6 +23,16 @@
   + Added the `exceptionInfo` request so clients can show the error in their exception widget
     + Clients like Visual Studio Code already showed the error from the stopped event, this gives other clients a structured way to retrieve it
     + The error message and the module traceback, if Ansible captured one, are shown separately
++ Variables and the debug console
+  + Each variable has an evaluate name so `Copy Value`, `Copy as Expression`, and `Add to Watch` work in Visual Studio Code
+    + For example the `key` item of the task variable `my_dict` is `my_dict['key']`
+  + Refresh the variables view after `!so`, `!ro`, or `!sh` changes a variable, if the client supports the `invalidated` event
+  + Added hover support, hovering over a variable name or path like `my_dict.key[0]` in the playbook shows its value
+    + The value is shown as defined and is not templated, templating could run lookups or other plugins with side effects
+  + Added debug console completions for the task variable names, the `!` commands, and the module option names after `!so` or `!ro`
+    + Each completion shows a hint, the usage of a `!` command or the type and value of a variable
+  + Support paging through large lists and dicts in the variables view
+  + Mark the `Module Options` and `Task Variables` scopes as the arguments and locals for clients that present them differently
 + Added support for pausing a running playbook
   + A running module cannot be interrupted, the host stops before its next task starts
   + A message is shown in the `ansible-playbook` output when the pause is requested so it is clear it is waiting, pausing again before it stops has no extra effect
@@ -93,6 +103,7 @@
 + Variables and the debug console
   + Fix `!so` and `!ro` changing the module options of the task for every host, they now only apply to the host of the stopped thread
   + Fix `!so` and `!ro` failing when the client has not requested the scopes of the frame yet
+  + Fix `!sh` not updating the `Global Variables` scope and the variables of the host's other stack frames until the playbook continued
   + Return an error message for a debug console command with unbalanced quotes instead of a critical debuggee exception
   + Catch `AnsibleUndefinedVariable` when enumerating templated host variables using an undefined variable, the raw templated string will be returned
   + No longer expand `bytes` values into a list of integers in the variables view

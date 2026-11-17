@@ -21,6 +21,7 @@ class MessageType(enum.Enum):
 class Command(enum.Enum):
     ATTACH = "attach"
     CANCEL = "cancel"
+    COMPLETIONS = "completions"
     CONFIGURATION_DONE = "configurationDone"
     CONTINUE = "continue"
     DISCONNECT = "disconnect"

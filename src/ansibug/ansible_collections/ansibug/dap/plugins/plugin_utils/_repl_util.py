@@ -43,6 +43,22 @@ class SetVarCommand(ReplCommand):
     expression: str
 
 
+@dataclasses.dataclass(frozen=True)
+class ReplCommandInfo:
+    alias: str
+    usage: str
+    help: str
+
+
+# The ! commands, their short alias, the arguments, and a summary.
+REPL_COMMANDS: dict[ReplCommandName, ReplCommandInfo] = {
+    "remove_option": ReplCommandInfo("ro", "<name>", "Remove a module option."),
+    "set_option": ReplCommandInfo("so", "<name> <expression>", "Set a module option."),
+    "set_hostvar": ReplCommandInfo("sh", "<name> <expression>", "Set a host variable."),
+    "template": ReplCommandInfo("t", "<expression>", "Template an expression."),
+}
+
+
 def parse_repl_args(
     args: str,
 ) -> ReplCommand | str:
@@ -59,13 +75,6 @@ def parse_repl_args(
         ReplCommand | str: The ReplCommand instance if it's a valid command,
         otherwise the string to display back to the client.
     """
-    aliases: dict[ReplCommandName, list[str]] = {
-        "remove_option": ["ro"],
-        "set_option": ["so"],
-        "set_hostvar": ["sh"],
-        "template": ["t"],
-    }
-
     parser = ErrorCapturingParser(
         prog="!",
         description="Ansibug debug console repl commands",
@@ -79,9 +88,9 @@ def parse_repl_args(
 
     remove_option = command_parser.add_parser(
         "remove_option",
-        aliases=["ro"],
+        aliases=[REPL_COMMANDS["remove_option"].alias],
         description="Removes the option specified from the current module options.",
-        help="Remove a module option.",
+        help=REPL_COMMANDS["remove_option"].help,
     )
     remove_option.add_argument(
         "name",
@@ -90,9 +99,9 @@ def parse_repl_args(
 
     set_option = command_parser.add_parser(
         "set_option",
-        aliases=["so"],
+        aliases=[REPL_COMMANDS["set_option"].alias],
         description="Adds or sets the provided option for the current module options using the expression provided.",
-        help="Set a module option.",
+        help=REPL_COMMANDS["set_option"].help,
     )
     set_option.add_argument(
         "name",
@@ -101,9 +110,9 @@ def parse_repl_args(
 
     set_hostvar = command_parser.add_parser(
         "set_hostvar",
-        aliases=["sh"],
+        aliases=[REPL_COMMANDS["set_hostvar"].alias],
         description="Adds or sets the provided variable for the current host using the expression provided.",
-        help="Set a host variable.",
+        help=REPL_COMMANDS["set_hostvar"].help,
     )
     set_hostvar.add_argument(
         "name",
@@ -112,10 +121,10 @@ def parse_repl_args(
 
     command_parser.add_parser(
         "template",
-        aliases=["t"],
+        aliases=[REPL_COMMANDS["template"].alias],
         description="Templates the expression provided after the command and returns the result. The expression "
         + "provided should not be wrapped in {{ ... }} as the value is already treated as an expression.",
-        help="Template an expression",
+        help=REPL_COMMANDS["template"].help,
     )
 
     # The provided value from the repl is just a string, we need to convert it
@@ -135,9 +144,7 @@ def parse_repl_args(
 
     # command is what was typed, it could be an alias of the command name.
     command = str(parsed_args.command)
-    command_name: ReplCommandName = next(
-        name for name, cmd_aliases in aliases.items() if command == name or command in cmd_aliases
-    )
+    command_name: ReplCommandName = next(name for name, info in REPL_COMMANDS.items() if command in (name, info.alias))
 
     if command_name == "template":
         # The value after the command needs to be extracted.

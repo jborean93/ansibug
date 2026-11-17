@@ -69,11 +69,14 @@ class DebugConfiguration:
     Args:
         path_mappings: The path mappings to use when translating source paths
             with what Ansible is running with.
+        supports_invalidated_event: The client set supportsInvalidatedEvent
+            in its initialize request.
     """
 
     OUTPUT_CATEGORY: t.ClassVar[str] = "ansibug_debug_configuration"
 
     path_mappings: list[PathMapping] = dataclasses.field(default_factory=list)
+    supports_invalidated_event: bool = False
 
     @classmethod
     def from_json(
@@ -85,11 +88,13 @@ class DebugConfiguration:
                 PathMapping(local_root=m["local_root"], remote_root=m["remote_root"])
                 for m in data.get("path_mappings", [])
             ],
+            supports_invalidated_event=data.get("supports_invalidated_event", False),
         )
 
     def to_json(self) -> dict[str, t.Any]:
         return {
             "path_mappings": [dataclasses.asdict(m) for m in self.path_mappings],
+            "supports_invalidated_event": self.supports_invalidated_event,
         }
 
 
@@ -233,10 +238,16 @@ class DebugState(t.Protocol):
     ) -> None:
         raise NotImplementedError()  # pragma: nocover
 
+    def completions(
+        self,
+        request: dap.CompletionsRequest,
+    ) -> dap.CompletionsResponse:
+        raise NotImplementedError()  # pragma: nocover
+
     def evaluate(
         self,
         request: dap.EvaluateRequest,
-    ) -> dap.EvaluateResponse:
+    ) -> dap.EvaluateResponse | dap.ErrorResponse:
         raise NotImplementedError()  # pragma: nocover
 
     def exception_info(
@@ -395,6 +406,11 @@ class AnsibleDebugger(metaclass=Singleton):
     @property
     def adapter_connected(self) -> bool:
         return self._adapter_connected
+
+    @property
+    def supports_invalidated_event(self) -> bool:
+        """The client can be sent an InvalidatedEvent."""
+        return self._debug_config.supports_invalidated_event
 
     def get_exception_filter(
         self,
@@ -799,6 +815,14 @@ class AnsibleDebugger(metaclass=Singleton):
         strategy = self._get_strategy()
         resp = strategy.evaluate(msg)
         self.queue_msg(resp)
+
+    @process_message.register
+    def _(
+        self,
+        msg: dap.CompletionsRequest,
+    ) -> None:
+        strategy = self._get_strategy()
+        self.queue_msg(strategy.completions(msg))
 
     @process_message.register
     def _(
