@@ -29,6 +29,7 @@ class Command(enum.Enum):
     INITIALIZE = "initialize"
     LAUNCH = "launch"
     NEXT = "next"
+    PAUSE = "pause"
     RUN_IN_TERMINAL = "runInTerminal"
     SET_BREAKPOINTS = "setBreakpoints"
     SET_EXCEPTION_BREAKPOINTS = "setExceptionBreakpoints"

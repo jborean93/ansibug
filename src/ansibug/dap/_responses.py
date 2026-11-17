@@ -115,6 +115,13 @@ class NextResponse(Response):
 
 
 @dataclasses.dataclass()
+class PauseResponse(Response):
+    """Response to a PauseRequest."""
+
+    command = Command.PAUSE
+
+
+@dataclasses.dataclass()
 class RunInTerminalResponse(Response, dap={"body": {"processId": "process_id", "shellProcessId": "shell_process_id"}}):
     """Response to RunInTerminalRequest.
 

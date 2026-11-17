@@ -275,6 +275,12 @@ class DebugState(t.Protocol):
     ) -> dap.SetVariableResponse:
         raise NotImplementedError()  # pragma: nocover
 
+    def pause(
+        self,
+        request: dap.PauseRequest,
+    ) -> None:
+        raise NotImplementedError()  # pragma: nocover
+
     def step_in(
         self,
         request: dap.StepInRequest,
@@ -810,6 +816,16 @@ class AnsibleDebugger(metaclass=Singleton):
         strategy = self._get_strategy()
         self.queue_msg(dap.NextResponse(request_seq=msg.seq))
         strategy.step_over(msg)
+
+    @process_message.register
+    def _(
+        self,
+        msg: dap.PauseRequest,
+    ) -> None:
+        strategy = self._get_strategy()
+        # The StoppedEvent is sent once the thread reaches its next task.
+        self.queue_msg(dap.PauseResponse(request_seq=msg.seq))
+        strategy.pause(msg)
 
     @process_message.register
     def _(

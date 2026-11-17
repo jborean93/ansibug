@@ -631,3 +631,19 @@ class ExceptionInfoRequest(Request, dap={"arguments": {"threadId": "thread_id"}}
     command = Command.EXCEPTION_INFO
 
     thread_id: int
+
+
+@dataclasses.dataclass()
+class PauseRequest(Request, dap={"arguments": {"threadId": "thread_id"}}):
+    """Request to suspend the debuggee.
+
+    The debug adapter responds immediately and sends a StoppedEvent with the
+    reason pause once the thread has stopped.
+
+    Args:
+        thread_id: The thread to pause.
+    """
+
+    command = Command.PAUSE
+
+    thread_id: int
