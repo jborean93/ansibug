@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import pathlib
 import shutil
+import time
 
 import pytest
 from dap_client import DAPClient
@@ -1809,3 +1810,75 @@ def test_logpoint(
 
     proc.communicate()
     assert proc.returncode == 0, proc.format_output()
+
+
+@pytest.mark.parametrize("pause_main_thread", [False, True], ids=["host_thread", "main_thread"])
+def test_pause(
+    pause_main_thread: bool,
+    dap_client: DAPClient,
+    tmp_path: pathlib.Path,
+) -> None:
+    # The long task creates this file and runs until it is deleted so the
+    # test controls when it finishes.
+    running = tmp_path / "running"
+    playbook = tmp_path / "main.yml"
+    playbook.write_text(
+        rf"""
+- hosts: localhost
+  gather_facts: false
+  tasks:
+  - name: long task
+    shell: touch '{running}' && while [ -e '{running}' ]; do sleep 0.1; done
+
+  - name: after
+    ping:
+"""
+    )
+
+    proc = dap_client.launch(playbook, playbook_dir=tmp_path)
+    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
+    tid = dap_client.wait_for_message(dap.ThreadEvent).thread_id
+
+    deadline = time.monotonic() + 20
+    while not running.exists():
+        assert time.monotonic() < deadline, f"Timed out waiting for the long task to start\n{proc.format_output()}"
+        time.sleep(0.1)
+
+    # The long task is running, the pause applies before the next task.
+    pause_tid = 1 if pause_main_thread else tid
+    if pause_main_thread:
+        first = "ansibug: Pausing, the next host to start a task will stop."
+        repeat = "ansibug: Already pausing, the next host to start a task will stop."
+    else:
+        first = "ansibug: Pausing localhost, it will stop before its next task starts."
+        repeat = "ansibug: localhost is already pausing, it will stop before its next task starts."
+
+    dap_client.send(dap.PauseRequest(thread_id=pause_tid), dap.PauseResponse)
+    dap_client.send(dap.PauseRequest(thread_id=pause_tid), dap.PauseResponse)
+
+    # The requests are processed in order and the response is sent before
+    # the pause is set, once the 2nd response is received the 1st pause is
+    # guaranteed to be set. Let the long task finish.
+    running.unlink()
+
+    # Pressed twice but only stops once.
+    stopped = dap_client.wait_for_message(dap.StoppedEvent)
+    assert stopped.reason == dap.StoppedReason.PAUSE
+    assert stopped.thread_id == tid
+    st_resp = dap_client.send(dap.StackTraceRequest(thread_id=tid), dap.StackTraceResponse)
+    assert st_resp.stack_frames[0].name == "after"
+
+    # Pausing a stopped thread does nothing.
+    dap_client.send(dap.PauseRequest(thread_id=tid), dap.PauseResponse)
+    dap_client.send(dap.ContinueRequest(thread_id=tid), dap.ContinueResponse)
+
+    dap_client.wait_for_message(dap.ThreadEvent)
+    dap_client.wait_for_message(dap.TerminatedEvent)
+    stdout = proc.communicate()[0].decode()
+    assert proc.returncode == 0, proc.format_output()
+
+    # The messages are shown in the playbook output, only one per pause
+    # request that was not already stopped.
+    assert stdout.count("ansibug: ") == 2, stdout
+    assert first in stdout
+    assert repeat in stdout

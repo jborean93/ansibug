@@ -20,9 +20,12 @@
   + Added conditions to the `Uncaught Failures`, `Unreachable Hosts`, and `Skipped Tasks` exception breakpoints
     + The condition is an Ansible conditional with the task result available as `result`
     + For example `inventory_hostname == 'db1'` only stops when `db1` fails and `'Permission denied' in result.msg` only stops on that error
-  + Added the `exceptionInfo` request so clients like can show the error in the exception widget
-    + Some clients, like VSCode already used this info, this is to provide other clients another way to retrieve the exception info
+  + Added the `exceptionInfo` request so clients can show the error in their exception widget
+    + Clients like Visual Studio Code already showed the error from the stopped event, this gives other clients a structured way to retrieve it
     + The error message and the module traceback, if Ansible captured one, are shown separately
++ Added support for pausing a running playbook
+  + A running module cannot be interrupted, the host stops before its next task starts
+  + A message is shown in the `ansible-playbook` output when the pause is requested so it is clear it is waiting, pausing again before it stops has no extra effect
 
 ### Changes
 
@@ -36,7 +39,7 @@
   + Show `hostvars` as `HostVars (N hosts)` instead of templating every variable of every host to display it, expand it to see each host
 + Use JSON instead of `pickle` for the internal messages between the debug adapter and `ansible-playbook`, attaching to an untrusted address can no longer run code in the debug adapter process
 + Debug Adapter Protocol
-  + Return an error response for unknown requests, like `pause`, and for requests sent before a playbook is launched or attached instead of ending the debug adapter
+  + Return an error response for unknown requests, like `goto`, and for requests sent before a playbook is launched or attached instead of ending the debug adapter
   + Omit unset optional fields from DAP messages instead of sending `null`, as required by the DAP specification
   + Return a clearer message when evaluating an expression without a stack frame
 

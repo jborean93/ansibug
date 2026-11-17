@@ -163,6 +163,8 @@ class AnsibleThread:
         self.stack_frames: list[int] = []
         self.state: ThreadState = ThreadState.CONTINUE
         self._stopped_task: Task | None = None
+        # Set by a pause request, the thread stops before its next task.
+        self.pause_requested = False
         # The ExceptionInfoResponse body when stopped on an exception.
         self.exception_info: dict[str, t.Any] | None = None
 
@@ -204,6 +206,7 @@ class AnsibleThread:
         self,
         task: Task,
         breakpoint: AnsibleLineBreakpoint | AnsibleFunctionBreakpoint | None,
+        pause: bool = False,
     ) -> ansibug.dap.StoppedEvent | None:
         stopped_kwargs: dict[str, t.Any] = {}
 
@@ -243,7 +246,16 @@ class AnsibleThread:
                 "thread_id": self.id,
             }
 
+        elif pause:
+            stopped_kwargs = {
+                "reason": ansibug.dap.StoppedReason.PAUSE,
+                "description": "Paused",
+                "thread_id": self.id,
+            }
+
         if stopped_kwargs:
+            # Any stop satisfies a pause request.
+            self.pause_requested = False
             # Store this task so the step_* actions can use it when verifying
             # if the requested action for this task should cause a stop.
             self._stopped_task = task
@@ -618,6 +630,9 @@ class AnsibleDebugState(DebugState):
         self._loader = loader
         self._variable_mamanger = variable_manager
         self._waiting_condition = threading.Condition()
+        # Set by a pause request without a host thread, the next host to start
+        # a task stops.
+        self._pause_next_host = False
 
     def start_task(
         self,
@@ -687,9 +702,10 @@ class AnsibleDebugState(DebugState):
             breakpoint = self._match_breakpoint(
                 self._debugger.get_breakpoint(path, line), sf
             ) or self._match_breakpoint(self._debugger.get_function_breakpoint(_get_task_names(task)), sf)
-            stopped_event = thread.should_break(task, breakpoint)
+            stopped_event = thread.should_break(task, breakpoint, thread.pause_requested or self._pause_next_host)
 
             if stopped_event:
+                self._pause_next_host = False
                 self._debugger.queue_msg(stopped_event)
                 self._waiting_condition.wait_for(lambda: self.threads[tid].state != ThreadState.WAIT)
                 self._reset_frame_variables(thread)
@@ -1157,6 +1173,34 @@ class AnsibleDebugState(DebugState):
             named_variables=new_container.named_variables if new_container else 0,
             indexed_variables=new_container.indexed_variables if new_container else 0,
         )
+
+    def pause(
+        self,
+        request: ansibug.dap.PauseRequest,
+    ) -> None:
+        # A running module cannot be interrupted, the thread stops before its
+        # next task so tell the user it is waiting.
+        with self._waiting_condition:
+            thread = self.threads.get(request.thread_id)
+            if thread and thread.state == ThreadState.WAIT:
+                return
+
+            if thread and thread.host:
+                host = thread.host.get_name()
+                already = thread.pause_requested
+                thread.pause_requested = True
+                msg = f"{host} is already pausing" if already else f"Pausing {host}"
+                msg += ", it will stop before its next task starts."
+
+            else:
+                # The main thread or a thread that has since exited.
+                already = self._pause_next_host
+                self._pause_next_host = True
+                msg = "Already pausing" if already else "Pausing"
+                msg += ", the next host to start a task will stop."
+
+        # Shown in the terminal running ansible-playbook alongside its output.
+        display.display(f"ansibug: {msg}")
 
     def step_in(
         self,

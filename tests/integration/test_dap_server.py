@@ -17,12 +17,12 @@ import ansibug.dap as dap
 def test_unknown_request(
     dap_client: DAPClient,
 ) -> None:
-    dap_client.send_raw({"seq": 100, "type": "request", "command": "pause", "arguments": {"threadId": 1}})
+    dap_client.send_raw({"seq": 100, "type": "request", "command": "goto", "arguments": {"threadId": 1, "targetId": 1}})
 
     err = dap_client.wait_for_message(dap.ErrorResponse)
     assert err.request_seq == 100
-    assert err.command == "pause"
-    assert err.message == "ansibug does not support the pause request"
+    assert err.command == "goto"
+    assert err.message == "ansibug does not support the goto request"
 
     # The server is still processing requests.
     dap_client.send(dap.ThreadsRequest())
