@@ -32,19 +32,9 @@ def test_unknown_message(
 def test_unknown_message_on_debuggee(
     dap_client: DAPClient,
     tmp_path: pathlib.Path,
+    ping_playbook: pathlib.Path,
 ) -> None:
-    playbook = tmp_path / "main.yml"
-    playbook.write_text(
-        r"""
-- hosts: localhost
-  gather_facts: false
-  tasks:
-  - name: ping test
-    ping:
-"""
-    )
-
-    proc = dap_client.launch(playbook, playbook_dir=tmp_path)
+    proc = dap_client.launch(ping_playbook, playbook_dir=tmp_path)
 
     # After the debuggee is connected any requests are forwarded to it from the
     # DA server. This tests out how it reacts with an unknown request.
@@ -54,32 +44,24 @@ def test_unknown_message_on_debuggee(
     assert "NotImplementedError: Debuggee does not support the LaunchRequest message" in err.message
 
     # We should be able to continue on as normal though
-    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
-    dap_client.wait_for_message(dap.ThreadEvent)
-    dap_client.wait_for_message(dap.ThreadEvent)
-    dap_client.wait_for_message(dap.TerminatedEvent)
-
-    play_out = proc.communicate()
-    if rc := proc.returncode:
-        raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
+    dap_client.configuration_done()
+    dap_client.wait_for_end(proc)
 
 
 def test_connect_failure_does_not_hang(
     tmp_path: pathlib.Path,
+    ping_playbook: pathlib.Path,
 ) -> None:
-    playbook = tmp_path / "main.yml"
-    playbook.write_text(
-        r"""
-- hosts: localhost
-  gather_facts: false
-  tasks:
-  - name: ping test
-    ping:
-"""
-    )
-
     proc = AnsibleProcess(
-        [sys.executable, "-m", "ansibug", "connect", "--addr", f"uds://{tmp_path / 'missing.sock'}", str(playbook)],
+        [
+            sys.executable,
+            "-m",
+            "ansibug",
+            "connect",
+            "--addr",
+            f"uds://{tmp_path / 'missing.sock'}",
+            str(ping_playbook),
+        ],
         cwd=tmp_path,
         env=get_test_env(),
     )

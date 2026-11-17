@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import collections.abc
+import os
 import pathlib
 import secrets
 import string
@@ -11,8 +12,6 @@ import sys
 
 import pytest
 from cryptography import x509
-
-import ansibug.dap as dap
 
 sys.path.append(str(pathlib.Path(__file__).parent / "utils"))
 
@@ -24,20 +23,10 @@ from tls_info import CertFixture, generate_cert, serialize_cert
 def dap_client(
     request: pytest.FixtureRequest,
 ) -> collections.abc.Iterator[DAPClient]:
-    log_dir = None
-    # log_dir = pathlib.Path("/tmp")  # Uncomment when you want to debug the tests
+    # Set to a directory to get the debug logs of the DA server and debuggee.
+    log_dir = pathlib.Path(d) if (d := os.environ.get("ANSIBUG_TEST_LOG_DIR")) else None
     with DAPClient(request.node.name, log_dir=log_dir) as client:
-        client.send(
-            dap.InitializeRequest(
-                adapter_id="ansibug",
-                client_id="ansibug",
-                client_name="Ansibug Conftest",
-                locale="en",
-                supports_variable_type=True,
-                supports_run_in_terminal_request=True,
-            ),
-            dap.InitializeResponse,
-        )
+        client.initialize()
 
         yield client
 
@@ -114,3 +103,19 @@ def certs(tmp_path_factory: pytest.TempPathFactory) -> CertFixture:
     serialize_cert(*client_self_signed, combined=test_certs.client_invalid)
 
     return test_certs
+
+
+@pytest.fixture(scope="function")
+def ping_playbook(tmp_path: pathlib.Path) -> pathlib.Path:
+    """A playbook on localhost with a single ping task on line 5."""
+    playbook = tmp_path / "main.yml"
+    playbook.write_text(
+        r"""
+- hosts: localhost
+  gather_facts: false
+  tasks:
+  - name: ping test
+    ping:
+"""
+    )
+    return playbook

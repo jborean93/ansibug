@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import pathlib
 import shutil
+import uuid
 
 import pytest
 from dap_client import DAPClient
@@ -48,30 +49,11 @@ collections_path = {collections_path.absolute()!s}
         },
     )
 
-    dap_client.send(
-        dap.SetBreakpointsRequest(
-            source=dap.Source(
-                name="main.yml",
-                path=str(playbook.absolute()),
-            ),
-            lines=[5],
-            breakpoints=[dap.SourceBreakpoint(line=5)],
-            source_modified=False,
-        ),
-        dap.SetBreakpointsResponse,
-    )
+    dap_client.set_breakpoints(playbook, 5)
 
-    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
-
-    thread_event = dap_client.wait_for_message(dap.ThreadEvent)
+    tid = dap_client.configuration_done()
     dap_client.wait_for_message(dap.StoppedEvent)
-    dap_client.send(dap.ContinueRequest(thread_id=thread_event.thread_id), dap.ContinueResponse)
-    dap_client.wait_for_message(dap.ThreadEvent)
-    dap_client.wait_for_message(dap.TerminatedEvent)
-
-    play_out = proc.communicate()
-    if rc := proc.returncode:
-        raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
+    dap_client.continue_to_end(proc, tid)
 
     assert result_file.exists()
 
@@ -80,14 +62,20 @@ def test_playbook_default_collections_path(
     dap_client: DAPClient,
     tmp_path: pathlib.Path,
 ) -> None:
+    # This is the only test that should touch the user's real collections
+    # path as it checks the default path still works under ansibug, any other
+    # test must use a collections dir in tmp_path. The namespace is unique so
+    # it cannot clash with or remove an installed collection or another run.
+    namespace = f"ansibug_test_{uuid.uuid4().hex}"
+
     playbook = tmp_path / "main.yml"
     playbook.write_text(
-        r"""
+        rf"""
 - hosts: localhost
   gather_facts: false
   tasks:
   - name: ping test
-    ansibug.temp.ping:
+    {namespace}.temp.ping:
 """
     )
 
@@ -101,7 +89,7 @@ def test_playbook_default_collections_path(
         / "modules"
         / "ping.py"
     )
-    temp_collection_root = pathlib.Path("~/.ansible/collections/ansible_collections/ansibug").expanduser()
+    temp_collection_root = pathlib.Path("~/.ansible/collections/ansible_collections").expanduser() / namespace
     temp_collection_module_dir = temp_collection_root / "temp" / "plugins" / "modules"
     temp_collection_module_dir.mkdir(parents=True)
     try:
@@ -112,51 +100,21 @@ def test_playbook_default_collections_path(
             playbook_dir=tmp_path,
         )
 
-        dap_client.send(
-            dap.SetBreakpointsRequest(
-                source=dap.Source(
-                    name="main.yml",
-                    path=str(playbook.absolute()),
-                ),
-                lines=[5],
-                breakpoints=[dap.SourceBreakpoint(line=5)],
-                source_modified=False,
-            ),
-            dap.SetBreakpointsResponse,
-        )
+        dap_client.set_breakpoints(playbook, 5)
 
-        dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
-
-        thread_event = dap_client.wait_for_message(dap.ThreadEvent)
+        tid = dap_client.configuration_done()
         dap_client.wait_for_message(dap.StoppedEvent)
-        dap_client.send(dap.ContinueRequest(thread_id=thread_event.thread_id), dap.ContinueResponse)
-        dap_client.wait_for_message(dap.ThreadEvent)
-        dap_client.wait_for_message(dap.TerminatedEvent)
-
-        play_out = proc.communicate()
+        dap_client.continue_to_end(proc, tid)
 
     finally:
         shutil.rmtree(temp_collection_root)
-
-    if rc := proc.returncode:
-        raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
 
 
 def test_ansible_config_verbosity(
     dap_client: DAPClient,
     tmp_path: pathlib.Path,
+    ping_playbook: pathlib.Path,
 ) -> None:
-    playbook = tmp_path / "main.yml"
-    playbook.write_text(
-        r"""
-- hosts: localhost
-  gather_facts: false
-  tasks:
-  - name: ping test
-    ping:
-"""
-    )
-
     ansible_cfg = tmp_path / "ansible.cfg"
     ansible_cfg.write_text(
         rf"""[defaults]
@@ -165,7 +123,7 @@ verbosity = 3
     )
 
     proc = dap_client.launch(
-        playbook,
+        ping_playbook,
         playbook_dir=tmp_path,
         launch_options={
             "env": {
@@ -174,30 +132,11 @@ verbosity = 3
         },
     )
 
-    dap_client.send(
-        dap.SetBreakpointsRequest(
-            source=dap.Source(
-                name="main.yml",
-                path=str(playbook.absolute()),
-            ),
-            lines=[5],
-            breakpoints=[dap.SourceBreakpoint(line=5)],
-            source_modified=False,
-        ),
-        dap.SetBreakpointsResponse,
-    )
+    dap_client.set_breakpoints(ping_playbook, 5)
 
-    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
-
-    thread_event = dap_client.wait_for_message(dap.ThreadEvent)
+    tid = dap_client.configuration_done()
     dap_client.wait_for_message(dap.StoppedEvent)
-    dap_client.send(dap.ContinueRequest(thread_id=thread_event.thread_id), dap.ContinueResponse)
-    dap_client.wait_for_message(dap.ThreadEvent)
-    dap_client.wait_for_message(dap.TerminatedEvent)
-
-    play_out = proc.communicate()
-    if rc := proc.returncode:
-        raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
+    dap_client.continue_to_end(proc, tid)
 
 
 @pytest.mark.parametrize("deprecation_warnings", [True, False])
@@ -245,36 +184,14 @@ deprecation_warnings = {deprecation_warnings}
             playbook_dir=tmp_path,
         )
 
-        dap_client.send(
-            dap.SetBreakpointsRequest(
-                source=dap.Source(
-                    name="main.yml",
-                    path=str(playbook.absolute()),
-                ),
-                lines=[5],
-                breakpoints=[dap.SourceBreakpoint(line=5)],
-                source_modified=False,
-            ),
-            dap.SetBreakpointsResponse,
-        )
+        dap_client.set_breakpoints(playbook, 5)
 
-        dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
-
-        thread_event = dap_client.wait_for_message(dap.ThreadEvent)
+        tid = dap_client.configuration_done()
         dap_client.wait_for_message(dap.StoppedEvent)
-        dap_client.send(dap.ContinueRequest(thread_id=thread_event.thread_id), dap.ContinueResponse)
-        dap_client.wait_for_message(dap.ThreadEvent)
-        dap_client.wait_for_message(dap.TerminatedEvent)
-
-        play_out = proc.communicate()
+        _, stderr = dap_client.continue_to_end(proc, tid)
 
     finally:
         shutil.rmtree(temp_collection_root)
-
-    if rc := proc.returncode:
-        raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
-
-    stderr = play_out[1].decode()
 
     assert "Use of strategy plugins not included in ansible.builtin are deprecated" not in stderr, (
         f"Strategy plugin msg was found in {stderr}"

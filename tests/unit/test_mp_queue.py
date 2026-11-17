@@ -7,21 +7,21 @@ import concurrent.futures
 import json
 import socket
 import struct
-import time
 import typing as t
 
 import pytest
+from socket_utils import SignallingCancellationToken
 from tls_info import CertFixture
 
 import ansibug.dap as dap
 from ansibug import _mp_queue as mpq
 from ansibug._debuggee import DebugConfiguration, PathMapping
-from ansibug._socket_helper import CancelledError, SocketCancellationToken, SocketHelper
+from ansibug._socket_helper import CancelledError, SocketHelper
 from ansibug._tls import create_client_tls_context, create_server_tls_context
 
 
 def test_connect_failure_unknown_target() -> None:
-    with mpq.ClientMPQueue("tcp://unknown:12345", mpq.MPProtocol) as client:
+    with mpq.ClientMPQueue("tcp://unknown.invalid:12345", mpq.MPProtocol) as client:
         # The error message differs depending on the host, just check there
         # was an error.
         with pytest.raises(OSError):
@@ -85,13 +85,13 @@ def test_server_tls_handshake_timeout(
 
 def test_server_tls_handshake_cancel(certs: CertFixture) -> None:
     server_ctx = create_server_tls_context(certfile=str(certs.server_combined))
-    token = SocketCancellationToken()
+    token = SignallingCancellationToken()
 
     server = mpq.ServerMPQueue("tcp://:0", mpq.MPProtocol, ssl_context=server_ctx, cancel_token=token)
     with server:
         with _connect_raw(server.address):
             server_fut = _start_server(server)
-            time.sleep(0.5)  # Give the server time to reach the handshake.
+            token.wait_entered(2)  # The accept then the TLS handshake.
             token.cancel()
 
             # Must not wait for SERVER_HANDSHAKE_TIMEOUT.

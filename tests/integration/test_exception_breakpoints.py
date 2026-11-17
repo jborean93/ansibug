@@ -7,7 +7,7 @@ import pathlib
 import shutil
 
 import pytest
-from dap_client import DAPClient
+from dap_client import DAPClient, write_inventory
 
 import ansibug.dap as dap
 
@@ -32,11 +32,7 @@ def test_break_on_error(
     proc = dap_client.launch(playbook, playbook_dir=tmp_path)
 
     dap_client.send(dap.SetExceptionBreakpointsRequest(filters=["on_error"]), dap.SetExceptionBreakpointsResponse)
-    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
-
-    resp = dap_client.wait_for_message(dap.ThreadEvent)
-    assert resp.reason == "started"
-    host_tid = resp.thread_id
+    host_tid = dap_client.configuration_done()
 
     stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
     assert stopped_event.reason == dap.StoppedReason.EXCEPTION
@@ -81,16 +77,7 @@ def test_break_on_error(
 
     assert len(to_find) == 0
 
-    dap_client.send(dap.ContinueRequest(thread_id=host_tid), dap.ContinueResponse)
-
-    resp = dap_client.wait_for_message(dap.ThreadEvent)
-    assert resp.reason == "exited"
-
-    dap_client.wait_for_message(dap.TerminatedEvent)
-
-    play_out = proc.communicate()
-    if (rc := proc.returncode) != 2:
-        raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
+    dap_client.continue_to_end(proc, host_tid, 2)
 
 
 def test_break_on_error_stop_after(
@@ -113,11 +100,7 @@ def test_break_on_error_stop_after(
     proc = dap_client.launch(playbook, playbook_dir=tmp_path)
 
     dap_client.send(dap.SetExceptionBreakpointsRequest(filters=["on_error"]), dap.SetExceptionBreakpointsResponse)
-    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
-
-    resp = dap_client.wait_for_message(dap.ThreadEvent)
-    assert resp.reason == "started"
-    host_tid = resp.thread_id
+    host_tid = dap_client.configuration_done()
 
     stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
     assert stopped_event.reason == dap.StoppedReason.EXCEPTION
@@ -128,9 +111,7 @@ def test_break_on_error_stop_after(
     dap_client.send(dap.DisconnectRequest(terminate_debuggee=True), dap.DisconnectResponse)
     dap_client.wait_for_message(dap.TerminatedEvent)
 
-    play_out = proc.communicate()
-    if (rc := proc.returncode) != 2:
-        raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
+    proc.wait_rc(2)
 
 
 def test_do_not_break_on_error_ignore_errors(
@@ -153,19 +134,9 @@ def test_do_not_break_on_error_ignore_errors(
     proc = dap_client.launch(playbook, playbook_dir=tmp_path)
 
     dap_client.send(dap.SetExceptionBreakpointsRequest(filters=["on_error"]), dap.SetExceptionBreakpointsResponse)
-    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
+    dap_client.configuration_done()
 
-    resp = dap_client.wait_for_message(dap.ThreadEvent)
-    assert resp.reason == "started"
-
-    resp = dap_client.wait_for_message(dap.ThreadEvent)
-    assert resp.reason == "exited"
-
-    dap_client.wait_for_message(dap.TerminatedEvent)
-
-    play_out = proc.communicate()
-    if rc := proc.returncode:
-        raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
+    dap_client.wait_for_end(proc)
 
 
 def test_do_not_break_on_error_in_rescue(
@@ -192,21 +163,11 @@ def test_do_not_break_on_error_in_rescue(
     proc = dap_client.launch(playbook, playbook_dir=tmp_path)
 
     dap_client.send(dap.SetExceptionBreakpointsRequest(filters=["on_error"]), dap.SetExceptionBreakpointsResponse)
-    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
+    dap_client.configuration_done()
 
-    resp = dap_client.wait_for_message(dap.ThreadEvent)
-    assert resp.reason == "started"
+    play_out = dap_client.wait_for_end(proc)
 
-    resp = dap_client.wait_for_message(dap.ThreadEvent)
-    assert resp.reason == "exited"
-
-    dap_client.wait_for_message(dap.TerminatedEvent)
-
-    play_out = proc.communicate()
-    if rc := proc.returncode:
-        raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
-
-    assert "Rescue ran" in play_out[0].decode()
+    assert "Rescue ran" in play_out[0]
 
 
 def test_do_not_break_on_error_unset(
@@ -228,19 +189,9 @@ def test_do_not_break_on_error_unset(
     proc = dap_client.launch(playbook, playbook_dir=tmp_path)
 
     dap_client.send(dap.SetExceptionBreakpointsRequest(filters=["on_unreachable"]), dap.SetExceptionBreakpointsResponse)
-    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
+    dap_client.configuration_done()
 
-    resp = dap_client.wait_for_message(dap.ThreadEvent)
-    assert resp.reason == "started"
-
-    resp = dap_client.wait_for_message(dap.ThreadEvent)
-    assert resp.reason == "exited"
-
-    dap_client.wait_for_message(dap.TerminatedEvent)
-
-    play_out = proc.communicate()
-    if (rc := proc.returncode) != 2:
-        raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
+    dap_client.wait_for_end(proc, rc=2)
 
 
 def test_break_on_unreachable(
@@ -281,11 +232,7 @@ def test_break_on_unreachable(
         dap_client.send(
             dap.SetExceptionBreakpointsRequest(filters=["on_unreachable"]), dap.SetExceptionBreakpointsResponse
         )
-        dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
-
-        resp = dap_client.wait_for_message(dap.ThreadEvent)
-        assert resp.reason == "started"
-        host_tid = resp.thread_id
+        host_tid = dap_client.configuration_done()
 
         stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
         assert stopped_event.reason == dap.StoppedReason.EXCEPTION
@@ -330,20 +277,10 @@ def test_break_on_unreachable(
 
         assert len(to_find) == 0
 
-        dap_client.send(dap.ContinueRequest(thread_id=host_tid), dap.ContinueResponse)
-
-        resp = dap_client.wait_for_message(dap.ThreadEvent)
-        assert resp.reason == "exited"
-
-        dap_client.wait_for_message(dap.TerminatedEvent)
-
-        play_out = proc.communicate()
+        dap_client.continue_to_end(proc, host_tid, 4)
 
     finally:
         shutil.rmtree(temp_collection_root)
-
-    if (rc := proc.returncode) != 4:
-        raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
 
 
 def test_do_not_break_on_unreachable_ignore_unreachable(
@@ -390,18 +327,10 @@ def test_do_not_break_on_unreachable_ignore_unreachable(
         resp = dap_client.wait_for_message(dap.ThreadEvent)
         assert resp.reason == "started"
 
-        resp = dap_client.wait_for_message(dap.ThreadEvent)
-        assert resp.reason == "exited"
-
-        dap_client.wait_for_message(dap.TerminatedEvent)
-
-        play_out = proc.communicate()
+        dap_client.wait_for_end(proc)
 
     finally:
         shutil.rmtree(temp_collection_root)
-
-    if rc := proc.returncode:
-        raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
 
 
 def test_do_not_break_on_unreachable_unset(
@@ -445,18 +374,10 @@ def test_do_not_break_on_unreachable_unset(
         resp = dap_client.wait_for_message(dap.ThreadEvent)
         assert resp.reason == "started"
 
-        resp = dap_client.wait_for_message(dap.ThreadEvent)
-        assert resp.reason == "exited"
-
-        dap_client.wait_for_message(dap.TerminatedEvent)
-
-        play_out = proc.communicate()
+        dap_client.wait_for_end(proc, rc=4)
 
     finally:
         shutil.rmtree(temp_collection_root)
-
-    if (rc := proc.returncode) != 4:
-        raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
 
 
 def test_break_on_skipped(
@@ -481,11 +402,7 @@ def test_break_on_skipped(
     proc = dap_client.launch(playbook, playbook_dir=tmp_path)
 
     dap_client.send(dap.SetExceptionBreakpointsRequest(filters=["on_skipped"]), dap.SetExceptionBreakpointsResponse)
-    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
-
-    resp = dap_client.wait_for_message(dap.ThreadEvent)
-    assert resp.reason == "started"
-    host_tid = resp.thread_id
+    host_tid = dap_client.configuration_done()
 
     stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
     assert stopped_event.reason == dap.StoppedReason.EXCEPTION
@@ -537,16 +454,7 @@ def test_break_on_skipped(
 
     assert len(to_find) == 0
 
-    dap_client.send(dap.ContinueRequest(thread_id=host_tid), dap.ContinueResponse)
-
-    resp = dap_client.wait_for_message(dap.ThreadEvent)
-    assert resp.reason == "exited"
-
-    dap_client.wait_for_message(dap.TerminatedEvent)
-
-    play_out = proc.communicate()
-    if rc := proc.returncode:
-        raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
+    dap_client.continue_to_end(proc, host_tid)
 
 
 def test_do_not_break_on_skipped_unset(
@@ -571,19 +479,9 @@ def test_do_not_break_on_skipped_unset(
     proc = dap_client.launch(playbook, playbook_dir=tmp_path)
 
     dap_client.send(dap.SetExceptionBreakpointsRequest(filters=["on_error"]), dap.SetExceptionBreakpointsResponse)
-    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
+    dap_client.configuration_done()
 
-    resp = dap_client.wait_for_message(dap.ThreadEvent)
-    assert resp.reason == "started"
-
-    resp = dap_client.wait_for_message(dap.ThreadEvent)
-    assert resp.reason == "exited"
-
-    dap_client.wait_for_message(dap.TerminatedEvent)
-
-    play_out = proc.communicate()
-    if rc := proc.returncode:
-        raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
+    dap_client.wait_for_end(proc)
 
 
 def test_step_over_after_exception_stop(
@@ -610,8 +508,7 @@ def test_step_over_after_exception_stop(
 
     proc = dap_client.launch(playbook, playbook_dir=tmp_path)
     dap_client.send(dap.SetExceptionBreakpointsRequest(filters=["on_skipped"]), dap.SetExceptionBreakpointsResponse)
-    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
-    tid = dap_client.wait_for_message(dap.ThreadEvent).thread_id
+    tid = dap_client.configuration_done()
 
     stopped = dap_client.wait_for_message(dap.StoppedEvent)
     assert stopped.reason == dap.StoppedReason.EXCEPTION
@@ -622,12 +519,7 @@ def test_step_over_after_exception_stop(
     st_resp = dap_client.send(dap.StackTraceRequest(thread_id=tid), dap.StackTraceResponse)
     assert [f.name for f in st_resp.stack_frames] == ["after"]
 
-    dap_client.send(dap.ContinueRequest(thread_id=tid), dap.ContinueResponse)
-    dap_client.wait_for_message(dap.ThreadEvent)
-    dap_client.wait_for_message(dap.TerminatedEvent)
-
-    proc.communicate()
-    assert proc.returncode == 0, proc.format_output()
+    dap_client.continue_to_end(proc, tid)
 
 
 def test_break_on_error_in_rescue_section(
@@ -654,8 +546,7 @@ def test_break_on_error_in_rescue_section(
 
     proc = dap_client.launch(playbook, playbook_dir=tmp_path)
     dap_client.send(dap.SetExceptionBreakpointsRequest(filters=["on_error"]), dap.SetExceptionBreakpointsResponse)
-    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
-    tid = dap_client.wait_for_message(dap.ThreadEvent).thread_id
+    tid = dap_client.configuration_done()
 
     # Only the failure in the rescue section stops, the block rescues the first.
     stopped = dap_client.wait_for_message(dap.StoppedEvent)
@@ -663,22 +554,7 @@ def test_break_on_error_in_rescue_section(
     st_resp = dap_client.send(dap.StackTraceRequest(thread_id=tid), dap.StackTraceResponse)
     assert [f.name for f in st_resp.stack_frames] == ["not rescued"]
 
-    dap_client.send(dap.ContinueRequest(thread_id=tid), dap.ContinueResponse)
-    dap_client.wait_for_message(dap.ThreadEvent)
-    dap_client.wait_for_message(dap.TerminatedEvent)
-
-    proc.communicate()
-    assert proc.returncode == 2, proc.format_output()
-
-
-def _three_host_inventory(tmp_path: pathlib.Path) -> None:
-    (tmp_path / "inventory.ini").write_text(
-        "\n".join(
-            f"host{i} ansible_host=127.0.0.1 ansible_connection=local "
-            + "ansible_python_interpreter={{ansible_playbook_python}}"
-            for i in range(1, 4)
-        )
-    )
+    dap_client.continue_to_end(proc, tid, 2)
 
 
 @pytest.mark.parametrize(
@@ -704,7 +580,7 @@ def test_break_on_error_condition(
       msg: boom {{ inventory_hostname }}
 """
     )
-    _three_host_inventory(tmp_path)
+    write_inventory(tmp_path, 3)
 
     proc = dap_client.launch("main.yml", playbook_dir=tmp_path, playbook_args=["-i", "inventory.ini", "--forks", "1"])
     dap_client.send(
@@ -736,8 +612,7 @@ def test_break_on_error_condition(
     assert stopped == [started[1]]
 
     dap_client.wait_for_message(dap.TerminatedEvent)
-    proc.communicate()
-    assert proc.returncode == 2, proc.format_output()
+    proc.wait_rc(2)
 
 
 def test_break_on_error_empty_condition(
@@ -754,16 +629,11 @@ def test_break_on_error_empty_condition(
         ),
         dap.SetExceptionBreakpointsResponse,
     )
-    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
-    tid = dap_client.wait_for_message(dap.ThreadEvent).thread_id
+    tid = dap_client.configuration_done()
 
     # An empty condition is the same as no condition.
     assert dap_client.wait_for_message(dap.StoppedEvent).reason == dap.StoppedReason.EXCEPTION
-    dap_client.send(dap.ContinueRequest(thread_id=tid), dap.ContinueResponse)
-    dap_client.wait_for_message(dap.ThreadEvent)
-    dap_client.wait_for_message(dap.TerminatedEvent)
-    proc.communicate()
-    assert proc.returncode == 2, proc.format_output()
+    dap_client.continue_to_end(proc, tid, 2)
 
 
 def test_exception_info(
@@ -790,20 +660,11 @@ def test_exception_info(
     )
 
     proc = dap_client.launch(playbook, playbook_dir=tmp_path)
-    dap_client.send(
-        dap.SetBreakpointsRequest(
-            source=dap.Source(name="main.yml", path=str(playbook.absolute())),
-            lines=[9],
-            breakpoints=[dap.SourceBreakpoint(line=9)],
-            source_modified=False,
-        ),
-        dap.SetBreakpointsResponse,
-    )
+    dap_client.set_breakpoints(playbook, 9)
     dap_client.send(
         dap.SetExceptionBreakpointsRequest(filters=["on_error", "on_skipped"]), dap.SetExceptionBreakpointsResponse
     )
-    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
-    tid = dap_client.wait_for_message(dap.ThreadEvent).thread_id
+    tid = dap_client.configuration_done()
 
     # Skipped
     dap_client.wait_for_message(dap.StoppedEvent)
@@ -836,12 +697,7 @@ def test_exception_info(
     assert "boom" in info.description
     assert info.details is not None
     assert info.details.type_name == "ansible.builtin.fail"
-    dap_client.send(dap.ContinueRequest(thread_id=tid), dap.ContinueResponse)
-
-    dap_client.wait_for_message(dap.ThreadEvent)
-    dap_client.wait_for_message(dap.TerminatedEvent)
-    proc.communicate()
-    assert proc.returncode == 2, proc.format_output()
+    dap_client.continue_to_end(proc, tid, 2)
 
 
 def test_restart_frame_on_error(
@@ -865,8 +721,7 @@ def test_restart_frame_on_error(
 
     proc = dap_client.launch(playbook, playbook_dir=tmp_path)
     dap_client.send(dap.SetExceptionBreakpointsRequest(filters=["on_error"]), dap.SetExceptionBreakpointsResponse)
-    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
-    tid = dap_client.wait_for_message(dap.ThreadEvent).thread_id
+    tid = dap_client.configuration_done()
 
     # Re-run unchanged first, it fails again and must not be counted twice.
     stopped = dap_client.wait_for_message(dap.StoppedEvent)
@@ -903,18 +758,13 @@ def test_restart_frame_on_error(
     stopped = dap_client.wait_for_message(dap.StoppedEvent)
     assert stopped.reason == dap.StoppedReason.RESTART
 
-    dap_client.send(dap.ContinueRequest(thread_id=tid), dap.ContinueResponse)
-    dap_client.wait_for_message(dap.ThreadEvent)
-    dap_client.wait_for_message(dap.TerminatedEvent)
-
-    stdout = proc.communicate()[0].decode()
-    assert proc.returncode == 0, proc.format_output()
+    stdout = dap_client.continue_to_end(proc, tid)[0]
     assert "ok=2" in stdout
     assert "failed=0" in stdout
     assert stdout.count("TASK [ping test (restarted)]") == 2
 
 
-def test_restart_frame_not_on_exception(
+def test_restart_frame_on_skipped(
     dap_client: DAPClient,
     tmp_path: pathlib.Path,
 ) -> None:
@@ -926,20 +776,41 @@ def test_restart_frame_not_on_exception(
   tasks:
   - name: ping test
     ping:
+    when: run_task | default(False)
 """
     )
 
     proc = dap_client.launch(playbook, playbook_dir=tmp_path)
+    dap_client.send(dap.SetExceptionBreakpointsRequest(filters=["on_skipped"]), dap.SetExceptionBreakpointsResponse)
+    tid = dap_client.configuration_done()
+
+    stopped = dap_client.wait_for_message(dap.StoppedEvent)
+    assert stopped.reason == dap.StoppedReason.EXCEPTION
+    st_resp = dap_client.send(dap.StackTraceRequest(thread_id=tid), dap.StackTraceResponse)
+    frame_id = st_resp.stack_frames[0].id
+    assert st_resp.stack_frames[0].can_restart
+
+    # Make the condition pass and re-run the task, the skip must no longer be counted.
     dap_client.send(
-        dap.SetBreakpointsRequest(
-            source=dap.Source(name="main.yml", path=str(playbook.absolute())),
-            lines=[5],
-            breakpoints=[dap.SourceBreakpoint(line=5)],
-        ),
-        dap.SetBreakpointsResponse,
+        dap.EvaluateRequest("!set_hostvar run_task True", frame_id=frame_id, context="repl"), dap.EvaluateResponse
     )
-    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
-    tid = dap_client.wait_for_message(dap.ThreadEvent).thread_id
+    dap_client.send(dap.RestartFrameRequest(frame_id=frame_id), dap.RestartFrameResponse)
+    stopped = dap_client.wait_for_message(dap.StoppedEvent)
+    assert stopped.reason == dap.StoppedReason.RESTART
+
+    stdout = dap_client.continue_to_end(proc, tid)[0]
+    assert "ok=1" in stdout
+    assert "skipped=0" in stdout
+
+
+def test_restart_frame_not_on_exception(
+    dap_client: DAPClient,
+    tmp_path: pathlib.Path,
+    ping_playbook: pathlib.Path,
+) -> None:
+    proc = dap_client.launch(ping_playbook, playbook_dir=tmp_path)
+    dap_client.set_breakpoints(ping_playbook, 5)
+    tid = dap_client.configuration_done()
 
     stopped = dap_client.wait_for_message(dap.StoppedEvent)
     assert stopped.reason == dap.StoppedReason.BREAKPOINT
@@ -949,12 +820,7 @@ def test_restart_frame_not_on_exception(
     err = dap_client.send(dap.RestartFrameRequest(frame_id=st_resp.stack_frames[0].id), dap.ErrorResponse)
     assert "can be restarted" in (err.message or "")
 
-    dap_client.send(dap.ContinueRequest(thread_id=tid), dap.ContinueResponse)
-    dap_client.wait_for_message(dap.ThreadEvent)
-    dap_client.wait_for_message(dap.TerminatedEvent)
-
-    proc.communicate()
-    assert proc.returncode == 0, proc.format_output()
+    dap_client.continue_to_end(proc, tid)
 
 
 def test_restart_frame_on_unreachable(
@@ -995,8 +861,7 @@ def test_restart_frame_on_unreachable(
 
     proc = dap_client.launch(playbook, playbook_dir=tmp_path)
     dap_client.send(dap.SetExceptionBreakpointsRequest(filters=["on_unreachable"]), dap.SetExceptionBreakpointsResponse)
-    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
-    tid = dap_client.wait_for_message(dap.ThreadEvent).thread_id
+    tid = dap_client.configuration_done()
 
     stopped = dap_client.wait_for_message(dap.StoppedEvent)
     assert stopped.description == "Host unreachable"
@@ -1025,12 +890,7 @@ def test_restart_frame_on_unreachable(
     st_resp = dap_client.send(dap.StackTraceRequest(thread_id=tid), dap.StackTraceResponse)
     assert [f.name for f in st_resp.stack_frames] == ["after"]
 
-    dap_client.send(dap.ContinueRequest(thread_id=tid), dap.ContinueResponse)
-    dap_client.wait_for_message(dap.ThreadEvent)
-    dap_client.wait_for_message(dap.TerminatedEvent)
-
-    stdout = proc.communicate()[0].decode()
-    assert proc.returncode == 0, proc.format_output()
+    stdout = dap_client.continue_to_end(proc, tid)[0]
     assert "ok=2" in stdout
     assert "unreachable=0" in stdout
     assert "TASK [ping test (restarted)]" in stdout

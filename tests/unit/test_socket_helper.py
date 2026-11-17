@@ -9,10 +9,10 @@ import platform
 import socket
 import tempfile
 import threading
-import time
 import typing as t
 
 import pytest
+from socket_utils import SignallingCancellationToken
 
 from ansibug import _socket_helper as sh
 
@@ -54,7 +54,7 @@ def test_connect_with_cancel_macos() -> None:
         server_port = server.getsockname()[1]
 
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
-            cancel_token = sh.SocketCancellationToken()
+            cancel_token = SignallingCancellationToken()
 
             def client_connect(
                 s: socket.socket, cancel_token: sh.SocketCancellationToken, state: dict[str, t.Any]
@@ -72,7 +72,7 @@ def test_connect_with_cancel_macos() -> None:
             )
             connect_thread.start()
 
-            time.sleep(1)
+            cancel_token.wait_entered()
             cancel_token.cancel()
 
             connect_thread.join()
@@ -98,7 +98,7 @@ def test_connect_with_cancel_linux() -> None:
             client1.connect(("localhost", server_port))
 
             # The second client will hang until the backlog is freed.
-            cancel_token = sh.SocketCancellationToken()
+            cancel_token = SignallingCancellationToken()
 
             def client_connect(
                 s: socket.socket, cancel_token: sh.SocketCancellationToken, state: dict[str, t.Any]
@@ -116,7 +116,7 @@ def test_connect_with_cancel_linux() -> None:
             )
             connect_thread.start()
 
-            time.sleep(1)
+            cancel_token.wait_entered()
             cancel_token.cancel()
 
             connect_thread.join()
@@ -133,7 +133,7 @@ def test_recv_with_cancel() -> None:
             client.connect(("localhost", server.getsockname()[1]))
 
             c_helper = sh.SocketHelper("client", client)
-            cancel_token = sh.SocketCancellationToken()
+            cancel_token = SignallingCancellationToken()
 
             def client_recv(
                 s: sh.SocketHelper, cancel_token: sh.SocketCancellationToken, state: dict[str, t.Any]
@@ -151,7 +151,7 @@ def test_recv_with_cancel() -> None:
             )
             recv_thread.start()
 
-            time.sleep(1)
+            cancel_token.wait_entered()
             cancel_token.cancel()
 
             recv_thread.join()
@@ -169,7 +169,7 @@ def test_send_with_cancel() -> None:
             client.connect(("localhost", server.getsockname()[1]))
 
             c_helper = sh.SocketHelper("client", client)
-            cancel_token = sh.SocketCancellationToken()
+            cancel_token = SignallingCancellationToken()
 
             def client_send(
                 s: sh.SocketHelper, cancel_token: sh.SocketCancellationToken, state: dict[str, t.Any]
@@ -189,7 +189,7 @@ def test_send_with_cancel() -> None:
             )
             send_thread.start()
 
-            time.sleep(1)
+            cancel_token.wait_entered()
             cancel_token.cancel()
 
             send_thread.join()
@@ -207,7 +207,7 @@ def test_send_with_broken_pipe() -> None:
             client.connect(("localhost", server.getsockname()[1]))
 
             c_helper = sh.SocketHelper("client", client)
-            cancel_token = sh.SocketCancellationToken()
+            cancel_token = SignallingCancellationToken()
 
             def client_send(
                 s: sh.SocketHelper, cancel_token: sh.SocketCancellationToken, state: dict[str, t.Any]
@@ -227,17 +227,14 @@ def test_send_with_broken_pipe() -> None:
             )
             send_thread.start()
 
-            time.sleep(1)
+            cancel_token.wait_entered()
             server.close()
-            # cancel_token.cancel()
 
             send_thread.join()
             assert "exp" in state
             assert isinstance(state["exp"], OSError)
-            if platform.system() == "Darwin":
-                assert "Broken pipe" in str(state["exp"])
-            else:
-                assert "Connection reset by peer" in str(state["exp"])
+            # Which one depends on the platform and whether the send had blocked yet.
+            assert state["exp"].errno in (errno.EPIPE, errno.ECONNRESET)
 
 
 @pytest.mark.skipif(platform.system() != "Darwin", reason="Socket blocking behaviour is different")
@@ -345,7 +342,7 @@ def test_cancel_continues_after_failure() -> None:
 
 
 def test_accept_with_cancel() -> None:
-    token = sh.SocketCancellationToken()
+    token = SignallingCancellationToken()
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
         server.bind(("127.0.0.1", 0))
@@ -353,7 +350,7 @@ def test_accept_with_cancel() -> None:
 
         with concurrent.futures.ThreadPoolExecutor() as pool:
             fut = pool.submit(token.accept, server)
-            time.sleep(0.5)
+            token.wait_entered()
             token.cancel()
 
             with pytest.raises(sh.CancelledError):

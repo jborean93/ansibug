@@ -183,6 +183,7 @@ allowlist_externals =
     ansible_devel: uv
 
 passenv =
+    ANSIBUG_TEST_LOG_DIR
     GITHUB_ACTIONS
     PYTEST_ADDOPTS
 set_env =
