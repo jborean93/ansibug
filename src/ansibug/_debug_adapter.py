@@ -258,6 +258,9 @@ class DAServer:
         self._run_in_response_data: dict[int, _RunInTerminalDetails] = {}
         self._temp_dir = temp_dir
         self._terminated_sent = False
+        # The client's capabilities, some features must only be used if the
+        # client supports them.
+        self._client: dap.InitializeRequest | None = None
         # Both the stdin thread and the debuggee recv thread write to the client.
         self._send_lock = threading.Lock()
 
@@ -389,6 +392,16 @@ class DAServer:
 
         return req_no
 
+    def _debug_configuration(
+        self,
+        path_mappings: list[PathMapping],
+    ) -> DebugConfiguration:
+        """The configuration sent to ansible-playbook once it has connected."""
+        return DebugConfiguration(
+            path_mappings=path_mappings,
+            supports_invalidated_event=bool(self._client and self._client.supports_invalidated_event),
+        )
+
     def _next_message(self) -> dap.ProtocolMessage | None:
         """Gets the next client message, replying to any unknown request."""
         while True:
@@ -438,6 +451,7 @@ class DAServer:
 
     @_process_msg.register
     def _(self, msg: dap.InitializeRequest) -> None:
+        self._client = msg
         self.send_to_client(
             dap.InitializeResponse(
                 request_seq=msg.seq,
@@ -469,10 +483,14 @@ class DAServer:
                         ),
                     ],
                     supports_clipboard_context=True,
+                    supports_completions_request=True,
+                    # The ! repl commands are not word characters.
+                    completion_trigger_characters=["!"],
                     supports_conditional_breakpoints=True,
                     supports_exception_filter_options=True,
                     supports_exception_info_request=True,
                     supports_configuration_done_request=True,
+                    supports_evaluate_for_hovers=True,
                     supports_function_breakpoints=True,
                     supports_hit_conditional_breakpoints=True,
                     supports_log_points=True,
@@ -514,7 +532,7 @@ class DAServer:
             dap.OutputEvent(
                 category=DebugConfiguration.OUTPUT_CATEGORY,
                 output="",
-                data=DebugConfiguration(path_mappings=attach_args.path_mappings).to_json(),
+                data=self._debug_configuration(attach_args.path_mappings).to_json(),
             )
         )
 
@@ -667,6 +685,6 @@ rm -f "$0"
                 dap.OutputEvent(
                     category=DebugConfiguration.OUTPUT_CATEGORY,
                     output="",
-                    data=DebugConfiguration(path_mappings=details.arguments.path_mappings).to_json(),
+                    data=self._debug_configuration(details.arguments.path_mappings).to_json(),
                 )
             )

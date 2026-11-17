@@ -186,3 +186,33 @@ class ThreadEvent(Event, dap={"body": {"reason": "reason", "threadId": "thread_i
 
     reason: t.Literal["started", "exited"]
     thread_id: int
+
+
+@dataclasses.dataclass()
+class InvalidatedEvent(
+    Event,
+    dap={
+        "body": {
+            "areas": "areas",
+            "threadId": "thread_id",
+            "stackFrameId": "stack_frame_id",
+        }
+    },
+):
+    """Signals that some state in the debug adapter has changed.
+
+    The client should refetch the areas that were invalidated. This must only
+    be sent if the client set supportsInvalidatedEvent in the initialize
+    request.
+
+    Args:
+        areas: The areas that were invalidated, all areas if empty.
+        thread_id: Only the thread with this id was invalidated.
+        stack_frame_id: Only the stack frame with this id was invalidated.
+    """
+
+    event = EventType.INVALIDATED
+
+    areas: list[t.Literal["all", "stacks", "threads", "variables"] | str] = dataclasses.field(default_factory=list)
+    thread_id: int | None = None
+    stack_frame_id: int | None = None

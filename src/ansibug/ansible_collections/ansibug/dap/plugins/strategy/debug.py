@@ -18,8 +18,10 @@ import dataclasses
 import enum
 import functools
 import inspect
+import itertools
 import logging
 import os
+import re
 import threading
 import traceback
 import typing as t
@@ -81,6 +83,7 @@ from ..plugin_utils._breakpoints import (
     register_block_breakpoints,
 )
 from ..plugin_utils._repl_util import (
+    REPL_COMMANDS,
     RemoveVarCommand,
     SetVarCommand,
     TemplateCommand,
@@ -122,6 +125,77 @@ def _get_task_names(task: Task) -> set[str]:
         names.update([task.name, task.get_name()])
 
     return names
+
+
+# A variable name followed by any .name, [0], ['name'], or ["name"] lookups.
+_HOVER_ROOT = re.compile(r"\s*([A-Za-z_]\w*)")
+_HOVER_SEGMENT = re.compile(r"\.([A-Za-z_]\w*)|\[(\d+)\]|\['([^']*)'\]|\[\"([^\"]*)\"\]")
+
+
+def _resolve_raw_path(expression: str, variables: dict[str, t.Any]) -> t.Any:
+    """Resolves a variable path without templating any value.
+
+    The dict and list lookups are done through the base types so a container
+    that templates its values on access, like the ones Data Tagging uses,
+    returns the raw value. Other containers, like hostvars, would template so
+    are not traversed.
+
+    Raises:
+        KeyError: The expression is not a plain variable path or a part of it
+            is not present.
+    """
+    root = _HOVER_ROOT.match(expression)
+    if not root:
+        raise KeyError(expression)
+
+    keys: list[str | int] = [root.group(1)]
+    pos = root.end()
+    while segment := _HOVER_SEGMENT.match(expression, pos):
+        attr, index, single, double = segment.groups()
+        keys.append(int(index) if index is not None else next(k for k in (attr, single, double) if k is not None))
+        pos = segment.end()
+
+    if expression[pos:].strip():
+        raise KeyError(expression)
+
+    value: t.Any = variables
+    for key in keys:
+        if isinstance(value, dict):
+            value = dict.__getitem__(t.cast(dict[t.Any, t.Any], value), key)
+        elif isinstance(value, list) and isinstance(key, int):
+            value = list.__getitem__(t.cast(list[t.Any], value), key)
+        else:
+            raise KeyError(key)
+
+    return value
+
+
+def _raw_repr(value: t.Any) -> str:
+    """repr() of the value without a container templating its values."""
+    if isinstance(value, dict):
+        return dict.__repr__(t.cast(dict[t.Any, t.Any], value))
+    elif isinstance(value, list):
+        return list.__repr__(t.cast(list[t.Any], value))
+    else:
+        return repr(value)
+
+
+def _completion_detail(value: t.Any) -> str:
+    """The type and a short preview of a value for a completion item.
+
+    Containers only show their size, building their repr for every completion
+    request is expensive and a lazy container would template its values.
+    """
+    value_type = get_canonicalized_variable_type(value)
+    if isinstance(value, (dict, list)):
+        return f"{value_type} ({len(t.cast(t.Sized, value))} items)"
+
+    elif value is None or isinstance(value, (str, int, float, bool)):
+        preview = repr(value)
+        return f"{value_type}: {preview if len(preview) <= 50 else preview[:47] + '...'}"
+
+    else:
+        return value_type
 
 
 def _is_container(value: t.Any) -> bool:
@@ -438,6 +512,21 @@ class AnsibleVariable:
         # Child variables created for container values, keyed by name, so
         # each variables request reuses them. Cleared when the name is changed.
         self.children: dict[str, AnsibleVariable] = {}
+        # The expression that evaluates to this variable, None if there is
+        # none. An empty string is the task vars where a child is its name.
+        self.evaluate_name: str | None = None
+
+    def child_evaluate_name(
+        self,
+        name: str,
+    ) -> str | None:
+        """The expression that evaluates to the child with the name."""
+        if self.evaluate_name is None:
+            return None
+        elif not self.evaluate_name:
+            return name if name.isidentifier() else None
+        else:
+            return f"{self.evaluate_name}[{name!r}]"
 
     @property
     def named_variables(self) -> int:
@@ -479,6 +568,12 @@ class AnsibleListVariable(AnsibleVariable):
     @property
     def indexed_variables(self) -> int:
         return len(self._ds)
+
+    def child_evaluate_name(
+        self,
+        name: str,
+    ) -> str | None:
+        return None if self.evaluate_name is None else f"{self.evaluate_name}[{name}]"
 
     def get(self) -> collections.abc.Iterable[tuple[str, t.Any]]:
         return iter((str(k), v) for k, v in enumerate(self._ds))
@@ -568,6 +663,8 @@ class AnsibleHostVarsVariable(AnsibleDictVariable):
         AnsibleVariable.__init__(self, id, stackframe)
         self._host = host
         self._variable_manager = variable_manager
+        # Set when _ds is built, the names that come from the inventory.
+        self._inventory_keys: set[str] = set()
 
     @functools.cached_property
     def _ds(self) -> dict[str, t.Any]:
@@ -580,6 +677,7 @@ class AnsibleHostVarsVariable(AnsibleDictVariable):
         host_vars: dict[str, t.Any] = {}
 
         inventory_hostvars = task_vars["hostvars"][task_vars["inventory_hostname"]]
+        self._inventory_keys = {str(k) for k in inventory_hostvars.keys()}
         for k in inventory_hostvars.keys():
             try:
                 host_vars[k] = inventory_hostvars[k]
@@ -590,6 +688,16 @@ class AnsibleHostVarsVariable(AnsibleDictVariable):
             host_vars.setdefault(str(k), v)
 
         return host_vars
+
+    def child_evaluate_name(
+        self,
+        name: str,
+    ) -> str | None:
+        # The task vars overlaid on the host vars aren't in hostvars.
+        if name in self._ds and name in self._inventory_keys:
+            return f"hostvars[inventory_hostname][{name!r}]"
+
+        return name if name.isidentifier() else None
 
     def set(self, index: str, value: t.Any) -> None:
         super().set(index, value)
@@ -804,7 +912,9 @@ class AnsibleDebugState(DebugState):
                 # the raw datastore so use a custom variable class.
                 var_factory=lambda i: AnsibleDictWithRawStoreVariable(i, sf, task_args, sf.task.args),
             ).id
-            sf.variables_taskvar_id = self._add_variable(sf, sf.task_vars).id
+            task_vars = self._add_variable(sf, sf.task_vars)
+            task_vars.evaluate_name = ""
+            sf.variables_taskvar_id = task_vars.id
             sf.variables_hostvars_id = self._add_variable(
                 sf,
                 {},
@@ -812,7 +922,9 @@ class AnsibleDebugState(DebugState):
                     i, sf, sf.task_vars["inventory_hostname"], self._variable_mamanger
                 ),
             ).id
-            sf.variables_globalvars_id = self._add_variable(sf, sf.task_vars["vars"]).id
+            global_vars = self._add_variable(sf, sf.task_vars["vars"])
+            global_vars.evaluate_name = "vars"
+            sf.variables_globalvars_id = global_vars.id
 
     def _match_breakpoint(
         self,
@@ -885,15 +997,23 @@ class AnsibleDebugState(DebugState):
     def _reset_frame_variables(
         self,
         thread: AnsibleThread,
+        keep: AnsibleStackFrame | None = None,
     ) -> None:
         """Drops the cached scope variables of the thread's frames.
 
         Include frames live across multiple stops and the tasks run in between
         can change the host vars. Their scopes are recreated on the next stop.
         The module result does not change so is kept.
+
+        Args:
+            thread: The thread whose frames are reset.
+            keep: A frame to leave as is.
         """
         for sfid in thread.stack_frames:
             sf = self.stackframes[sfid]
+            if sf is keep:
+                continue
+
             for variable_id in sf.variables:
                 if variable_id != sf.variables_result_id:
                     del self.variables[variable_id]
@@ -948,6 +1068,7 @@ class AnsibleDebugState(DebugState):
             # Options for the module itself
             ansibug.dap.Scope(
                 name="Module Options",
+                presentation_hint="arguments",
                 variables_reference=module_opts.id,
                 named_variables=module_opts.named_variables,
                 indexed_variables=module_opts.indexed_variables,
@@ -955,6 +1076,7 @@ class AnsibleDebugState(DebugState):
             # Variables sent to the worker, complete snapshot for the task.
             ansibug.dap.Scope(
                 name="Task Variables",
+                presentation_hint="locals",
                 variables_reference=task_vars.id,
                 named_variables=task_vars.named_variables,
                 indexed_variables=task_vars.indexed_variables,
@@ -993,19 +1115,66 @@ class AnsibleDebugState(DebugState):
             scopes=scopes,
         )
 
+    def completions(
+        self,
+        request: ansibug.dap.CompletionsRequest,
+    ) -> ansibug.dap.CompletionsResponse:
+        # The column is 1 based and the completion is for the text before it.
+        text = request.text[: request.column - 1]
+        sf = self.stackframes.get(request.frame_id) if request.frame_id else None
+
+        # The name and detail of each candidate.
+        candidates: dict[str, str]
+        item_type = "variable"
+        if command := re.fullmatch(r"\s*!(\w*)", text):
+            prefix = command.group(1)
+            candidates = {}
+            for name, info in REPL_COMMANDS.items():
+                for typed in (name, info.alias):
+                    candidates[typed] = f"!{typed} {info.usage}: {info.help}"
+            item_type = "keyword"
+        elif option := re.fullmatch(r"\s*!(?:so|set_option|ro|remove_option)\s+(\w*)", text):
+            prefix = option.group(1)
+            # The raw options before templating.
+            candidates = {str(k): _completion_detail(v) for k, v in sf.task.args.items()} if sf else {}
+            item_type = "property"
+        else:
+            word = re.search(r"[A-Za-z_]\w*$", text)
+            prefix = word.group(0) if word else ""
+            # dict.items avoids a lazy container templating the values.
+            candidates = {str(k): _completion_detail(v) for k, v in dict.items(sf.task_vars)} if sf else {}
+
+        start = len(text) - len(prefix) + 1
+        return ansibug.dap.CompletionsResponse(
+            request_seq=request.seq,
+            targets=[
+                ansibug.dap.CompletionItem(
+                    label=name,
+                    detail=candidates[name],
+                    type=item_type,
+                    start=start,
+                    length=len(prefix),
+                )
+                for name in sorted(candidates)
+                if name.startswith(prefix)
+            ],
+        )
+
     def evaluate(
         self,
         request: ansibug.dap.EvaluateRequest,
-    ) -> ansibug.dap.EvaluateResponse:
+    ) -> ansibug.dap.EvaluateResponse | ansibug.dap.ErrorResponse:
         value = ""
         value_type = None
+        changed_variables = False
 
         # Known contexts and how they are used in VSCode
         # repl - Debug Console with the expression entered
         # watch - WATCH pane with an expression set
         # clipboard - VARIABLES pane, right click variable -> 'Copy Value'
         # variables - same as clipboard but only present for older code
-        # hover - not used as we don't set the capability, a bit dangerous to enable IMO
+        # hover - hovering over text in the editor, only plain variable names
+        #   are resolved without templating as templating can have side effects
 
         expression = request.expression
 
@@ -1032,6 +1201,7 @@ class AnsibleDebugState(DebugState):
             elif isinstance(repl_command, RemoveVarCommand):
                 ansible_var = self.variables[sf.variables_options_id]
                 ansible_var.remove(repl_command.name)
+                changed_variables = True
 
             elif isinstance(repl_command, SetVarCommand):
                 new_value = self._template(repl_command.expression, sf.task_vars)
@@ -1041,12 +1211,19 @@ class AnsibleDebugState(DebugState):
                     var_ids += [sf.variables_options_id]
                 else:
                     # We want to have changing hostvars also apply to the task
-                    # vars
-                    var_ids += [sf.variables_taskvar_id, sf.variables_hostvars_id]
+                    # and global vars of this frame.
+                    var_ids += [sf.variables_taskvar_id, sf.variables_hostvars_id, sf.variables_globalvars_id]
 
                 for vid in var_ids:
                     ansible_var = self.variables[vid]
                     ansible_var.set(repl_command.name, new_value)
+                changed_variables = True
+
+                if repl_command.command == "set_hostvar":
+                    # The other frames of the host cached their variables,
+                    # recreate them from the updated host vars.
+                    if thread := next((t for t in self.threads.values() if sf.id in t.stack_frames), None):
+                        self._reset_frame_variables(thread, keep=sf)
 
             else:
                 # Error during parsing or --help was requested
@@ -1056,11 +1233,30 @@ class AnsibleDebugState(DebugState):
             sf = self.stackframes[request.frame_id]
             value, value_type = self._safe_evaluate_expression(expression, sf.task_vars)
 
+        elif request.context == "hover" and request.frame_id:
+            sf = self.stackframes[request.frame_id]
+            try:
+                hover_value = _resolve_raw_path(expression, sf.task_vars)
+            except (KeyError, IndexError):
+                # No hover is shown for an error.
+                return ansibug.dap.ErrorResponse(
+                    command=ansibug.dap.Command.EVALUATE,
+                    request_seq=request.seq,
+                    message=f"'{expression}' is not a variable",
+                )
+
+            value = _raw_repr(hover_value)
+            value_type = get_canonicalized_variable_type(hover_value)
+
         elif not request.frame_id:
             value = "Evaluation requires a stack frame, select a frame of a stopped thread"
 
         else:
             value = f"Evaluation for {request.context} is not implemented"
+
+        if changed_variables and self._debugger.supports_invalidated_event:
+            # The Variables pane doesn't know the repl changed a variable.
+            self._debugger.queue_msg(ansibug.dap.InvalidatedEvent(areas=["variables"]))
 
         return ansibug.dap.EvaluateResponse(
             request_seq=request.seq,
@@ -1117,15 +1313,26 @@ class AnsibleDebugState(DebugState):
     ) -> ansibug.dap.VariablesResponse:
         variable = self.variables[request.variables_reference]
 
+        # A list only has indexed variables and a dict only named variables.
+        is_list = isinstance(variable, AnsibleListVariable)
+        if (request.filter == "indexed" and not is_list) or (request.filter == "named" and is_list):
+            return ansibug.dap.VariablesResponse(request_seq=request.seq, variables=[])
+
+        start = request.start or 0
+        page = itertools.islice(variable.get(), start, start + request.count if request.count else None)
+
         variables: list[ansibug.dap.Variable] = []
-        for name, value in variable.get():
+        for name, value in page:
+            evaluate_name = variable.child_evaluate_name(name)
             child_var = variable.children.get(name)
             if child_var:
                 pass
             elif _is_container(value):
                 child_var = variable.children[name] = self._add_variable(variable.stackframe, value)
+                child_var.evaluate_name = evaluate_name
             elif dataclasses.is_dataclass(value) and not isinstance(value, type):
                 child_var = variable.children[name] = self._add_variable(variable.stackframe, dataclasses.asdict(value))
+                child_var.evaluate_name = evaluate_name
 
             value_repr: str
             if isinstance(value, HostVars):
@@ -1141,6 +1348,7 @@ class AnsibleDebugState(DebugState):
                     name=name,
                     value=value_repr,
                     type=get_canonicalized_variable_type(value),
+                    evaluate_name=evaluate_name,
                     named_variables=child_var.named_variables if child_var else 0,
                     indexed_variables=child_var.indexed_variables if child_var else 0,
                     variables_reference=child_var.id if child_var else 0,

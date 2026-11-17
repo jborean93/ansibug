@@ -10,6 +10,7 @@ from ._messages import Command, Response
 from ._types import (
     Breakpoint,
     Capabilities,
+    CompletionItem,
     ExceptionDetails,
     Message,
     Scope,
@@ -343,3 +344,16 @@ class ExceptionInfoResponse(
     break_mode: t.Literal["never", "always", "unhandled", "userUnhandled"]
     description: str | None = None
     details: ExceptionDetails | None = None
+
+
+@dataclasses.dataclass()
+class CompletionsResponse(Response, dap={"body": {"targets": "targets"}}):
+    """Response to CompletionsRequest.
+
+    Args:
+        targets: The possible completions.
+    """
+
+    command = Command.COMPLETIONS
+
+    targets: list[CompletionItem] = dataclasses.field(default_factory=list)

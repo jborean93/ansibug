@@ -6,7 +6,7 @@ from __future__ import annotations
 import pathlib
 
 import pytest
-from dap_client import DAPClient
+from dap_client import AnsibleProcess, DAPClient
 
 import ansibug.dap as dap
 
@@ -1747,3 +1747,188 @@ host2 ansible_host=127.0.0.1 ansible_connection=local ansible_python_interpreter
     assert proc.returncode == 0, proc.format_output()
     assert '"msg": "changed"' in stdout
     assert '"msg": "original"' in stdout
+
+
+def _launch_and_stop(dap_client: DAPClient, tmp_path: pathlib.Path) -> tuple[AnsibleProcess, int, int]:
+    playbook = tmp_path / "main.yml"
+    playbook.write_text(
+        r"""
+- hosts: localhost
+  gather_facts: false
+  vars:
+    templated_var: '{{ 1 + 1 }}'
+    my_dict:
+      key:
+      - first
+  tasks:
+  - name: ping test
+    ping:
+      data: value
+"""
+    )
+
+    proc = dap_client.launch(playbook, playbook_dir=tmp_path)
+    dap_client.send(
+        dap.SetBreakpointsRequest(
+            source=dap.Source(name="main.yml", path=str(playbook.absolute())),
+            lines=[10],
+            breakpoints=[dap.SourceBreakpoint(line=10)],
+            source_modified=False,
+        ),
+        dap.SetBreakpointsResponse,
+    )
+    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
+    tid = dap_client.wait_for_message(dap.ThreadEvent).thread_id
+    dap_client.wait_for_message(dap.StoppedEvent)
+    frame_id = dap_client.send(dap.StackTraceRequest(thread_id=tid), dap.StackTraceResponse).stack_frames[0].id
+
+    return proc, tid, frame_id
+
+
+def _continue_to_end(dap_client: DAPClient, proc: AnsibleProcess, tid: int) -> None:
+    dap_client.send(dap.ContinueRequest(thread_id=tid), dap.ContinueResponse)
+    dap_client.wait_for_message(dap.ThreadEvent)
+    dap_client.wait_for_message(dap.TerminatedEvent)
+    proc.communicate()
+    assert proc.returncode == 0, proc.format_output()
+
+
+def test_repl_invalidates_variables(tmp_path: pathlib.Path) -> None:
+    with DAPClient("test_repl_invalidates_variables") as dap_client:
+        dap_client.send(
+            dap.InitializeRequest(
+                adapter_id="ansibug",
+                supports_run_in_terminal_request=True,
+                supports_invalidated_event=True,
+            ),
+            dap.InitializeResponse,
+        )
+        proc, tid, frame_id = _launch_and_stop(dap_client, tmp_path)
+
+        dap_client.send(dap.EvaluateRequest("!so data 'changed'", frame_id=frame_id, context="repl"))
+        invalidated = dap_client.wait_for_message(dap.InvalidatedEvent)
+        assert invalidated.areas == ["variables"]
+        dap_client.wait_for_message(dap.EvaluateResponse)
+
+        _continue_to_end(dap_client, proc, tid)
+
+
+def test_hover_and_evaluate_name(
+    dap_client: DAPClient,
+    tmp_path: pathlib.Path,
+) -> None:
+    proc, tid, frame_id = _launch_and_stop(dap_client, tmp_path)
+
+    # Hover shows the raw value, it isn't templated.
+    resp = dap_client.send(
+        dap.EvaluateRequest("templated_var", frame_id=frame_id, context="hover"), dap.EvaluateResponse
+    )
+    assert resp.result == "'{{ 1 + 1 }}'"
+    resp = dap_client.send(
+        dap.EvaluateRequest("my_dict.key[0]", frame_id=frame_id, context="hover"), dap.EvaluateResponse
+    )
+    assert resp.result == "'first'"
+
+    def hover(expression: str) -> str:
+        resp = dap_client.send(
+            dap.EvaluateRequest(expression, frame_id=frame_id, context="hover"), dap.EvaluateResponse
+        )
+        return resp.result
+
+    assert hover("my_dict") == "{'key': ['first']}"
+    assert hover("my_dict.key") == "['first']"
+
+    # Completions in the debug console.
+    resp = dap_client.send(dap.CompletionsRequest(text="!s", column=3, frame_id=frame_id), dap.CompletionsResponse)
+    assert "so" in [c.label for c in resp.targets]
+    resp = dap_client.send(dap.CompletionsRequest(text="my_d", column=5, frame_id=frame_id), dap.CompletionsResponse)
+    assert [(c.label, c.detail) for c in resp.targets] == [("my_dict", "dict (1 items)")]
+
+    # Anything that isn't a plain variable is not evaluated.
+    err = dap_client.send(
+        dap.EvaluateRequest("lookup('pipe', 'id')", frame_id=frame_id, context="hover"), dap.ErrorResponse
+    )
+    assert err.message == "'lookup('pipe', 'id')' is not a variable"
+
+    # The evaluate name of a nested variable evaluates to its value, this is
+    # what 'Copy Value' uses.
+    scopes = dap_client.send(dap.ScopesRequest(frame_id=frame_id), dap.ScopesResponse)
+    task_vars = next(s for s in scopes.scopes if s.name == "Task Variables")
+    assert task_vars.presentation_hint == "locals"
+    variables = dap_client.send(
+        dap.VariablesRequest(variables_reference=task_vars.variables_reference), dap.VariablesResponse
+    ).variables
+    my_dict = next(v for v in variables if v.name == "my_dict")
+    key = dap_client.send(
+        dap.VariablesRequest(variables_reference=my_dict.variables_reference), dap.VariablesResponse
+    ).variables[0]
+    assert key.evaluate_name == "my_dict['key']"
+
+    resp = dap_client.send(
+        dap.EvaluateRequest(key.evaluate_name, frame_id=frame_id, context="clipboard"), dap.EvaluateResponse
+    )
+    assert resp.result == "['first']"
+
+    _continue_to_end(dap_client, proc, tid)
+
+
+def test_set_hostvar_updates_all_frames(
+    dap_client: DAPClient,
+    tmp_path: pathlib.Path,
+) -> None:
+    playbook = tmp_path / "main.yml"
+    playbook.write_text(
+        r"""
+- hosts: localhost
+  gather_facts: false
+  vars:
+    data: 123
+  tasks:
+  - name: include
+    include_tasks: tasks.yml
+"""
+    )
+    (tmp_path / "tasks.yml").write_text("- name: inner\n  ping:\n")
+
+    proc = dap_client.launch(playbook, playbook_dir=tmp_path)
+    dap_client.send(
+        dap.SetBreakpointsRequest(
+            source=dap.Source(name="main.yml", path=str(playbook.absolute())),
+            lines=[7],
+            breakpoints=[dap.SourceBreakpoint(line=7)],
+            source_modified=False,
+        ),
+        dap.SetBreakpointsResponse,
+    )
+    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
+    tid = dap_client.wait_for_message(dap.ThreadEvent).thread_id
+    dap_client.wait_for_message(dap.StoppedEvent)
+    dap_client.send(dap.StepInRequest(thread_id=tid), dap.StepInResponse)
+    dap_client.wait_for_message(dap.StoppedEvent)
+
+    frames = dap_client.send(dap.StackTraceRequest(thread_id=tid), dap.StackTraceResponse).stack_frames
+    assert [f.name for f in frames] == ["inner", "include"]
+
+    def scope_value(frame_id: int, scope: str) -> str:
+        scopes = dap_client.send(dap.ScopesRequest(frame_id=frame_id), dap.ScopesResponse).scopes
+        ref = next(s.variables_reference for s in scopes if s.name == scope)
+        variables = dap_client.send(dap.VariablesRequest(variables_reference=ref), dap.VariablesResponse).variables
+        return next(v.value for v in variables if v.name == "data")
+
+    # The include frame caches its variables when first viewed.
+    assert scope_value(frames[1].id, "Host Variables") == "123"
+
+    resp = dap_client.send(
+        dap.EvaluateRequest("!set_hostvar data 456", frame_id=frames[0].id, context="repl"), dap.EvaluateResponse
+    )
+    assert resp.result == ""
+
+    for scope in ["Host Variables", "Task Variables", "Global Variables"]:
+        assert scope_value(frames[0].id, scope) == "456", scope
+    assert scope_value(frames[1].id, "Host Variables") == "456"
+
+    dap_client.send(dap.ContinueRequest(thread_id=tid), dap.ContinueResponse)
+    dap_client.wait_for_message(dap.ThreadEvent)
+    dap_client.wait_for_message(dap.TerminatedEvent)
+    proc.communicate()
+    assert proc.returncode == 0, proc.format_output()

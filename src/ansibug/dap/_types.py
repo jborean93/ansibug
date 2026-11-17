@@ -75,6 +75,7 @@ class Capabilities(
         "supportsGotoTargetsRequest": "supports_goto_targets_request",
         "supportsStepInTargetsRequest": "supports_step_in_targets_request",
         "supportsCompletionsRequest": "supports_completions_request",
+        "completionTriggerCharacters": "completion_trigger_characters",
         "supportTerminateDebuggee": "supports_terminate_debuggee",
         "supportSuspendDebuggee": "supports_suspend_debuggee",
         "supportsTerminateRequest": "supports_terminate_request",
@@ -134,7 +135,7 @@ class Capabilities(
     supports_goto_targets_request: bool = False
     supports_step_in_targets_request: bool = False
     supports_completions_request: bool = False
-    # completion_trigger_characters
+    completion_trigger_characters: list[str] = dataclasses.field(default_factory=list)
     # supports_modules_request
     # additional_module_columns
     # supported_checksum_algorithms
@@ -690,3 +691,35 @@ class ExceptionDetails(
     evaluate_name: str | None = None
     stack_trace: str | None = None
     inner_exception: list[ExceptionDetails] = dataclasses.field(default_factory=list)
+
+
+@dataclasses.dataclass()
+class CompletionItem(
+    metaclass=DAPObjectMeta,
+    dap={
+        "label": "label",
+        "text": "text",
+        "detail": "detail",
+        "type": "type",
+        "start": "start",
+        "length": "length",
+    },
+):
+    """A completion item in the debug console.
+
+    Args:
+        label: The label of the item, also inserted if text is not set.
+        text: The text to insert instead of the label.
+        detail: A description of the item, like its type or usage.
+        type: The kind of item, used to pick an icon.
+        start: The position in the request text where the completion is
+            inserted.
+        length: The number of characters from start that are replaced.
+    """
+
+    label: str
+    text: str | None = None
+    detail: str | None = None
+    type: str | None = None
+    start: int | None = None
+    length: int | None = None
