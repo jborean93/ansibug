@@ -1,0 +1,7 @@
+- name: Read config
+  hosts: all
+  gather_facts: false
+  tasks:
+  - name: Read app config
+    ansible.builtin.slurp:
+      src: /etc/app.conf

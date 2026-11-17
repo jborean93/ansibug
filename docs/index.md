@@ -17,8 +17,6 @@ Any feedback should be provided through
 + [Issues](https://github.com/jborean93/ansibug/issues) for bugs
 + [Discussions](https://github.com/jborean93/ansibug/discussions) to discuss current behaviour and proposed alternatives
 
-Thanks to [ScreenToGif](https://www.screentogif.com/) which was used to create the gifs used in the documentation.
-
 # Protocol Details
 The `ansibug` library is specific a debug adapter implementation for Ansible.
 It is in charge is understanding the messages sent by the client (VSCode) and handling them inside Ansible.
@@ -38,20 +36,49 @@ python -m pip install ansibug
 From there you can install the `ansibug` VSCode extension by searching for it in the Extensions tab.
 
 Once installed a playbook can be debugged by configuring a [Launch Configuration](https://code.visualstudio.com/docs/editor/debugging#_launch-configurations).
-There are four default samples you can use as a template, for example the `Ansible: Launch Current File` is a template that can be used to debug the current playbook file opened in the editor.
+There are four default samples you can use as a template, for example the `Ansibug: Launch Current File` is a template that can be used to debug the current playbook file opened in the editor.
 
-![vscode_launch_configuration](./images/vscode_launch_configuration.png)
+![vscode_launch_configuration](./images/vscode_launch_configuration.png){ width="664" }
 
 See [Debug Configurations](#debug-configurations) for more information on the launch vs attach types and the options that can be specified in the configuration json settings.
 
 It is also possible to automatically launch the opened playbook file with F5 if `launch.json` does not exist or it contains no launch configurations.
+
+## Debug from the Playbook
+It is possible to debug a playbook directly in the editor without having to setup a launch configuration by using the code lens with the `Debug` and `Debug with Args...` actions.
+`Debug with Args...` prompts for the `ansible-playbook` arguments, like `-e my_var=hello` or `--limit web1`, and remembers them for that playbook.
+
+<video src="./images/codelens_debug.mp4" poster="./images/codelens_debug.png" width="960" height="600" autoplay loop muted playsinline controls preload="metadata"></video>
+
+The commands `Ansibug: Save Ansible Playbook Arguments as Launch Configuration` and `Ansibug: Clear Saved Ansible Playbook Arguments` creates a `launch.json` configuration with the saved arguments or clears them respectively.
+Set `ansibug.showCodeLens` to `false` to hide the code lens actions above the playbook.
+
+## Python Interpreter
+As `ansibug` needs to be installed in a Python environment, the VSCode extension will attempt to find the correct Python interpreter in a few different locations:
+
+1. As set by the `ansibug.interpreterPath` setting
+2. As set by the `ansible.python.interpreterPath` setting of the [Ansible extension](https://marketplace.visualstudio.com/items?itemName=redhat.ansible)
+3. The environment selected in the [Python Environments extension](https://marketplace.visualstudio.com/items?itemName=ms-python.vscode-python-envs)
+4. The environment selected in the [Python extension](https://marketplace.visualstudio.com/items?itemName=ms-python.python)
+5. The `.venv` virtual environment in the workspace folder
+6. The `venv` virtual environment in the workspace folder
+7. `python3` and then `python` from `PATH`
+
+The `ansibug.interpreterPath` and `ansible.python.interpreterPath` settings can be an absolute path, or a path relative to the workspace folder.
+They can use the `${workspaceFolder}` variable for the path of the workspace folder, or be just a name like `python3` to look it up in `PATH`.
+The settings are read from the workspace folder of the playbook being debugged so each folder in a multi-root workspace can use a different interpreter.
+If `1` or `2` is set but the interpreter cannot be found, or `ansibug` and `ansible-core` are not installed in it, the debug session will fail to start instead of moving on.
+Otherwise each of the remaining locations is tried in order until one that has `ansibug` and `ansible-core` installed is found, failing if none do.
+
+The `Ansibug` output channel logs the interpreters tried, the one used with its Python, `ansibug` and `ansible-core` versions, and the exit status of the debug adapter.
+Use these logs to see why a debug session fails to start.
 
 # Features
 Using `ansibug` with a playbook can expose the following features:
 
 |Feature|Notes|
 |-|-|
-|[Breakpoints](./breakpoints.md)|Supports conditional breakpoints|
+|[Breakpoints](./breakpoints.md)|Supports conditional breakpoints, hit conditions, logpoints, and function breakpoints|
 |[Stepping](./stepping.md)|Stepping in/out/over on tasks|
 |[Multiple Hosts](./threads_and_frames.md)|A host is seen as a `thread`|
 |[Variables and Watching](./variables.md)|Can get and set variables|
@@ -65,8 +92,8 @@ There are 2 debug configurations supported by this adapter:
 
 + Launch
 + Attach
-  + By process id
-  + By address
+    + By process id
+    + By address
 
 The majority of the cases will use the `Launch` configuration as it is simpler to use and covers the main use cases of Ansible debugging.
 
@@ -95,10 +122,10 @@ See [Remote Debugging](./remote_debugging.md) for more details on how to do this
 There are two common ways to specify the process to connect to:
 
 + By process id
-  + Must be a process on the same host
+    + Must be a process on the same host
 + By address
-  + Can be a Unix Domain Socket path, or
-  + A TCP hostname and port
+    + Can be a Unix Domain Socket path, or
+    + A TCP hostname and port
 
 As the attach process requires the debugging components to be enabled, Ansible **MUST** be started through `ansibug`.
 

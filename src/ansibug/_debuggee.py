@@ -283,7 +283,7 @@ class DebugState(t.Protocol):
     def set_variable(
         self,
         request: dap.SetVariableRequest,
-    ) -> dap.SetVariableResponse:
+    ) -> dap.SetVariableResponse | dap.ErrorResponse:
         raise NotImplementedError()  # pragma: nocover
 
     def pause(

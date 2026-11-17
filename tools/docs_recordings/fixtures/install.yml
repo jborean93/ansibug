@@ -1,0 +1,11 @@
+- name: Install packages
+  hosts: all
+  gather_facts: false
+  vars:
+    packages: [nginx, curl, git]
+  tasks:
+  - name: Install packages
+    ansible.builtin.debug:
+      msg: Installing {{ packages | join(', ') }}
+  - name: Configure service
+    ansible.builtin.ping:

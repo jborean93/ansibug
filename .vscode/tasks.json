@@ -1,0 +1,64 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            // Builds docs/ into site/ with --strict, the same as CI.
+            "label": "docs: build",
+            "type": "shell",
+            "command": "uv run --no-sync tox run -e docs",
+            "problemMatcher": []
+        },
+        {
+            // Re-records the GIFs in docs/images from tools/docs_recordings/scenarios. Needs podman and is slow, so
+            // "docs: serve" doesn't run it first. See tools/docs_recordings/README.md.
+            "label": "docs: regenerate images",
+            "type": "shell",
+            "command": "tools/docs_recordings/run.sh ${input:scenarios}",
+            "problemMatcher": []
+        },
+        {
+            // Serves docs/ on port 24819 and rebuilds on save. alai's repos use 24816-24818, so they can be served at
+            // the same time. Runs in tox's docs env rather than uv run --only-group docs, which would strip the dev
+            // dependencies from .venv. Over Remote-SSH, VS Code forwards the port and offers to open it. Binding
+            // 127.0.0.1 explicitly keeps it to one port, as "localhost" listens on IPv4 and IPv6 separately. The port
+            // is fixed because a new one each run leaves a growing list of stale entries in VS Code's Ports view. If
+            // 24819 is taken, run the command by hand with another port.
+            //
+            // To open it in VS Code's integrated browser automatically, add this to your own user settings.json
+            // (Preferences: Open User Settings (JSON)) rather than this repo's.
+            //
+            //   "remote.portsAttributes": {
+            //       "24819": {
+            //           "label": "ansibug docs",
+            //           "onAutoForward": "openPreview"
+            //       }
+            //   }
+            "label": "docs: serve",
+            "type": "shell",
+            "command": "uv run --no-sync tox exec -e docs -- zensical serve --dev-addr 127.0.0.1:24819",
+            "isBackground": true,
+            "problemMatcher": {
+                "owner": "zensical",
+                "pattern": {
+                    "regexp": "^(?:\\u001b\\[[0-9;]*m)?Warning:(?:\\u001b\\[[0-9;]*m)? (.*)$",
+                    "message": 1
+                },
+                "background": {
+                    "beginsPattern": "^(Serving|Build started)",
+                    "endsPattern": "^(No issues found|Build finished)"
+                }
+            },
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated"
+            }
+        }
+    ],
+    "inputs": [
+        {
+            "id": "scenarios",
+            "type": "promptString",
+            "description": "Scenario names from tools/docs_recordings/scenarios, space separated. Leave blank for all."
+        }
+    ]
+}

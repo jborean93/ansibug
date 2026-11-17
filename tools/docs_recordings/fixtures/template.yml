@@ -1,0 +1,11 @@
+- name: play 1
+  hosts: localhost
+  gather_facts: false
+  vars:
+    my_variable:
+      foo: bar
+      list: [item1, item2]
+  tasks:
+  - name: debug task
+    ansible.builtin.debug:
+      var: my_variable.foo

@@ -1,0 +1,10 @@
+- name: Loop playbook
+  hosts: localhost
+  gather_facts: false
+  tasks:
+  - name: task 1
+    ansible.builtin.ping:
+    loop: [1, 2]
+
+  - name: task 2
+    ansible.builtin.ping:

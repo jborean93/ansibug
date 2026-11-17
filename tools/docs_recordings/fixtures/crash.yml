@@ -1,0 +1,7 @@
+- name: Crash playbook
+  hosts: localhost
+  gather_facts: false
+  tasks:
+  - name: ping that fails
+    ansible.builtin.ping:
+      data: crash

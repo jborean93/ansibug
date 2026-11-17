@@ -12,21 +12,29 @@ Each command must be preceded by `!` for it to be interpreted as a command.
 If `!` is omitted then the `!template` command is assumed and the value provided is templated as is.
 Use `!--help` to see the help message for the repl, it is also possible to do `!command --help` to see the help for a specific command, for example `!set_option --help`.
 
+## Completions
+The Debug Console supports auto completion hints when using the `!` commands.
+It also can auto complete things like the module option names after `!so` or `!ro`, and the task variable names.
+Each suggestion shows a hint, the usage of a `!` command or the type and value of a variable.
+Press `Ctrl+Space` in the Debug Console input to show these hints.
+
+<video src="./images/repl_completions.mp4" poster="./images/repl_completions.png" width="960" height="600" autoplay loop muted playsinline controls preload="metadata"></video>
+
 ## Remove Option
 The `!remote_option` or `!ro` option can be used to remove a module option from the current task.
 Specify the module option to remove after the command like `!remote_option data`.
 
-![repl_remove_option](./images/repl_remove_option.gif)
+<video src="./images/repl_remove_option.mp4" poster="./images/repl_remove_option.png" width="960" height="600" autoplay loop muted playsinline controls preload="metadata"></video>
 
 An alternative way to do this is to set the value to `omit` through the normal variable menu:
 
-![set_variable_omit](./images/set_variable_omit.gif)
+<video src="./images/set_variable_omit.mp4" poster="./images/set_variable_omit.png" width="960" height="600" autoplay loop muted playsinline controls preload="metadata"></video>
 
 ## Set Hostvar
 While it is possible to set a host var through the normal variable menu, it is not possible to add a new hostvar this way.
 The `!set_hostvar` command can be used to both add and set variables in the hostvar scope.
 
-![repl_set_hostvar](./images/repl_set_hostvar.gif)
+<video src="./images/repl_set_hostvar.mp4" poster="./images/repl_set_hostvar.png" width="960" height="600" autoplay loop muted playsinline controls preload="metadata"></video>
 
 The command format is `!set_hostvar varname expression`, to set a variable with a space in the name it should be quoted.
 The expression is just like any other expression value which is templated before it is set.
@@ -36,7 +44,7 @@ This wil set both the hostvar and taskvar for the current task so the changes ap
 ## Set Option
 Like `!set_hostvar`, the `!set_option` repl command can be used to add/set module options for the current task.
 
-![repl_set_option](./images/repl_set_option.gif)
+<video src="./images/repl_set_option.mp4" poster="./images/repl_set_option.png" width="960" height="600" autoplay loop muted playsinline controls preload="metadata"></video>
 
 The command format is `!set_option option_name expression`, to set a variable with a space in the name it should be quoted.
 As with `!set_hostvar` the expression is templated before being set, the value should be quoted if a literal string value is desired.
@@ -47,7 +55,7 @@ The final command is `!template` which can be used to evaluate an expression and
 If no command is specified in the repl, then the `!template` command is used by default.
 The command format is `!template expression` where the expression is the value to be evaluated.
 
-![repl_template](./images/repl_template.gif)
+<video src="./images/repl_template.mp4" poster="./images/repl_template.png" width="960" height="600" autoplay loop muted playsinline controls preload="metadata"></video>
 
 In the example above the variable `my_variable` to templated with `| to_nice_yaml` using the `!template` command and just without any command specified.
 It also shows how it can be possible to provide any Python/Jinja2 data structure as part of the templating.

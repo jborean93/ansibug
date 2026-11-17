@@ -46,7 +46,7 @@ Once the listener is up and running the local debug client can now connect to it
 
 Once connected the `ansible-playbook` process will continue to run and any breakpoints set will stop as a normal launch configuration.
 
-![remote_debugging_attach](./images/remote_debugging_attach.gif)
+<video src="./images/remote_debugging_attach.mp4" poster="./images/remote_debugging_attach.png" width="960" height="600" autoplay loop muted playsinline controls preload="metadata"></video>
 
 ## TLS
 By default the data exchanged by `ansibug` is in plaintext text.
@@ -56,19 +56,19 @@ It is also possible to use TLS client authentication to ensure only authorized c
 To wrap the socket communication with TLS, use the following arguments when calling `python -m ansibug listen`:
 
 + `--wrap-tls`
-  + Enabled TLS on the socket
+    + Enabled TLS on the socket
 + `--tls-cert`
-  + Path to a PEM formatted TLS server certificate
-  + Can also include the PEM formatted key in the same file
+    + Path to a PEM formatted TLS server certificate
+    + Can also include the PEM formatted key in the same file
 + `--tls-key`
-  + Path to a PEM formatted TLS server key
-  + Not needed if the key is with the certificate file
+    + Path to a PEM formatted TLS server key
+    + Not needed if the key is with the certificate file
 + `--tls-key-pass (or the env var ANSIBUG_TLS_KEY_PASS)`
-  + The password used to decrypt the key if it is encrypted
+    + The password used to decrypt the key if it is encrypted
 + `--tls-client-ca`
-  + Path to a PEM formatted CA bundle file or directory
-  + Enforces client certificate authentication on the connection
-  + The client must provide a cert/key that has been signed/issued by a CA in the bundle provided
+    + Path to a PEM formatted CA bundle file or directory
+    + Enforces client certificate authentication on the connection
+    + The client must provide a cert/key that has been signed/issued by a CA in the bundle provided
 
 When the debug client goes to launch an [attached debugger](./index.md#attach) with a TLS wrapped connection it can specify the following arguments:
 
@@ -84,11 +84,11 @@ The `useTls` option must be set to `true` to enable TLS on the socket communicat
 The `tlsVerification` setting can be set to:
 
 + `verify` (default)
-  + Does all the standard TLS verification checks with the hostname/CA
+    + Does all the standard TLS verification checks with the hostname/CA
 + `ignore`
-  + Ignores any TLS verification checks
+    + Ignores any TLS verification checks
 + Any cert file/dir
-  + The file or directory containing the CA bundles to use for the CA verification checks
+    + The file or directory containing the CA bundles to use for the CA verification checks
 
 The `tlsCertificate` is used to provide a certificate for client authentication if the server requires it.
 The certificate/key provided must be signed by a CA in the trusted bundle set by the server.

@@ -47,8 +47,11 @@ from ansible.vars.manager import VariableManager
 # Data Tagging was introduced in 2.19, this can be removed once 2.19 is the
 # minimum supported version.
 POST_DATATAGGING = False
+# Raised when a value to set is templated to omit, 2.19+ raises it where older
+# versions return a placeholder string that Ansible removes when the task runs.
+_OMIT_ERRORS: tuple[type[Exception], ...] = ()
 try:
-    from ansible.errors import AnsibleBrokenConditionalError
+    from ansible.errors import AnsibleBrokenConditionalError, AnsibleValueOmittedError
     from ansible.template import trust_as_template
 
     # This import was moved in 2.20
@@ -61,6 +64,7 @@ try:
         from ansible.utils.display import _DeferredWarningContext
 
     POST_DATATAGGING = True
+    _OMIT_ERRORS = (AnsibleValueOmittedError,)
 except ImportError:
     from ansible.template import AnsibleNativeEnvironment
 
@@ -95,6 +99,10 @@ from ..plugin_utils._variables import get_canonicalized_variable_type
 
 display = Display()
 log = logging.getLogger("ansibug.strategy")
+
+
+class OmitMarker:
+    """A value to set that was templated to omit, it is removed instead of set."""
 
 
 def _get_parent_tasks(
@@ -1173,7 +1181,9 @@ class AnsibleDebugState(DebugState):
             # dict.items avoids a lazy container templating the values.
             candidates = {str(k): _completion_detail(v) for k, v in dict.items(sf.task_vars)} if sf else {}
 
-        start = len(text) - len(prefix) + 1
+        # VS Code reads start as a 0 based offset into the text regardless of
+        # columnsStartAt1, a 1 based start makes it filter out the completions.
+        start = len(text) - len(prefix)
         return ansibug.dap.CompletionsResponse(
             request_seq=request.seq,
             targets=[
@@ -1233,7 +1243,8 @@ class AnsibleDebugState(DebugState):
                 changed_variables = True
 
             elif isinstance(repl_command, SetVarCommand):
-                new_value = self._template(repl_command.expression, sf.task_vars)
+                new_value = self._template_new_value(repl_command.expression, sf.task_vars)
+                omitted = isinstance(new_value, OmitMarker)
 
                 var_ids = []
                 if repl_command.command == "set_option":
@@ -1243,10 +1254,17 @@ class AnsibleDebugState(DebugState):
                     # and global vars of this frame.
                     var_ids += [sf.variables_taskvar_id, sf.variables_hostvars_id, sf.variables_globalvars_id]
 
+                if omitted and repl_command.command == "set_hostvar":
+                    value = "omit can only remove a module option, it cannot remove a host variable"
+                    var_ids = []
+
                 for vid in var_ids:
                     ansible_var = self.variables[vid]
-                    ansible_var.set(repl_command.name, new_value)
-                changed_variables = True
+                    if omitted:
+                        ansible_var.remove(repl_command.name)
+                    else:
+                        ansible_var.set(repl_command.name, new_value)
+                changed_variables = bool(var_ids)
 
                 if repl_command.command == "set_hostvar":
                     # The other frames of the host cached their variables,
@@ -1392,10 +1410,26 @@ class AnsibleDebugState(DebugState):
     def set_variable(
         self,
         request: ansibug.dap.SetVariableRequest,
-    ) -> ansibug.dap.SetVariableResponse:
+    ) -> ansibug.dap.SetVariableResponse | ansibug.dap.ErrorResponse:
         variable = self.variables[request.variables_reference]
 
-        new_value = self._template(request.value, variable.stackframe.task_vars)
+        new_value = self._template_new_value(request.value, variable.stackframe.task_vars)
+        if isinstance(new_value, OmitMarker):
+            if isinstance(variable, AnsibleListVariable):
+                return ansibug.dap.ErrorResponse(
+                    command=ansibug.dap.Command.SET_VARIABLE,
+                    request_seq=request.seq,
+                    message="omit cannot remove a list item",
+                )
+
+            # Like omit on a module option in the playbook, it is removed.
+            variable.remove(request.name)
+            if self._debugger.supports_invalidated_event:
+                # The client only knows the value changed, not that it is gone.
+                self._debugger.queue_msg(ansibug.dap.InvalidatedEvent(areas=["variables"]))
+
+            return ansibug.dap.SetVariableResponse(request_seq=request.seq, value="omit")
+
         variable.set(request.name, new_value)
 
         new_container = None
@@ -1553,6 +1587,17 @@ class AnsibleDebugState(DebugState):
             value_type = get_canonicalized_variable_type(templated_value)
 
         return value, value_type
+
+    def _template_new_value(
+        self,
+        expression: str,
+        variables: dict[t.Any, t.Any],
+    ) -> OmitMarker | t.Any:
+        """Templates a value to set, OmitMarker if it was omit and should be removed instead."""
+        try:
+            return self._template(expression, variables)
+        except _OMIT_ERRORS:
+            return OmitMarker()
 
     def _template(
         self,

@@ -182,8 +182,8 @@ def test_completions(text: str, prefix: str, expected: list[str]) -> None:
     resp = state.completions(ansibug.dap.CompletionsRequest(text=text, column=len(text) + 1, frame_id=1))
 
     assert [c.label for c in resp.targets] == expected
-    # The prefix before the cursor is replaced, start is 1 based.
-    assert {(c.start, c.length) for c in resp.targets} == {(len(text) - len(prefix) + 1, len(prefix))}
+    # The prefix before the cursor is replaced, start is a 0 based offset as VS Code expects.
+    assert {(c.start, c.length) for c in resp.targets} == {(len(text) - len(prefix), len(prefix))}
 
 
 def test_variables_evaluate_name() -> None:

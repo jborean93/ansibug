@@ -1932,3 +1932,54 @@ def test_set_hostvar_updates_all_frames(
     dap_client.wait_for_message(dap.TerminatedEvent)
     proc.communicate()
     assert proc.returncode == 0, proc.format_output()
+
+
+@pytest.mark.parametrize("method", ["set_variable", "repl"])
+def test_set_option_to_omit(
+    dap_client: DAPClient,
+    tmp_path: pathlib.Path,
+    method: str,
+) -> None:
+    playbook = tmp_path / "main.yml"
+    playbook.write_text(
+        r"""
+- hosts: localhost
+  gather_facts: false
+  tasks:
+  - name: ping test
+    ping:
+      data: value
+    register: ping_res
+
+  - name: check the option was omitted
+    assert:
+      that: ping_res.ping == 'pong'
+"""
+    )
+
+    proc = dap_client.launch(playbook, playbook_dir=tmp_path)
+    dap_client.send(
+        dap.SetBreakpointsRequest(
+            source=dap.Source(name="main.yml", path=str(playbook.absolute())),
+            lines=[5],
+            breakpoints=[dap.SourceBreakpoint(line=5)],
+            source_modified=False,
+        ),
+        dap.SetBreakpointsResponse,
+    )
+    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
+    tid = dap_client.wait_for_message(dap.ThreadEvent).thread_id
+    dap_client.wait_for_message(dap.StoppedEvent)
+    frame_id = dap_client.send(dap.StackTraceRequest(thread_id=tid), dap.StackTraceResponse).stack_frames[0].id
+
+    if method == "set_variable":
+        scopes = dap_client.send(dap.ScopesRequest(frame_id=frame_id), dap.ScopesResponse).scopes
+        options = next(s for s in scopes if s.name == "Module Options")
+        dap_client.send(
+            dap.SetVariableRequest(variables_reference=options.variables_reference, name="data", value="omit"),
+            dap.SetVariableResponse,
+        )
+    else:
+        dap_client.send(dap.EvaluateRequest("!so data omit", frame_id=frame_id, context="repl"), dap.EvaluateResponse)
+
+    _continue_to_end(dap_client, proc, tid)

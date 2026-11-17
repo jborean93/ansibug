@@ -1,0 +1,11 @@
+- name: play 1
+  hosts: localhost
+  gather_facts: false
+  tasks:
+  - name: placeholder task
+    ansible.builtin.debug:
+      msg: Placeholder
+
+  - name: ping task
+    ansible.builtin.ping:
+      data: '{{ foo }}'

@@ -1,0 +1,8 @@
+- name: Deploy app
+  hosts: all
+  gather_facts: false
+  tasks:
+  - name: Wait for service
+    ansible.builtin.command: sleep 4
+  - name: Verify service
+    ansible.builtin.ping:
