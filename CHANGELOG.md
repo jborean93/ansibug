@@ -23,6 +23,10 @@
   + Added the `exceptionInfo` request so clients can show the error in their exception widget
     + Clients like Visual Studio Code already showed the error from the stopped event, this gives other clients a structured way to retrieve it
     + The error message and the module traceback, if Ansible captured one, are shown separately
+  + Added `restartFrame` support to re-run a task that stopped on a failed, unreachable, or skipped result, like `redo` in Ansible's task debugger
+    + Change a module option or variable before restarting, the task stops again before it re-runs so more changes can be made
+    + The re-run is shown under a new `TASK [name (restarted)]` header, the result of the first run is still shown in the `ansible-playbook` output but is not counted in the play recap
+    + A loop task re-runs every item, and any change the first run made on the host is not undone
 + Variables and the debug console
   + Each variable has an evaluate name so `Copy Value`, `Copy as Expression`, and `Add to Watch` work in Visual Studio Code
     + For example the `key` item of the task variable `my_dict` is `my_dict['key']`

@@ -292,6 +292,12 @@ class DebugState(t.Protocol):
     ) -> None:
         raise NotImplementedError()  # pragma: nocover
 
+    def restart_frame(
+        self,
+        request: dap.RestartFrameRequest,
+    ) -> dap.ErrorResponse | None:
+        raise NotImplementedError()  # pragma: nocover
+
     def step_in(
         self,
         request: dap.StepInRequest,
@@ -850,6 +856,17 @@ class AnsibleDebugger(metaclass=Singleton):
         # The StoppedEvent is sent once the thread reaches its next task.
         self.queue_msg(dap.PauseResponse(request_seq=msg.seq))
         strategy.pause(msg)
+
+    @process_message.register
+    def _(
+        self,
+        msg: dap.RestartFrameRequest,
+    ) -> None:
+        strategy = self._get_strategy()
+        # On success the strategy queues the response itself before resuming
+        # the thread so it is sent before the restart StoppedEvent.
+        if err := strategy.restart_frame(msg):
+            self.queue_msg(err)
 
     @process_message.register
     def _(

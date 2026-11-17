@@ -35,6 +35,7 @@ from ansible.inventory.host import Host
 from ansible.parsing.dataloader import DataLoader
 from ansible.playbook.block import Block
 from ansible.playbook.conditional import Conditional
+from ansible.playbook.handler import Handler
 from ansible.playbook.play_context import PlayContext
 from ansible.playbook.task import Task
 from ansible.plugins.strategy.linear import StrategyModule as LinearStrategy
@@ -224,6 +225,9 @@ class ThreadState(enum.Enum):
     END = enum.auto()
     """Thread has been requested to end and should not process any more tasks."""
 
+    RESTART = enum.auto()
+    """Thread should re-run the task it stopped on and break before it runs."""
+
 
 class AnsibleThread:
     def __init__(
@@ -241,6 +245,8 @@ class AnsibleThread:
         self.pause_requested = False
         # The ExceptionInfoResponse body when stopped on an exception.
         self.exception_info: dict[str, t.Any] | None = None
+        # The frame that can be restarted while stopped on its task result.
+        self.restart_frame_id = 0
 
     def to_dap(self) -> ansibug.dap.Thread:
         return ansibug.dap.Thread(
@@ -284,7 +290,14 @@ class AnsibleThread:
     ) -> ansibug.dap.StoppedEvent | None:
         stopped_kwargs: dict[str, t.Any] = {}
 
-        if self._break_step_over(task):
+        if self.state == ThreadState.RESTART:
+            stopped_kwargs = {
+                "reason": ansibug.dap.StoppedReason.RESTART,
+                "description": "Restarted task",
+                "thread_id": self.id,
+            }
+
+        elif self._break_step_over(task):
             stopped_kwargs = {
                 "reason": ansibug.dap.StoppedReason.STEP,
                 "description": "Step over",
@@ -482,7 +495,7 @@ class AnsibleStackFrame:
 
         self._debugger = debugger
 
-    def to_dap(self) -> ansibug.dap.StackFrame:
+    def to_dap(self, can_restart: bool = False) -> ansibug.dap.StackFrame:
         task_path = self.task.get_path()
 
         task_path_and_line = task_path.rsplit(":", 1)
@@ -496,6 +509,7 @@ class AnsibleStackFrame:
             name=self.task.get_name(),
             source=source,
             line=line,
+            can_restart=can_restart,
         )
 
 
@@ -828,7 +842,8 @@ class AnsibleDebugState(DebugState):
     def end_task(
         self,
         result: AnsibugTaskResult,
-    ) -> None:
+        can_restart: bool = False,
+    ) -> Task | None:
         """Ends a task.
 
         Marks the task on the host specified as complete adjusting the stack
@@ -837,6 +852,11 @@ class AnsibleDebugState(DebugState):
 
         Args:
             result: The task result to process.
+            can_restart: The caller can re-run the task if the client
+                restarts the frame while stopped on the result.
+
+        Returns:
+            Task | None: The task to re-run if the client restarted the frame.
         """
         task = result.task
         thread = self._host_threads[result.host]
@@ -854,16 +874,25 @@ class AnsibleDebugState(DebugState):
             if stopped_event:
                 result_variable = self._add_variable(sf, result.result)
                 sf.variables_result_id = result_variable.id
+                if can_restart:
+                    thread.restart_frame_id = sf.id
 
                 self._debugger.queue_msg(stopped_event)
                 self._waiting_condition.wait_for(lambda: self.threads[thread.id].state != ThreadState.WAIT)
+                thread.restart_frame_id = 0
                 self._reset_frame_variables(thread)
 
             if thread.state == ThreadState.END:
                 raise EndStrategy()
 
+        # The re-run creates a new frame in start_task, an include frame is
+        # popped there as it is not the parent of the new task.
+        restart = thread.state == ThreadState.RESTART
         if task.action not in C._ACTION_ALL_INCLUDES:
             self._pop_stackframe(thread)
+
+        # The frame task has any option changes the client made while stopped.
+        return sf.task if restart else None
 
     def exit_threads(self) -> None:
         """Exits all active threads.
@@ -1286,7 +1315,7 @@ class AnsibleDebugState(DebugState):
         thread = self.threads[request.thread_id]
         for sfid in thread.stack_frames:
             sf = self.stackframes[sfid]
-            stack_frames.append(sf.to_dap())
+            stack_frames.append(sf.to_dap(can_restart=sfid == thread.restart_frame_id))
 
         return ansibug.dap.StackTraceResponse(
             request_seq=request.seq,
@@ -1409,6 +1438,29 @@ class AnsibleDebugState(DebugState):
 
         # Shown in the terminal running ansible-playbook alongside its output.
         display.display(f"ansibug: {msg}")
+
+    def restart_frame(
+        self,
+        request: ansibug.dap.RestartFrameRequest,
+    ) -> ansibug.dap.ErrorResponse | None:
+        with self._waiting_condition:
+            thread = next(
+                (t for t in self.threads.values() if t.restart_frame_id and t.restart_frame_id == request.frame_id),
+                None,
+            )
+            if not thread or thread.state != ThreadState.WAIT:
+                return ansibug.dap.ErrorResponse(
+                    command=ansibug.dap.Command.RESTART_FRAME,
+                    request_seq=request.seq,
+                    message="Only the task of a host stopped on a failed, unreachable, or skipped result can be restarted",
+                )
+
+            # Sent before resuming so it is ahead of the restart StoppedEvent.
+            self._debugger.queue_msg(ansibug.dap.RestartFrameResponse(request_seq=request.seq))
+            thread.set_state(ThreadState.RESTART)
+            self._waiting_condition.notify_all()
+
+        return None
 
     def step_in(
         self,
@@ -1534,6 +1586,8 @@ class StrategyModule(LinearStrategy):
 
         # Set in run()
         self._debug_state: AnsibleDebugState
+        # The _queue_task task_vars and play_context by (host name, task uuid).
+        self._queued_args: dict[tuple[str, str], tuple[dict[str, t.Any], PlayContext]] = {}
 
         # Ansible 2.19 has deprecated custom strategy plugins with no end date.
         # While we should migrate to a supported API, once implemented, we will
@@ -1598,20 +1652,106 @@ class StrategyModule(LinearStrategy):
         """Called just as a task is about to be queue"""
         task = self._debug_state.start_task(host, task, task_vars)
 
+        # Kept to re-run the task if the client restarts its frame.
+        self._queued_args[(host.name, task._uuid)] = (task_vars, play_context)
+
         return super()._queue_task(host, task, task_vars, play_context)
 
     def _process_pending_results(
         self,
+        iterator: PlayIterator,
         *args: t.Any,
         **kwargs: t.Any,
     ) -> list[TaskResult]:
         """Called when gathering the results of a queued task."""
-        res = super()._process_pending_results(*args, **kwargs)
+        # The iterator replaces the host states rather than changing them so
+        # a shallow copy is enough to roll back a restarted task.
+        prev_host_states = iterator.host_states.copy()
+        res = super()._process_pending_results(iterator, *args, **kwargs)
 
+        processed: list[TaskResult] = []
         for task_res in res:
-            self._debug_state.end_task(AnsibugTaskResult.from_task_result(task_res))
+            result = AnsibugTaskResult.from_task_result(task_res)
+            queued_args = self._queued_args.pop((result.host.name, result.task._uuid), None)
 
-        return res
+            redo_task = self._debug_state.end_task(result, can_restart=queued_args is not None)
+            if redo_task and queued_args:
+                self._rollback_result(iterator, result, prev_host_states)
+                self._send_restart_task_start(redo_task)
+                self._queue_task(result.host, redo_task, *queued_args)
+
+                # The new result is likely still running, it is picked up
+                # by a later call as the pending results count includes it.
+                processed.extend(self._process_pending_results(iterator, *args, **kwargs))
+
+            else:
+                processed.append(task_res)
+
+        return processed
+
+    def _send_restart_task_start(
+        self,
+        task: Task,
+    ) -> None:
+        """Sends the task start callback again for a restarted task.
+
+        The base strategy only sends v2_runner_on_start when a task is queued,
+        without this the re-run result appears under the original task header.
+        A copy is renamed so the header shows it was restarted, it keeps the
+        same uuid.
+        """
+        banner_task = task.copy()
+        banner_task.name = f"{task.name or task.action} (restarted)"
+
+        if isinstance(task, Handler):
+            self._tqm.send_callback("v2_playbook_on_handler_task_start", banner_task)
+        else:
+            self._tqm.send_callback("v2_playbook_on_task_start", banner_task, is_conditional=False)
+
+    def _rollback_result(
+        self,
+        iterator: PlayIterator,
+        result: AnsibugTaskResult,
+        prev_host_states: dict[str, t.Any],
+    ) -> None:
+        """Undoes what the base strategy did for a result that is re-run.
+
+        Only covers the results end_task stops on: failed (not ignored or
+        rescued), unreachable (not ignored), and skipped. This is based on the
+        redo handling in Ansible's debug_closure.
+        """
+        host_name = result.host.name
+        stats = self._tqm._stats
+
+        if result.failed:
+            failed_hosts = [host_name]
+            if result.task.run_once:
+                # The same hosts the base strategy marks failed for run_once.
+                failed_hosts = [
+                    h.name
+                    for h in self._inventory.get_hosts(iterator._play.hosts)
+                    if h.name not in self._tqm._unreachable_hosts
+                ]
+
+            for name in failed_hosts:
+                if name in prev_host_states:
+                    iterator.set_state_for_host(name, prev_host_states[name])
+                # Each mark_host_failed call appended the host once, an
+                # earlier failure keeps its own entry.
+                if name in iterator._play._removed_hosts:
+                    iterator._play._removed_hosts.remove(name)
+
+            self._tqm._failed_hosts.pop(host_name, None)
+            stats.decrement("failures", host_name)
+
+        elif result.unreachable:
+            self._tqm._unreachable_hosts.pop(host_name, None)
+            if host_name in iterator._play._removed_hosts:
+                iterator._play._removed_hosts.remove(host_name)
+            stats.decrement("dark", host_name)
+
+        elif result.skipped:
+            stats.decrement("skipped", host_name)
 
     def run(
         self,

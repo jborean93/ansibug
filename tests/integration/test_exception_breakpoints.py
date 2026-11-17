@@ -842,3 +842,195 @@ def test_exception_info(
     dap_client.wait_for_message(dap.TerminatedEvent)
     proc.communicate()
     assert proc.returncode == 2, proc.format_output()
+
+
+def test_restart_frame_on_error(
+    dap_client: DAPClient,
+    tmp_path: pathlib.Path,
+) -> None:
+    playbook = tmp_path / "main.yml"
+    playbook.write_text(
+        r"""
+- hosts: localhost
+  gather_facts: false
+  tasks:
+  - name: ping test
+    ping:
+      data: crash
+
+  - name: after
+    ping:
+"""
+    )
+
+    proc = dap_client.launch(playbook, playbook_dir=tmp_path)
+    dap_client.send(dap.SetExceptionBreakpointsRequest(filters=["on_error"]), dap.SetExceptionBreakpointsResponse)
+    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
+    tid = dap_client.wait_for_message(dap.ThreadEvent).thread_id
+
+    # Re-run unchanged first, it fails again and must not be counted twice.
+    stopped = dap_client.wait_for_message(dap.StoppedEvent)
+    assert stopped.reason == dap.StoppedReason.EXCEPTION
+    st_resp = dap_client.send(dap.StackTraceRequest(thread_id=tid), dap.StackTraceResponse)
+    assert st_resp.stack_frames[0].can_restart
+
+    dap_client.send(dap.RestartFrameRequest(frame_id=st_resp.stack_frames[0].id), dap.RestartFrameResponse)
+    stopped = dap_client.wait_for_message(dap.StoppedEvent)
+    assert stopped.reason == dap.StoppedReason.RESTART
+    st_resp = dap_client.send(dap.StackTraceRequest(thread_id=tid), dap.StackTraceResponse)
+    assert [f.name for f in st_resp.stack_frames] == ["ping test"]
+    assert not st_resp.stack_frames[0].can_restart
+
+    dap_client.send(dap.ContinueRequest(thread_id=tid), dap.ContinueResponse)
+    stopped = dap_client.wait_for_message(dap.StoppedEvent)
+    assert stopped.reason == dap.StoppedReason.EXCEPTION
+
+    # Fix the option on the failed result and re-run it.
+    st_resp = dap_client.send(dap.StackTraceRequest(thread_id=tid), dap.StackTraceResponse)
+    frame_id = st_resp.stack_frames[0].id
+    scope_resp = dap_client.send(dap.ScopesRequest(frame_id=frame_id), dap.ScopesResponse)
+    assert scope_resp.scopes[1].name == "Module Options"
+    dap_client.send(
+        dap.SetVariableRequest(
+            variables_reference=scope_resp.scopes[1].variables_reference,
+            name="data",
+            value="'fixed'",
+        ),
+        dap.SetVariableResponse,
+    )
+
+    dap_client.send(dap.RestartFrameRequest(frame_id=frame_id), dap.RestartFrameResponse)
+    stopped = dap_client.wait_for_message(dap.StoppedEvent)
+    assert stopped.reason == dap.StoppedReason.RESTART
+
+    dap_client.send(dap.ContinueRequest(thread_id=tid), dap.ContinueResponse)
+    dap_client.wait_for_message(dap.ThreadEvent)
+    dap_client.wait_for_message(dap.TerminatedEvent)
+
+    stdout = proc.communicate()[0].decode()
+    assert proc.returncode == 0, proc.format_output()
+    assert "ok=2" in stdout
+    assert "failed=0" in stdout
+    assert stdout.count("TASK [ping test (restarted)]") == 2
+
+
+def test_restart_frame_not_on_exception(
+    dap_client: DAPClient,
+    tmp_path: pathlib.Path,
+) -> None:
+    playbook = tmp_path / "main.yml"
+    playbook.write_text(
+        r"""
+- hosts: localhost
+  gather_facts: false
+  tasks:
+  - name: ping test
+    ping:
+"""
+    )
+
+    proc = dap_client.launch(playbook, playbook_dir=tmp_path)
+    dap_client.send(
+        dap.SetBreakpointsRequest(
+            source=dap.Source(name="main.yml", path=str(playbook.absolute())),
+            lines=[5],
+            breakpoints=[dap.SourceBreakpoint(line=5)],
+        ),
+        dap.SetBreakpointsResponse,
+    )
+    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
+    tid = dap_client.wait_for_message(dap.ThreadEvent).thread_id
+
+    stopped = dap_client.wait_for_message(dap.StoppedEvent)
+    assert stopped.reason == dap.StoppedReason.BREAKPOINT
+    st_resp = dap_client.send(dap.StackTraceRequest(thread_id=tid), dap.StackTraceResponse)
+    assert not st_resp.stack_frames[0].can_restart
+
+    err = dap_client.send(dap.RestartFrameRequest(frame_id=st_resp.stack_frames[0].id), dap.ErrorResponse)
+    assert "can be restarted" in (err.message or "")
+
+    dap_client.send(dap.ContinueRequest(thread_id=tid), dap.ContinueResponse)
+    dap_client.wait_for_message(dap.ThreadEvent)
+    dap_client.wait_for_message(dap.TerminatedEvent)
+
+    proc.communicate()
+    assert proc.returncode == 0, proc.format_output()
+
+
+def test_restart_frame_on_unreachable(
+    dap_client: DAPClient,
+    tmp_path: pathlib.Path,
+) -> None:
+    playbook = tmp_path / "main.yml"
+    playbook.write_text(
+        r"""
+- hosts: localhost
+  gather_facts: false
+  tasks:
+  - name: ping test
+    ping:
+    vars:
+        ansible_connection: ns.name.broken_connection
+
+  - name: after
+    ping:
+"""
+    )
+
+    connection_src = (
+        pathlib.Path(__file__).parent.parent
+        / "data"
+        / "ansible_collections"
+        / "ns"
+        / "name"
+        / "plugins"
+        / "connection"
+        / "broken_connection.py"
+    )
+    temp_collection_connection_dir = (
+        tmp_path / "collections" / "ansible_collections" / "ns" / "name" / "plugins" / "connection"
+    )
+    temp_collection_connection_dir.mkdir(parents=True)
+    shutil.copy(connection_src, temp_collection_connection_dir / "broken_connection.py")
+
+    proc = dap_client.launch(playbook, playbook_dir=tmp_path)
+    dap_client.send(dap.SetExceptionBreakpointsRequest(filters=["on_unreachable"]), dap.SetExceptionBreakpointsResponse)
+    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
+    tid = dap_client.wait_for_message(dap.ThreadEvent).thread_id
+
+    stopped = dap_client.wait_for_message(dap.StoppedEvent)
+    assert stopped.description == "Host unreachable"
+
+    st_resp = dap_client.send(dap.StackTraceRequest(thread_id=tid), dap.StackTraceResponse)
+    frame_id = st_resp.stack_frames[0].id
+    scope_resp = dap_client.send(dap.ScopesRequest(frame_id=frame_id), dap.ScopesResponse)
+    assert scope_resp.scopes[2].name == "Task Variables"
+    dap_client.send(
+        dap.SetVariableRequest(
+            variables_reference=scope_resp.scopes[2].variables_reference,
+            name="ansible_connection",
+            value="'local'",
+        ),
+        dap.SetVariableResponse,
+    )
+
+    dap_client.send(dap.RestartFrameRequest(frame_id=frame_id), dap.RestartFrameResponse)
+    stopped = dap_client.wait_for_message(dap.StoppedEvent)
+    assert stopped.reason == dap.StoppedReason.RESTART
+
+    # The host is no longer unreachable so the next task runs.
+    dap_client.send(dap.NextRequest(thread_id=tid), dap.NextResponse)
+    stopped = dap_client.wait_for_message(dap.StoppedEvent)
+    assert stopped.reason == dap.StoppedReason.STEP
+    st_resp = dap_client.send(dap.StackTraceRequest(thread_id=tid), dap.StackTraceResponse)
+    assert [f.name for f in st_resp.stack_frames] == ["after"]
+
+    dap_client.send(dap.ContinueRequest(thread_id=tid), dap.ContinueResponse)
+    dap_client.wait_for_message(dap.ThreadEvent)
+    dap_client.wait_for_message(dap.TerminatedEvent)
+
+    stdout = proc.communicate()[0].decode()
+    assert proc.returncode == 0, proc.format_output()
+    assert "ok=2" in stdout
+    assert "unreachable=0" in stdout
+    assert "TASK [ping test (restarted)]" in stdout

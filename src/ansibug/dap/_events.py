@@ -16,6 +16,7 @@ class StoppedReason(enum.Enum):
     BREAKPOINT = "breakpoint"
     EXCEPTION = "exception"
     PAUSE = "pause"
+    RESTART = "restart"
     ENTRY = "entry"
     GOTO = "goto"
     FUNCTION_BREAKPOINT = "function breakpoint"
