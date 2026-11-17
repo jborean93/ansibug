@@ -33,8 +33,7 @@ def test_hung_ansible_times_out(
     )
 
     proc = dap_client.launch(playbook, playbook_dir=tmp_path)
-    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
-    dap_client.wait_for_message(dap.ThreadEvent)
+    dap_client.configuration_done()
 
     with pytest.raises(TimeoutError, match="Timed out waiting for TerminatedEvent"):
         dap_client.wait_for_message(dap.TerminatedEvent, timeout=2)
@@ -65,8 +64,7 @@ def test_killed_ansible_fails_fast(
     )
 
     proc = dap_client.launch(playbook, playbook_dir=tmp_path)
-    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
-    dap_client.wait_for_message(dap.ThreadEvent)
+    dap_client.configuration_done()
 
     os.killpg(proc.pid, signal.SIGKILL)
 

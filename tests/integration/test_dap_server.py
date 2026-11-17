@@ -54,7 +54,7 @@ def test_request_after_playbook_ends(
     proc = dap_client.launch(playbook, playbook_dir=tmp_path)
     dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
     dap_client.wait_for_message(dap.TerminatedEvent)
-    proc.communicate()
+    proc.wait_rc()
 
     # The debuggee is gone, the request is answered by the adapter.
     req = dap.ThreadsRequest()

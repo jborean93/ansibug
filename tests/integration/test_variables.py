@@ -5,8 +5,9 @@ from __future__ import annotations
 
 import pathlib
 
+import ansible.errors
 import pytest
-from dap_client import AnsibleProcess, DAPClient
+from dap_client import AnsibleProcess, DAPClient, write_inventory
 
 import ansibug.dap as dap
 
@@ -48,29 +49,14 @@ host2 ansible_host=127.0.0.1 ansible_connection=local ansible_python_interpreter
 
     proc = dap_client.launch("main.yml", playbook_dir=tmp_path, playbook_args=["-i", "inventory.ini"])
 
-    resp = dap_client.send(
-        dap.SetBreakpointsRequest(
-            source=dap.Source(
-                name="main.yml",
-                path=str(playbook.absolute()),
-            ),
-            lines=[7, 13, 17],
-            breakpoints=[dap.SourceBreakpoint(line=7), dap.SourceBreakpoint(line=13), dap.SourceBreakpoint(line=17)],
-            source_modified=False,
-        ),
-        dap.SetBreakpointsResponse,
-    )
+    resp = dap_client.set_breakpoints(playbook, 7, 13, 17)
 
-    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
-
-    thread_event = dap_client.wait_for_message(dap.ThreadEvent)
-    assert thread_event.reason == "started"
-    host1_tid = thread_event.thread_id
+    host1_tid = dap_client.configuration_done()
 
     stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
     assert stopped_event.reason == dap.StoppedReason.BREAKPOINT
     assert stopped_event.thread_id == host1_tid
-    assert stopped_event.hit_breakpoint_ids == [resp.breakpoints[0].id]
+    assert stopped_event.hit_breakpoint_ids == [resp[0].id]
 
     st_resp = dap_client.send(dap.StackTraceRequest(thread_id=host1_tid), dap.StackTraceResponse)
     assert len(st_resp.stack_frames) == 1
@@ -144,7 +130,7 @@ host2 ansible_host=127.0.0.1 ansible_connection=local ansible_python_interpreter
     stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
     assert stopped_event.reason == dap.StoppedReason.BREAKPOINT
     assert stopped_event.thread_id == host2_tid
-    assert stopped_event.hit_breakpoint_ids == [resp.breakpoints[0].id]
+    assert stopped_event.hit_breakpoint_ids == [resp[0].id]
 
     st_resp = dap_client.send(dap.StackTraceRequest(thread_id=host2_tid), dap.StackTraceResponse)
     assert len(st_resp.stack_frames) == 1
@@ -181,7 +167,7 @@ host2 ansible_host=127.0.0.1 ansible_connection=local ansible_python_interpreter
     stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
     assert stopped_event.reason == dap.StoppedReason.BREAKPOINT
     assert stopped_event.thread_id == host1_tid
-    assert stopped_event.hit_breakpoint_ids == [resp.breakpoints[1].id]
+    assert stopped_event.hit_breakpoint_ids == [resp[1].id]
 
     st_resp = dap_client.send(dap.StackTraceRequest(thread_id=host1_tid), dap.StackTraceResponse)
     assert len(st_resp.stack_frames) == 1
@@ -204,7 +190,7 @@ host2 ansible_host=127.0.0.1 ansible_connection=local ansible_python_interpreter
     stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
     assert stopped_event.reason == dap.StoppedReason.BREAKPOINT
     assert stopped_event.thread_id == host2_tid
-    assert stopped_event.hit_breakpoint_ids == [resp.breakpoints[1].id]
+    assert stopped_event.hit_breakpoint_ids == [resp[1].id]
 
     st_resp = dap_client.send(dap.StackTraceRequest(thread_id=host2_tid), dap.StackTraceResponse)
     assert len(st_resp.stack_frames) == 1
@@ -227,7 +213,7 @@ host2 ansible_host=127.0.0.1 ansible_connection=local ansible_python_interpreter
     stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
     assert stopped_event.reason == dap.StoppedReason.BREAKPOINT
     assert stopped_event.thread_id == host1_tid
-    assert stopped_event.hit_breakpoint_ids == [resp.breakpoints[2].id]
+    assert stopped_event.hit_breakpoint_ids == [resp[2].id]
 
     st_resp = dap_client.send(dap.StackTraceRequest(thread_id=host1_tid), dap.StackTraceResponse)
     assert len(st_resp.stack_frames) == 1
@@ -252,7 +238,7 @@ host2 ansible_host=127.0.0.1 ansible_connection=local ansible_python_interpreter
     stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
     assert stopped_event.reason == dap.StoppedReason.BREAKPOINT
     assert stopped_event.thread_id == host2_tid
-    assert stopped_event.hit_breakpoint_ids == [resp.breakpoints[2].id]
+    assert stopped_event.hit_breakpoint_ids == [resp[2].id]
 
     st_resp = dap_client.send(dap.StackTraceRequest(thread_id=host2_tid), dap.StackTraceResponse)
     assert len(st_resp.stack_frames) == 1
@@ -284,9 +270,7 @@ host2 ansible_host=127.0.0.1 ansible_connection=local ansible_python_interpreter
 
     dap_client.wait_for_message(dap.TerminatedEvent)
 
-    play_out = proc.communicate()
-    if rc := proc.returncode:
-        raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
+    proc.wait_rc()
 
 
 def test_get_variable_critical_failure(
@@ -306,23 +290,9 @@ def test_get_variable_critical_failure(
 
     proc = dap_client.launch("main.yml", playbook_dir=tmp_path)
 
-    dap_client.send(
-        dap.SetBreakpointsRequest(
-            source=dap.Source(
-                name="main.yml",
-                path=str(playbook.absolute()),
-            ),
-            lines=[5],
-            breakpoints=[dap.SourceBreakpoint(line=5)],
-            source_modified=False,
-        ),
-        dap.SetBreakpointsResponse,
-    )
+    dap_client.set_breakpoints(playbook, 5)
 
-    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
-
-    thread_event = dap_client.wait_for_message(dap.ThreadEvent)
-    localhost_tid = thread_event.thread_id
+    localhost_tid = dap_client.configuration_done()
 
     dap_client.wait_for_message(dap.StoppedEvent)
     st_resp = dap_client.send(dap.StackTraceRequest(thread_id=localhost_tid), dap.StackTraceResponse)
@@ -334,13 +304,7 @@ def test_get_variable_critical_failure(
     assert err.message
     assert "KeyError: 666" in err.message
 
-    dap_client.send(dap.ContinueRequest(thread_id=localhost_tid), dap.ContinueResponse)
-    dap_client.wait_for_message(dap.ThreadEvent)
-    dap_client.wait_for_message(dap.TerminatedEvent)
-
-    play_out = proc.communicate()
-    if rc := proc.returncode:
-        raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
+    dap_client.continue_to_end(proc, localhost_tid)
 
 
 def test_playbook_set_task_and_hostvars(
@@ -365,23 +329,9 @@ def test_playbook_set_task_and_hostvars(
 
     proc = dap_client.launch("main.yml", playbook_dir=tmp_path)
 
-    dap_client.send(
-        dap.SetBreakpointsRequest(
-            source=dap.Source(
-                name="main.yml",
-                path=str(playbook.absolute()),
-            ),
-            lines=[7],
-            breakpoints=[dap.SourceBreakpoint(line=7)],
-            source_modified=False,
-        ),
-        dap.SetBreakpointsResponse,
-    )
+    dap_client.set_breakpoints(playbook, 7)
 
-    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
-
-    thread_event = dap_client.wait_for_message(dap.ThreadEvent)
-    localhost_tid = thread_event.thread_id
+    localhost_tid = dap_client.configuration_done()
 
     dap_client.wait_for_message(dap.StoppedEvent)
 
@@ -456,13 +406,7 @@ def test_playbook_set_task_and_hostvars(
 
     assert not to_check
 
-    dap_client.send(dap.ContinueRequest(thread_id=localhost_tid), dap.ContinueResponse)
-    dap_client.wait_for_message(dap.ThreadEvent)
-    dap_client.wait_for_message(dap.TerminatedEvent)
-
-    play_out = proc.communicate()
-    if rc := proc.returncode:
-        raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
+    dap_client.continue_to_end(proc, localhost_tid)
 
 
 def test_playbook_set_variable_types(
@@ -493,23 +437,9 @@ def test_playbook_set_variable_types(
 
     proc = dap_client.launch("main.yml", playbook_dir=tmp_path)
 
-    dap_client.send(
-        dap.SetBreakpointsRequest(
-            source=dap.Source(
-                name="main.yml",
-                path=str(playbook.absolute()),
-            ),
-            lines=[7],
-            breakpoints=[dap.SourceBreakpoint(line=7)],
-            source_modified=False,
-        ),
-        dap.SetBreakpointsResponse,
-    )
+    dap_client.set_breakpoints(playbook, 7)
 
-    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
-
-    thread_event = dap_client.wait_for_message(dap.ThreadEvent)
-    localhost_tid = thread_event.thread_id
+    localhost_tid = dap_client.configuration_done()
 
     dap_client.wait_for_message(dap.StoppedEvent)
 
@@ -627,13 +557,7 @@ def test_playbook_set_variable_types(
 
     assert not to_check
 
-    dap_client.send(dap.ContinueRequest(thread_id=localhost_tid), dap.ContinueResponse)
-    dap_client.wait_for_message(dap.ThreadEvent)
-    dap_client.wait_for_message(dap.TerminatedEvent)
-
-    play_out = proc.communicate()
-    if rc := proc.returncode:
-        raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
+    dap_client.continue_to_end(proc, localhost_tid)
 
 
 @pytest.mark.parametrize("set_native", [False, True])
@@ -670,23 +594,9 @@ def test_playbook_set_list_and_dict_value(
         new_env["ANSIBLE_JINJA2_NATIVE"] = "true"
     proc = dap_client.launch("main.yml", playbook_dir=tmp_path, launch_options={"env": new_env})
 
-    dap_client.send(
-        dap.SetBreakpointsRequest(
-            source=dap.Source(
-                name="main.yml",
-                path=str(playbook.absolute()),
-            ),
-            lines=[12],
-            breakpoints=[dap.SourceBreakpoint(line=12)],
-            source_modified=False,
-        ),
-        dap.SetBreakpointsResponse,
-    )
+    dap_client.set_breakpoints(playbook, 12)
 
-    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
-
-    thread_event = dap_client.wait_for_message(dap.ThreadEvent)
-    localhost_tid = thread_event.thread_id
+    localhost_tid = dap_client.configuration_done()
 
     dap_client.wait_for_message(dap.StoppedEvent)
 
@@ -782,13 +692,7 @@ def test_playbook_set_list_and_dict_value(
     else:
         raise Exception("Failed to find final_var for test")
 
-    dap_client.send(dap.ContinueRequest(thread_id=localhost_tid), dap.ContinueResponse)
-    dap_client.wait_for_message(dap.ThreadEvent)
-    dap_client.wait_for_message(dap.TerminatedEvent)
-
-    play_out = proc.communicate()
-    if rc := proc.returncode:
-        raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
+    dap_client.continue_to_end(proc, localhost_tid)
 
 
 def test_playbook_eval(
@@ -810,23 +714,9 @@ def test_playbook_eval(
 
     proc = dap_client.launch("main.yml", playbook_dir=tmp_path)
 
-    dap_client.send(
-        dap.SetBreakpointsRequest(
-            source=dap.Source(
-                name="main.yml",
-                path=str(playbook.absolute()),
-            ),
-            lines=[7],
-            breakpoints=[dap.SourceBreakpoint(line=7)],
-            source_modified=False,
-        ),
-        dap.SetBreakpointsResponse,
-    )
+    dap_client.set_breakpoints(playbook, 7)
 
-    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
-
-    thread_event = dap_client.wait_for_message(dap.ThreadEvent)
-    localhost_tid = thread_event.thread_id
+    localhost_tid = dap_client.configuration_done()
 
     dap_client.wait_for_message(dap.StoppedEvent)
     st_resp = dap_client.send(dap.StackTraceRequest(thread_id=localhost_tid), dap.StackTraceResponse)
@@ -935,13 +825,7 @@ def test_playbook_eval(
     assert eval_resp.result == "Evaluation for unknown is not implemented"
     assert eval_resp.type is None
 
-    dap_client.send(dap.ContinueRequest(thread_id=localhost_tid), dap.ContinueResponse)
-    dap_client.wait_for_message(dap.ThreadEvent)
-    dap_client.wait_for_message(dap.TerminatedEvent)
-
-    play_out = proc.communicate()
-    if rc := proc.returncode:
-        raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
+    dap_client.continue_to_end(proc, localhost_tid)
 
 
 def test_eval_repl_set_option(
@@ -966,23 +850,9 @@ def test_eval_repl_set_option(
 
     proc = dap_client.launch("main.yml", playbook_dir=tmp_path)
 
-    dap_client.send(
-        dap.SetBreakpointsRequest(
-            source=dap.Source(
-                name="main.yml",
-                path=str(playbook.absolute()),
-            ),
-            lines=[7],
-            breakpoints=[dap.SourceBreakpoint(line=7)],
-            source_modified=False,
-        ),
-        dap.SetBreakpointsResponse,
-    )
+    dap_client.set_breakpoints(playbook, 7)
 
-    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
-
-    thread_event = dap_client.wait_for_message(dap.ThreadEvent)
-    localhost_tid = thread_event.thread_id
+    localhost_tid = dap_client.configuration_done()
 
     dap_client.wait_for_message(dap.StoppedEvent)
     st_resp = dap_client.send(dap.StackTraceRequest(thread_id=localhost_tid), dap.StackTraceResponse)
@@ -1077,13 +947,7 @@ def test_eval_repl_set_option(
     )
     check_vars(task_vars.variables)
 
-    dap_client.send(dap.ContinueRequest(thread_id=localhost_tid), dap.ContinueResponse)
-    dap_client.wait_for_message(dap.ThreadEvent)
-    dap_client.wait_for_message(dap.TerminatedEvent)
-
-    play_out = proc.communicate()
-    if rc := proc.returncode:
-        raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
+    dap_client.continue_to_end(proc, localhost_tid)
 
 
 def test_eval_repl_remove_option(
@@ -1110,23 +974,9 @@ def test_eval_repl_remove_option(
 
     proc = dap_client.launch("main.yml", playbook_dir=tmp_path)
 
-    dap_client.send(
-        dap.SetBreakpointsRequest(
-            source=dap.Source(
-                name="main.yml",
-                path=str(playbook.absolute()),
-            ),
-            lines=[7],
-            breakpoints=[dap.SourceBreakpoint(line=7)],
-            source_modified=False,
-        ),
-        dap.SetBreakpointsResponse,
-    )
+    dap_client.set_breakpoints(playbook, 7)
 
-    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
-
-    thread_event = dap_client.wait_for_message(dap.ThreadEvent)
-    localhost_tid = thread_event.thread_id
+    localhost_tid = dap_client.configuration_done()
 
     dap_client.wait_for_message(dap.StoppedEvent)
     st_resp = dap_client.send(dap.StackTraceRequest(thread_id=localhost_tid), dap.StackTraceResponse)
@@ -1190,13 +1040,7 @@ def test_eval_repl_remove_option(
 
     assert len(to_find) == 2
 
-    dap_client.send(dap.ContinueRequest(thread_id=localhost_tid), dap.ContinueResponse)
-    dap_client.wait_for_message(dap.ThreadEvent)
-    dap_client.wait_for_message(dap.TerminatedEvent)
-
-    play_out = proc.communicate()
-    if rc := proc.returncode:
-        raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
+    dap_client.continue_to_end(proc, localhost_tid)
 
 
 def test_eval_repl_set_hostvar_option(
@@ -1221,23 +1065,9 @@ def test_eval_repl_set_hostvar_option(
 
     proc = dap_client.launch("main.yml", playbook_dir=tmp_path)
 
-    dap_client.send(
-        dap.SetBreakpointsRequest(
-            source=dap.Source(
-                name="main.yml",
-                path=str(playbook.absolute()),
-            ),
-            lines=[7],
-            breakpoints=[dap.SourceBreakpoint(line=7)],
-            source_modified=False,
-        ),
-        dap.SetBreakpointsResponse,
-    )
+    dap_client.set_breakpoints(playbook, 7)
 
-    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
-
-    thread_event = dap_client.wait_for_message(dap.ThreadEvent)
-    localhost_tid = thread_event.thread_id
+    localhost_tid = dap_client.configuration_done()
 
     dap_client.wait_for_message(dap.StoppedEvent)
     st_resp = dap_client.send(dap.StackTraceRequest(thread_id=localhost_tid), dap.StackTraceResponse)
@@ -1338,13 +1168,7 @@ def test_eval_repl_set_hostvar_option(
 
     assert not to_find
 
-    dap_client.send(dap.ContinueRequest(thread_id=localhost_tid), dap.ContinueResponse)
-    dap_client.wait_for_message(dap.ThreadEvent)
-    dap_client.wait_for_message(dap.TerminatedEvent)
-
-    play_out = proc.communicate()
-    if rc := proc.returncode:
-        raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
+    dap_client.continue_to_end(proc, localhost_tid)
 
 
 def test_eval_repl_invalid_commands(
@@ -1364,23 +1188,9 @@ def test_eval_repl_invalid_commands(
 
     proc = dap_client.launch("main.yml", playbook_dir=tmp_path)
 
-    dap_client.send(
-        dap.SetBreakpointsRequest(
-            source=dap.Source(
-                name="main.yml",
-                path=str(playbook.absolute()),
-            ),
-            lines=[5],
-            breakpoints=[dap.SourceBreakpoint(line=5)],
-            source_modified=False,
-        ),
-        dap.SetBreakpointsResponse,
-    )
+    dap_client.set_breakpoints(playbook, 5)
 
-    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
-
-    thread_event = dap_client.wait_for_message(dap.ThreadEvent)
-    localhost_tid = thread_event.thread_id
+    localhost_tid = dap_client.configuration_done()
 
     dap_client.wait_for_message(dap.StoppedEvent)
     st_resp = dap_client.send(dap.StackTraceRequest(thread_id=localhost_tid), dap.StackTraceResponse)
@@ -1407,13 +1217,7 @@ def test_eval_repl_invalid_commands(
     )
     assert eval_resp.result.startswith("argument command: invalid choice: 'unknown' (choose from ")
 
-    dap_client.send(dap.ContinueRequest(thread_id=localhost_tid), dap.ContinueResponse)
-    dap_client.wait_for_message(dap.ThreadEvent)
-    dap_client.wait_for_message(dap.TerminatedEvent)
-
-    play_out = proc.communicate()
-    if rc := proc.returncode:
-        raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
+    dap_client.continue_to_end(proc, localhost_tid)
 
 
 def test_module_res_types(
@@ -1446,29 +1250,14 @@ def test_module_res_types(
         },
     )
 
-    resp = dap_client.send(
-        dap.SetBreakpointsRequest(
-            source=dap.Source(
-                name="main.yml",
-                path=str(playbook.absolute()),
-            ),
-            lines=[9],
-            breakpoints=[dap.SourceBreakpoint(line=9)],
-            source_modified=False,
-        ),
-        dap.SetBreakpointsResponse,
-    )
+    resp = dap_client.set_breakpoints(playbook, 9)
 
-    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
-
-    thread_event = dap_client.wait_for_message(dap.ThreadEvent)
-    assert thread_event.reason == "started"
-    host1_tid = thread_event.thread_id
+    host1_tid = dap_client.configuration_done()
 
     stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
     assert stopped_event.reason == dap.StoppedReason.BREAKPOINT
     assert stopped_event.thread_id == host1_tid
-    assert stopped_event.hit_breakpoint_ids == [resp.breakpoints[0].id]
+    assert stopped_event.hit_breakpoint_ids == [resp[0].id]
 
     st_resp = dap_client.send(dap.StackTraceRequest(thread_id=host1_tid), dap.StackTraceResponse)
     assert len(st_resp.stack_frames) == 1
@@ -1519,26 +1308,14 @@ def test_module_res_types(
 
     dap_client.wait_for_message(dap.TerminatedEvent)
 
-    play_out = proc.communicate()
-    if rc := proc.returncode:
-        raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
+    proc.wait_rc()
 
 
 def test_get_undefined_variable(
     dap_client: DAPClient,
     tmp_path: pathlib.Path,
+    ping_playbook: pathlib.Path,
 ) -> None:
-    playbook = tmp_path / "main.yml"
-    playbook.write_text(
-        r"""
-- hosts: localhost
-  gather_facts: false
-  tasks:
-  - name: ping test
-    ping:
-"""
-    )
-
     inventory = tmp_path / "inventory.ini"
     inventory.write_text(
         r"""
@@ -1548,23 +1325,9 @@ localhost ansible_connection=local ansible_python_interpreter={{ansible_playbook
 
     proc = dap_client.launch("main.yml", playbook_dir=tmp_path, playbook_args=["-i", "inventory.ini"])
 
-    dap_client.send(
-        dap.SetBreakpointsRequest(
-            source=dap.Source(
-                name="main.yml",
-                path=str(playbook.absolute()),
-            ),
-            lines=[5],
-            breakpoints=[dap.SourceBreakpoint(line=5)],
-            source_modified=False,
-        ),
-        dap.SetBreakpointsResponse,
-    )
+    dap_client.set_breakpoints(ping_playbook, 5)
 
-    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
-
-    thread_event = dap_client.wait_for_message(dap.ThreadEvent)
-    localhost_tid = thread_event.thread_id
+    localhost_tid = dap_client.configuration_done()
 
     dap_client.wait_for_message(dap.StoppedEvent)
 
@@ -1600,13 +1363,7 @@ localhost ansible_connection=local ansible_python_interpreter={{ansible_playbook
     else:
         raise Exception("Failed to find my_var in host vars")
 
-    dap_client.send(dap.ContinueRequest(thread_id=localhost_tid), dap.ContinueResponse)
-    dap_client.wait_for_message(dap.ThreadEvent)
-    dap_client.wait_for_message(dap.TerminatedEvent)
-
-    play_out = proc.communicate()
-    if rc := proc.returncode:
-        raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
+    dap_client.continue_to_end(proc, localhost_tid)
 
 
 def test_include_frame_host_vars_refreshed(
@@ -1638,17 +1395,8 @@ def test_include_frame_host_vars_refreshed(
     )
 
     proc = dap_client.launch(playbook, playbook_dir=tmp_path)
-    dap_client.send(
-        dap.SetBreakpointsRequest(
-            source=dap.Source(name="main.yml", path=str(playbook.absolute())),
-            lines=[5],
-            breakpoints=[dap.SourceBreakpoint(line=5)],
-            source_modified=False,
-        ),
-        dap.SetBreakpointsResponse,
-    )
-    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
-    tid = dap_client.wait_for_message(dap.ThreadEvent).thread_id
+    dap_client.set_breakpoints(playbook, 5)
+    tid = dap_client.configuration_done()
     dap_client.wait_for_message(dap.StoppedEvent)
 
     def include_host_vars() -> dict[str, str]:
@@ -1673,12 +1421,7 @@ def test_include_frame_host_vars_refreshed(
         dap_client.wait_for_message(dap.StoppedEvent)
     assert include_host_vars()["my_fact"] == "'changed'"
 
-    dap_client.send(dap.ContinueRequest(thread_id=tid), dap.ContinueResponse)
-    dap_client.wait_for_message(dap.ThreadEvent)
-    dap_client.wait_for_message(dap.TerminatedEvent)
-
-    proc.communicate()
-    assert proc.returncode == 0, proc.format_output()
+    dap_client.continue_to_end(proc, tid)
 
 
 def test_set_option_only_applies_to_current_host(
@@ -1696,27 +1439,11 @@ def test_set_option_only_applies_to_current_host(
       msg: original
 """
     )
-    inventory = tmp_path / "inventory.ini"
-    inventory.write_text(
-        r"""
-host1 ansible_host=127.0.0.1 ansible_connection=local ansible_python_interpreter={{ansible_playbook_python}}
-host2 ansible_host=127.0.0.1 ansible_connection=local ansible_python_interpreter={{ansible_playbook_python}}
-"""
-    )
+    write_inventory(tmp_path, 2)
 
     proc = dap_client.launch("main.yml", playbook_dir=tmp_path, playbook_args=["-i", "inventory.ini"])
-    dap_client.send(
-        dap.SetBreakpointsRequest(
-            source=dap.Source(name="main.yml", path=str(playbook.absolute())),
-            lines=[5],
-            breakpoints=[dap.SourceBreakpoint(line=5)],
-            source_modified=False,
-        ),
-        dap.SetBreakpointsResponse,
-    )
-    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
-
-    host1_tid = dap_client.wait_for_message(dap.ThreadEvent).thread_id
+    dap_client.set_breakpoints(playbook, 5)
+    host1_tid = dap_client.configuration_done()
     dap_client.wait_for_message(dap.StoppedEvent)
     st_resp = dap_client.send(dap.StackTraceRequest(thread_id=host1_tid), dap.StackTraceResponse)
 
@@ -1739,12 +1466,8 @@ host2 ansible_host=127.0.0.1 ansible_connection=local ansible_python_interpreter
     assert {v.name: v.value for v in mod_vars.variables}["msg"] == "'original'"
 
     dap_client.send(dap.ContinueRequest(thread_id=host2_tid), dap.ContinueResponse)
-    dap_client.wait_for_message(dap.ThreadEvent)
-    dap_client.wait_for_message(dap.ThreadEvent)
-    dap_client.wait_for_message(dap.TerminatedEvent)
-
-    stdout = proc.communicate()[0].decode()
-    assert proc.returncode == 0, proc.format_output()
+    dap_client.wait_for_thread("exited")
+    stdout = dap_client.wait_for_end(proc)[0]
     assert '"msg": "changed"' in stdout
     assert '"msg": "original"' in stdout
 
@@ -1768,29 +1491,12 @@ def _launch_and_stop(dap_client: DAPClient, tmp_path: pathlib.Path) -> tuple[Ans
     )
 
     proc = dap_client.launch(playbook, playbook_dir=tmp_path)
-    dap_client.send(
-        dap.SetBreakpointsRequest(
-            source=dap.Source(name="main.yml", path=str(playbook.absolute())),
-            lines=[10],
-            breakpoints=[dap.SourceBreakpoint(line=10)],
-            source_modified=False,
-        ),
-        dap.SetBreakpointsResponse,
-    )
-    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
-    tid = dap_client.wait_for_message(dap.ThreadEvent).thread_id
+    dap_client.set_breakpoints(playbook, 10)
+    tid = dap_client.configuration_done()
     dap_client.wait_for_message(dap.StoppedEvent)
     frame_id = dap_client.send(dap.StackTraceRequest(thread_id=tid), dap.StackTraceResponse).stack_frames[0].id
 
     return proc, tid, frame_id
-
-
-def _continue_to_end(dap_client: DAPClient, proc: AnsibleProcess, tid: int) -> None:
-    dap_client.send(dap.ContinueRequest(thread_id=tid), dap.ContinueResponse)
-    dap_client.wait_for_message(dap.ThreadEvent)
-    dap_client.wait_for_message(dap.TerminatedEvent)
-    proc.communicate()
-    assert proc.returncode == 0, proc.format_output()
 
 
 def test_repl_invalidates_variables(tmp_path: pathlib.Path) -> None:
@@ -1810,7 +1516,7 @@ def test_repl_invalidates_variables(tmp_path: pathlib.Path) -> None:
         assert invalidated.areas == ["variables"]
         dap_client.wait_for_message(dap.EvaluateResponse)
 
-        _continue_to_end(dap_client, proc, tid)
+        dap_client.continue_to_end(proc, tid)
 
 
 def test_hover_and_evaluate_name(
@@ -1869,7 +1575,7 @@ def test_hover_and_evaluate_name(
     )
     assert resp.result == "['first']"
 
-    _continue_to_end(dap_client, proc, tid)
+    dap_client.continue_to_end(proc, tid)
 
 
 def test_set_hostvar_updates_all_frames(
@@ -1891,17 +1597,8 @@ def test_set_hostvar_updates_all_frames(
     (tmp_path / "tasks.yml").write_text("- name: inner\n  ping:\n")
 
     proc = dap_client.launch(playbook, playbook_dir=tmp_path)
-    dap_client.send(
-        dap.SetBreakpointsRequest(
-            source=dap.Source(name="main.yml", path=str(playbook.absolute())),
-            lines=[7],
-            breakpoints=[dap.SourceBreakpoint(line=7)],
-            source_modified=False,
-        ),
-        dap.SetBreakpointsResponse,
-    )
-    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
-    tid = dap_client.wait_for_message(dap.ThreadEvent).thread_id
+    dap_client.set_breakpoints(playbook, 7)
+    tid = dap_client.configuration_done()
     dap_client.wait_for_message(dap.StoppedEvent)
     dap_client.send(dap.StepInRequest(thread_id=tid), dap.StepInResponse)
     dap_client.wait_for_message(dap.StoppedEvent)
@@ -1927,11 +1624,32 @@ def test_set_hostvar_updates_all_frames(
         assert scope_value(frames[0].id, scope) == "456", scope
     assert scope_value(frames[1].id, "Host Variables") == "456"
 
-    dap_client.send(dap.ContinueRequest(thread_id=tid), dap.ContinueResponse)
-    dap_client.wait_for_message(dap.ThreadEvent)
-    dap_client.wait_for_message(dap.TerminatedEvent)
-    proc.communicate()
-    assert proc.returncode == 0, proc.format_output()
+    dap_client.continue_to_end(proc, tid)
+
+
+@pytest.mark.skipif(
+    not hasattr(ansible.errors, "AnsibleValueOmittedError"),
+    reason="Before 2.19 omit templates to a placeholder string and not an error that can be detected",
+)
+def test_set_hostvar_to_omit(
+    dap_client: DAPClient,
+    tmp_path: pathlib.Path,
+) -> None:
+    proc, tid, frame_id = _launch_and_stop(dap_client, tmp_path)
+
+    resp = dap_client.send(
+        dap.EvaluateRequest("!set_hostvar my_dict omit", frame_id=frame_id, context="repl"),
+        dap.EvaluateResponse,
+    )
+    assert resp.result == "omit can only remove a module option, it cannot remove a host variable"
+
+    # The existing variable is left as is.
+    resp = dap_client.send(
+        dap.EvaluateRequest("my_dict.key[0]", frame_id=frame_id, context="watch"), dap.EvaluateResponse
+    )
+    assert resp.result == "'first'"
+
+    dap_client.continue_to_end(proc, tid)
 
 
 @pytest.mark.parametrize("method", ["set_variable", "repl"])
@@ -1958,17 +1676,8 @@ def test_set_option_to_omit(
     )
 
     proc = dap_client.launch(playbook, playbook_dir=tmp_path)
-    dap_client.send(
-        dap.SetBreakpointsRequest(
-            source=dap.Source(name="main.yml", path=str(playbook.absolute())),
-            lines=[5],
-            breakpoints=[dap.SourceBreakpoint(line=5)],
-            source_modified=False,
-        ),
-        dap.SetBreakpointsResponse,
-    )
-    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
-    tid = dap_client.wait_for_message(dap.ThreadEvent).thread_id
+    dap_client.set_breakpoints(playbook, 5)
+    tid = dap_client.configuration_done()
     dap_client.wait_for_message(dap.StoppedEvent)
     frame_id = dap_client.send(dap.StackTraceRequest(thread_id=tid), dap.StackTraceResponse).stack_frames[0].id
 
@@ -1982,4 +1691,4 @@ def test_set_option_to_omit(
     else:
         dap_client.send(dap.EvaluateRequest("!so data omit", frame_id=frame_id, context="repl"), dap.EvaluateResponse)
 
-    _continue_to_end(dap_client, proc, tid)
+    dap_client.continue_to_end(proc, tid)

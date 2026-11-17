@@ -44,28 +44,13 @@ def test_task_loop(
 
     proc = dap_client.launch(playbook, playbook_dir=tmp_path)
 
-    resp = dap_client.send(
-        dap.SetBreakpointsRequest(
-            source=dap.Source(
-                name="main.yml",
-                path=str(playbook.absolute()),
-            ),
-            lines=[5],
-            breakpoints=[dap.SourceBreakpoint(line=5)],
-            source_modified=False,
-        ),
-        dap.SetBreakpointsResponse,
-    )
-    assert len(resp.breakpoints) == 1
-    assert resp.breakpoints[0].verified
-    assert resp.breakpoints[0].line == 5
-    assert resp.breakpoints[0].end_line == 10
-    bid = resp.breakpoints[0].id
+    resp = dap_client.set_breakpoints(playbook, 5)
+    assert resp[0].verified
+    assert resp[0].line == 5
+    assert resp[0].end_line == 10
+    bid = resp[0].id
 
-    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
-
-    thread_event = dap_client.wait_for_message(dap.ThreadEvent)
-    localhost_tid = thread_event.thread_id
+    localhost_tid = dap_client.configuration_done()
 
     stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
     assert stopped_event.reason == dap.StoppedReason.BREAKPOINT
@@ -94,13 +79,7 @@ def test_task_loop(
     assert st_resp.stack_frames[0].source.path == str(playbook)
     assert st_resp.stack_frames[0].source.name == "main.yml"
 
-    dap_client.send(dap.ContinueRequest(thread_id=localhost_tid), dap.ContinueResponse)
-    thread_event = dap_client.wait_for_message(dap.ThreadEvent)
-    dap_client.wait_for_message(dap.TerminatedEvent)
-
-    play_out = proc.communicate()
-    if rc := proc.returncode:
-        raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
+    dap_client.continue_to_end(proc, localhost_tid)
 
 
 def test_task_import_task_stackframe(
@@ -140,52 +119,25 @@ def test_task_import_task_stackframe(
 
     # import_tasks is invisible to the breakpoint engine, it'll snap back to
     # the previous task.
-    play_bp = dap_client.send(
-        dap.SetBreakpointsRequest(
-            source=dap.Source(
-                name="main.yml",
-                path=str(playbook.absolute()),
-            ),
-            lines=[8, 11],
-            breakpoints=[dap.SourceBreakpoint(line=8), dap.SourceBreakpoint(line=11)],
-            source_modified=False,
-        ),
-        dap.SetBreakpointsResponse,
-    )
-    assert len(play_bp.breakpoints) == 2
-    assert play_bp.breakpoints[0].verified
-    assert play_bp.breakpoints[0].line == 5
-    assert play_bp.breakpoints[0].end_line == 10
-    assert play_bp.breakpoints[1].verified
-    assert play_bp.breakpoints[1].line == 11
-    assert play_bp.breakpoints[1].end_line == 11
+    play_bp = dap_client.set_breakpoints(playbook, 8, 11)
+    assert play_bp[0].verified
+    assert play_bp[0].line == 5
+    assert play_bp[0].end_line == 10
+    assert play_bp[1].verified
+    assert play_bp[1].line == 11
+    assert play_bp[1].end_line == 11
 
-    tasks_bp = dap_client.send(
-        dap.SetBreakpointsRequest(
-            source=dap.Source(
-                name="main.yml",
-                path=str(tasks.absolute()),
-            ),
-            lines=[1],
-            breakpoints=[dap.SourceBreakpoint(line=1)],
-            source_modified=False,
-        ),
-        dap.SetBreakpointsResponse,
-    )
-    assert len(tasks_bp.breakpoints) == 1
-    assert tasks_bp.breakpoints[0].verified
-    assert tasks_bp.breakpoints[0].line == 1
-    assert tasks_bp.breakpoints[0].end_line == 1
+    tasks_bp = dap_client.set_breakpoints(tasks, 1)
+    assert tasks_bp[0].verified
+    assert tasks_bp[0].line == 1
+    assert tasks_bp[0].end_line == 1
 
-    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
-
-    thread_event = dap_client.wait_for_message(dap.ThreadEvent)
-    localhost_tid = thread_event.thread_id
+    localhost_tid = dap_client.configuration_done()
 
     stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
     assert stopped_event.reason == dap.StoppedReason.BREAKPOINT
     assert stopped_event.thread_id == localhost_tid
-    assert stopped_event.hit_breakpoint_ids == [play_bp.breakpoints[0].id]
+    assert stopped_event.hit_breakpoint_ids == [play_bp[0].id]
 
     st_resp = dap_client.send(dap.StackTraceRequest(thread_id=localhost_tid), dap.StackTraceResponse)
     assert len(st_resp.stack_frames) == 1
@@ -200,7 +152,7 @@ def test_task_import_task_stackframe(
     stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
     assert stopped_event.reason == dap.StoppedReason.BREAKPOINT
     assert stopped_event.thread_id == localhost_tid
-    assert stopped_event.hit_breakpoint_ids == [tasks_bp.breakpoints[0].id]
+    assert stopped_event.hit_breakpoint_ids == [tasks_bp[0].id]
 
     st_resp = dap_client.send(dap.StackTraceRequest(thread_id=localhost_tid), dap.StackTraceResponse)
     assert len(st_resp.stack_frames) == 1
@@ -215,7 +167,7 @@ def test_task_import_task_stackframe(
     stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
     assert stopped_event.reason == dap.StoppedReason.BREAKPOINT
     assert stopped_event.thread_id == localhost_tid
-    assert stopped_event.hit_breakpoint_ids == [play_bp.breakpoints[1].id]
+    assert stopped_event.hit_breakpoint_ids == [play_bp[1].id]
 
     st_resp = dap_client.send(dap.StackTraceRequest(thread_id=localhost_tid), dap.StackTraceResponse)
     assert len(st_resp.stack_frames) == 1
@@ -225,14 +177,7 @@ def test_task_import_task_stackframe(
     assert st_resp.stack_frames[0].source.path == str(playbook)
     assert st_resp.stack_frames[0].source.name == "main.yml"
 
-    dap_client.send(dap.ContinueRequest(thread_id=localhost_tid), dap.ContinueResponse)
-
-    thread_event = dap_client.wait_for_message(dap.ThreadEvent)
-    dap_client.wait_for_message(dap.TerminatedEvent)
-
-    play_out = proc.communicate()
-    if rc := proc.returncode:
-        raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
+    dap_client.continue_to_end(proc, localhost_tid)
 
 
 def test_task_import_role_stackframe(
@@ -270,52 +215,25 @@ def test_task_import_role_stackframe(
 
     # import_role is invisible to the breakpoint engine, it'll snap back to
     # the previous task.
-    play_bp = dap_client.send(
-        dap.SetBreakpointsRequest(
-            source=dap.Source(
-                name="main.yml",
-                path=str(playbook.absolute()),
-            ),
-            lines=[8, 12],
-            breakpoints=[dap.SourceBreakpoint(line=8), dap.SourceBreakpoint(line=12)],
-            source_modified=False,
-        ),
-        dap.SetBreakpointsResponse,
-    )
-    assert len(play_bp.breakpoints) == 2
-    assert play_bp.breakpoints[0].verified
-    assert play_bp.breakpoints[0].line == 5
-    assert play_bp.breakpoints[0].end_line == 11
-    assert play_bp.breakpoints[1].verified
-    assert play_bp.breakpoints[1].line == 12
-    assert play_bp.breakpoints[1].end_line == 12
+    play_bp = dap_client.set_breakpoints(playbook, 8, 12)
+    assert play_bp[0].verified
+    assert play_bp[0].line == 5
+    assert play_bp[0].end_line == 11
+    assert play_bp[1].verified
+    assert play_bp[1].line == 12
+    assert play_bp[1].end_line == 12
 
-    tasks_bp = dap_client.send(
-        dap.SetBreakpointsRequest(
-            source=dap.Source(
-                name="main.yml",
-                path=str(tasks.absolute()),
-            ),
-            lines=[1],
-            breakpoints=[dap.SourceBreakpoint(line=1)],
-            source_modified=False,
-        ),
-        dap.SetBreakpointsResponse,
-    )
-    assert len(tasks_bp.breakpoints) == 1
-    assert tasks_bp.breakpoints[0].verified
-    assert tasks_bp.breakpoints[0].line == 1
-    assert tasks_bp.breakpoints[0].end_line == 1
+    tasks_bp = dap_client.set_breakpoints(tasks, 1)
+    assert tasks_bp[0].verified
+    assert tasks_bp[0].line == 1
+    assert tasks_bp[0].end_line == 1
 
-    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
-
-    thread_event = dap_client.wait_for_message(dap.ThreadEvent)
-    localhost_tid = thread_event.thread_id
+    localhost_tid = dap_client.configuration_done()
 
     stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
     assert stopped_event.reason == dap.StoppedReason.BREAKPOINT
     assert stopped_event.thread_id == localhost_tid
-    assert stopped_event.hit_breakpoint_ids == [play_bp.breakpoints[0].id]
+    assert stopped_event.hit_breakpoint_ids == [play_bp[0].id]
 
     st_resp = dap_client.send(dap.StackTraceRequest(thread_id=localhost_tid), dap.StackTraceResponse)
     assert len(st_resp.stack_frames) == 1
@@ -330,7 +248,7 @@ def test_task_import_role_stackframe(
     stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
     assert stopped_event.reason == dap.StoppedReason.BREAKPOINT
     assert stopped_event.thread_id == localhost_tid
-    assert stopped_event.hit_breakpoint_ids == [tasks_bp.breakpoints[0].id]
+    assert stopped_event.hit_breakpoint_ids == [tasks_bp[0].id]
 
     st_resp = dap_client.send(dap.StackTraceRequest(thread_id=localhost_tid), dap.StackTraceResponse)
     assert len(st_resp.stack_frames) == 1
@@ -345,7 +263,7 @@ def test_task_import_role_stackframe(
     stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
     assert stopped_event.reason == dap.StoppedReason.BREAKPOINT
     assert stopped_event.thread_id == localhost_tid
-    assert stopped_event.hit_breakpoint_ids == [play_bp.breakpoints[1].id]
+    assert stopped_event.hit_breakpoint_ids == [play_bp[1].id]
 
     st_resp = dap_client.send(dap.StackTraceRequest(thread_id=localhost_tid), dap.StackTraceResponse)
     assert len(st_resp.stack_frames) == 1
@@ -355,14 +273,7 @@ def test_task_import_role_stackframe(
     assert st_resp.stack_frames[0].source.path == str(playbook)
     assert st_resp.stack_frames[0].source.name == "main.yml"
 
-    dap_client.send(dap.ContinueRequest(thread_id=localhost_tid), dap.ContinueResponse)
-
-    thread_event = dap_client.wait_for_message(dap.ThreadEvent)
-    dap_client.wait_for_message(dap.TerminatedEvent)
-
-    play_out = proc.communicate()
-    if rc := proc.returncode:
-        raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
+    dap_client.continue_to_end(proc, localhost_tid)
 
 
 def test_task_roles_stackframe(
@@ -400,52 +311,25 @@ def test_task_roles_stackframe(
 
     # import_role is invisible to the breakpoint engine, it'll snap back to
     # the previous task.
-    play_bp = dap_client.send(
-        dap.SetBreakpointsRequest(
-            source=dap.Source(
-                name="main.yml",
-                path=str(playbook.absolute()),
-            ),
-            lines=[9, 12],
-            breakpoints=[dap.SourceBreakpoint(line=9), dap.SourceBreakpoint(line=12)],
-            source_modified=False,
-        ),
-        dap.SetBreakpointsResponse,
-    )
-    assert len(play_bp.breakpoints) == 2
-    assert play_bp.breakpoints[0].verified
-    assert play_bp.breakpoints[0].line == 5
-    assert play_bp.breakpoints[0].end_line == 11
-    assert play_bp.breakpoints[1].verified
-    assert play_bp.breakpoints[1].line == 12
-    assert play_bp.breakpoints[1].end_line == 12
+    play_bp = dap_client.set_breakpoints(playbook, 9, 12)
+    assert play_bp[0].verified
+    assert play_bp[0].line == 5
+    assert play_bp[0].end_line == 11
+    assert play_bp[1].verified
+    assert play_bp[1].line == 12
+    assert play_bp[1].end_line == 12
 
-    tasks_bp = dap_client.send(
-        dap.SetBreakpointsRequest(
-            source=dap.Source(
-                name="main.yml",
-                path=str(tasks.absolute()),
-            ),
-            lines=[1],
-            breakpoints=[dap.SourceBreakpoint(line=1)],
-            source_modified=False,
-        ),
-        dap.SetBreakpointsResponse,
-    )
-    assert len(tasks_bp.breakpoints) == 1
-    assert tasks_bp.breakpoints[0].verified
-    assert tasks_bp.breakpoints[0].line == 1
-    assert tasks_bp.breakpoints[0].end_line == 1
+    tasks_bp = dap_client.set_breakpoints(tasks, 1)
+    assert tasks_bp[0].verified
+    assert tasks_bp[0].line == 1
+    assert tasks_bp[0].end_line == 1
 
-    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
-
-    thread_event = dap_client.wait_for_message(dap.ThreadEvent)
-    localhost_tid = thread_event.thread_id
+    localhost_tid = dap_client.configuration_done()
 
     stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
     assert stopped_event.reason == dap.StoppedReason.BREAKPOINT
     assert stopped_event.thread_id == localhost_tid
-    assert stopped_event.hit_breakpoint_ids == [play_bp.breakpoints[0].id]
+    assert stopped_event.hit_breakpoint_ids == [play_bp[0].id]
 
     st_resp = dap_client.send(dap.StackTraceRequest(thread_id=localhost_tid), dap.StackTraceResponse)
     assert len(st_resp.stack_frames) == 1
@@ -460,7 +344,7 @@ def test_task_roles_stackframe(
     stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
     assert stopped_event.reason == dap.StoppedReason.BREAKPOINT
     assert stopped_event.thread_id == localhost_tid
-    assert stopped_event.hit_breakpoint_ids == [tasks_bp.breakpoints[0].id]
+    assert stopped_event.hit_breakpoint_ids == [tasks_bp[0].id]
 
     st_resp = dap_client.send(dap.StackTraceRequest(thread_id=localhost_tid), dap.StackTraceResponse)
     assert len(st_resp.stack_frames) == 1
@@ -475,7 +359,7 @@ def test_task_roles_stackframe(
     stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
     assert stopped_event.reason == dap.StoppedReason.BREAKPOINT
     assert stopped_event.thread_id == localhost_tid
-    assert stopped_event.hit_breakpoint_ids == [play_bp.breakpoints[1].id]
+    assert stopped_event.hit_breakpoint_ids == [play_bp[1].id]
 
     st_resp = dap_client.send(dap.StackTraceRequest(thread_id=localhost_tid), dap.StackTraceResponse)
     assert len(st_resp.stack_frames) == 1
@@ -485,11 +369,4 @@ def test_task_roles_stackframe(
     assert st_resp.stack_frames[0].source.path == str(playbook)
     assert st_resp.stack_frames[0].source.name == "main.yml"
 
-    dap_client.send(dap.ContinueRequest(thread_id=localhost_tid), dap.ContinueResponse)
-
-    thread_event = dap_client.wait_for_message(dap.ThreadEvent)
-    dap_client.wait_for_message(dap.TerminatedEvent)
-
-    play_out = proc.communicate()
-    if rc := proc.returncode:
-        raise Exception(f"Playbook failed {rc}\nSTDOUT: {play_out[0].decode()}\nSTDERR: {play_out[1].decode()}")
+    dap_client.continue_to_end(proc, localhost_tid)

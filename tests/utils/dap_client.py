@@ -27,6 +27,15 @@ ResponseMessage = t.TypeVar("ResponseMessage", bound=dap.ProtocolMessage)
 MSG_TIMEOUT = 20.0
 PROC_TIMEOUT = 20.0
 
+# Logged when the debuggee hits a bug the client is not told about, it must
+# never go unnoticed. A crash of the DA server needs no check as the next
+# message a test waits for fails.
+UNEXPECTED_ERROR = "Unknown error in Debuggee send thread"
+
+
+class DAPErrorResponse(Exception):
+    """An ErrorResponse was received when another message was expected."""
+
 
 def get_test_env() -> dict[str, str]:
     env = os.environ | {"PYDEVD_DISABLE_FILE_VALIDATION": "1"}
@@ -37,6 +46,55 @@ def get_test_env() -> dict[str, str]:
     env.pop("ANSIBLE_COLLECTIONS_PATHS", None)
 
     return env
+
+
+def write_inventory(directory: pathlib.Path, count: int) -> pathlib.Path:
+    """Writes inventory.ini with the local hosts host1 to host{count}."""
+    inventory = directory / "inventory.ini"
+    inventory.write_text(
+        "\n".join(
+            f"host{i} ansible_host=127.0.0.1 ansible_connection=local "
+            + "ansible_python_interpreter={{ansible_playbook_python}}"
+            for i in range(1, count + 1)
+        )
+    )
+    return inventory
+
+
+def start_listen(
+    playbook: str | pathlib.Path,
+    playbook_dir: str | pathlib.Path | None = None,
+    playbook_args: list[str] | None = None,
+    ansibug_args: list[str] | None = None,
+) -> AnsibleProcess:
+    """Starts 'ansibug listen' and waits until it is ready to be attached to.
+
+    The caller must stop the returned process, DAPClient.attach does this
+    automatically.
+    """
+    proc_args = [
+        sys.executable,
+        "-m",
+        "ansibug",
+        "listen",
+        *(ansibug_args or []),
+        str(playbook),
+        *(playbook_args or []),
+    ]
+    proc = AnsibleProcess(proc_args, cwd=playbook_dir, env=get_test_env())
+
+    # The pid file is written once the listener socket is bound, it's created
+    # before its content is written so wait for the content.
+    pid_path = get_pid_info_path(proc.pid)
+    deadline = time.monotonic() + PROC_TIMEOUT
+    while not (pid_path.exists() and pid_path.stat().st_size):
+        if proc.poll() is not None or time.monotonic() > deadline:
+            proc.stop()
+            raise Exception(f"ansibug listen did not create the pid file\n{proc.format_output()}")
+
+        time.sleep(0.05)
+
+    return proc
 
 
 class DAPClient:
@@ -116,6 +174,11 @@ class DAPClient:
                 # pytest only displays captured output for failed tests.
                 print(proc.format_output())
 
+            # Don't hide the failure of a test that has already failed.
+            if exception_type is None:
+                for proc in self._ansible_procs:
+                    assert UNEXPECTED_ERROR not in proc.stderr, proc.format_output()
+
         finally:
             if self._dap_proc.poll() is None:
                 try:
@@ -156,6 +219,76 @@ class DAPClient:
 
         return resp
 
+    def initialize(self) -> dap.InitializeResponse:
+        return self.send(
+            dap.InitializeRequest(
+                adapter_id="ansibug",
+                client_id="ansibug",
+                client_name="Ansibug Conftest",
+                locale="en",
+                supports_variable_type=True,
+                supports_run_in_terminal_request=True,
+            ),
+            dap.InitializeResponse,
+        )
+
+    def set_breakpoints(
+        self,
+        path: str | pathlib.Path,
+        *breakpoints: int | dap.SourceBreakpoint,
+        source_modified: bool = False,
+    ) -> list[dap.Breakpoint]:
+        """Sets the breakpoints for the file, an int is a plain line breakpoint."""
+        path = pathlib.Path(path)
+        resp = self.send(
+            dap.SetBreakpointsRequest(
+                source=dap.Source(name=path.name, path=str(path.absolute())),
+                breakpoints=[dap.SourceBreakpoint(line=b) if isinstance(b, int) else b for b in breakpoints],
+                source_modified=source_modified,
+            ),
+            dap.SetBreakpointsResponse,
+        )
+        assert len(resp.breakpoints) == len(breakpoints)
+        return resp.breakpoints
+
+    def configuration_done(self) -> int:
+        """Sends the configuration done request and returns the id of the first thread started."""
+        self.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
+        return self.wait_for_thread("started")
+
+    def wait_for_thread(
+        self,
+        reason: t.Literal["started", "exited"],
+        thread_id: int | None = None,
+    ) -> int:
+        event = self.wait_for_message(dap.ThreadEvent)
+        assert event.reason == reason
+        if thread_id is not None:
+            assert event.thread_id == thread_id
+
+        return event.thread_id
+
+    def wait_for_end(
+        self,
+        proc: AnsibleProcess,
+        thread_id: int | None = None,
+        rc: int = 0,
+    ) -> tuple[str, str]:
+        """Waits for the last thread to exit and the playbook to end, returns the stdout and stderr."""
+        self.wait_for_thread("exited", thread_id)
+        self.wait_for_message(dap.TerminatedEvent)
+        return proc.wait_rc(rc)
+
+    def continue_to_end(
+        self,
+        proc: AnsibleProcess,
+        thread_id: int,
+        rc: int = 0,
+    ) -> tuple[str, str]:
+        """Continues the last thread and waits for the playbook to end, returns the stdout and stderr."""
+        self.send(dap.ContinueRequest(thread_id=thread_id), dap.ContinueResponse)
+        return self.wait_for_end(proc, thread_id, rc)
+
     def send_raw(self, msg: dict[str, t.Any]) -> None:
         """Sends a message this library cannot build, like an unknown request."""
         b_msg = json.dumps(msg).encode()
@@ -191,7 +324,7 @@ class DAPClient:
 
         elif isinstance(msg, dap.ErrorResponse) and expected_type != dap.ErrorResponse:
             command = msg.command.value if isinstance(msg.command, dap.Command) else msg.command
-            raise Exception(f"Received error response for {command}: {msg.message}")
+            raise DAPErrorResponse(f"Received error response for {command}: {msg.message}")
 
         elif not isinstance(msg, expected_type):
             raise Exception(f"Received unexpected response type {type(msg)} but expected {expected_type}: {msg}")
@@ -207,12 +340,9 @@ class DAPClient:
         attach_options: dict[str, t.Any] | None = None,
         attach_by_address: bool = False,
     ) -> AnsibleProcess:
-        proc_args = [sys.executable, "-m", "ansibug", "listen"]
-        if ansibug_args:
-            proc_args += ansibug_args
-
-        if self._log_dir and "--log-file" not in proc_args:
-            proc_args.extend(
+        ansibug_args = list(ansibug_args or [])
+        if self._log_dir and "--log-file" not in ansibug_args:
+            ansibug_args.extend(
                 [
                     "--log-file",
                     str((self._log_dir / f"ansibug-{self._test_name}-debuggee.log").absolute()),
@@ -221,27 +351,9 @@ class DAPClient:
                 ]
             )
 
-        proc_args.append(str(playbook))
-        if playbook_args:
-            proc_args += playbook_args
-
-        new_environment = get_test_env()
-        proc = AnsibleProcess(proc_args, cwd=playbook_dir, env=new_environment)
+        proc = start_listen(playbook, playbook_dir, playbook_args, ansibug_args)
         self._ansible_procs.append(proc)
-
         pid_path = get_pid_info_path(proc.pid)
-        for _ in range(20):
-            if pid_path.exists():
-                break
-            elif (rc := proc.poll()) is not None:
-                stdout, stderr = proc.communicate()
-                raise Exception(
-                    f"Error when launching new ansible-playbook process\nRC: {rc}\nSTDOUT\n{stdout.decode()}\nSTDERR\n{stderr.decode()}"
-                )
-
-            time.sleep(1)
-        else:
-            raise Exception("timed out waiting for proc pid")
 
         if attach_by_address:
             proc_conn_data = json.loads(pid_path.read_text())
@@ -385,8 +497,18 @@ class AnsibleProcess:
     def returncode(self) -> int | None:
         return self._proc.returncode
 
+    @property
+    def stderr(self) -> str:
+        return self._stderr.decode(errors="replace")
+
     def poll(self) -> int | None:
         return self._proc.poll()
+
+    def wait_rc(self, rc: int = 0) -> tuple[str, str]:
+        """Waits for the process to end with the expected rc, returns the stdout and stderr."""
+        stdout, stderr = self.communicate()
+        assert self.returncode == rc, self.format_output()
+        return stdout.decode(), stderr.decode()
 
     def communicate(self, timeout: float = PROC_TIMEOUT) -> tuple[bytes, bytes]:
         """Waits for the process to end, raises TimeoutExpired if it doesn't."""
