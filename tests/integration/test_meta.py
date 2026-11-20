@@ -15,6 +15,7 @@ import ansibug.dap as dap
 
 
 def test_meta_simple_breakpoint(
+    strategy: str,
     dap_client: DAPClient,
     tmp_path: pathlib.Path,
 ) -> None:
@@ -319,6 +320,7 @@ inventory = ns.name.inv.yml
 
 
 def test_meta_end_host(
+    strategy: str,
     dap_client: DAPClient,
     tmp_path: pathlib.Path,
 ) -> None:
@@ -376,6 +378,7 @@ def test_meta_end_host(
 
 
 def test_meta_end_play(
+    strategy: str,
     dap_client: DAPClient,
     tmp_path: pathlib.Path,
 ) -> None:

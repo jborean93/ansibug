@@ -4,15 +4,21 @@
 from __future__ import annotations
 
 import concurrent.futures
-import logging
+import json
 import pathlib
 import threading
 
 import pytest
 
 import ansibug.dap as dap
-from ansibug._debuggee import AnsibleDebugger, DebuggeeShutdownError, _replace_root, parse_hit_condition
-from ansibug._logging import configure_file_logging
+from ansibug._debuggee import (
+    AnsibleDebugger,
+    DebugConfiguration,
+    DebuggeeShutdownError,
+    PlaybookProcessInfo,
+    _replace_root,
+    parse_hit_condition,
+)
 
 
 class WaitTrackingCondition(threading.Condition):
@@ -35,8 +41,7 @@ class WaitTrackingCondition(threading.Condition):
 
 
 def test_get_strategy_wakes_on_shutdown() -> None:
-    # Bypass the Singleton so the test doesn't share state with other tests.
-    debugger = type.__call__(AnsibleDebugger)
+    debugger = AnsibleDebugger()
     condition = WaitTrackingCondition(waiters=1)
     debugger._strategy_connected = condition
 
@@ -50,29 +55,74 @@ def test_get_strategy_wakes_on_shutdown() -> None:
             get_fut.result(timeout=5)
 
 
+def test_initialized_waits_for_playbook_loaded(monkeypatch: pytest.MonkeyPatch) -> None:
+    debugger = AnsibleDebugger()
+    sent: list[dap.ProtocolMessage | None] = []
+    monkeypatch.setattr(debugger, "queue_msg", sent.append)
+    config_msg = dap.OutputEvent(
+        category=DebugConfiguration.OUTPUT_CATEGORY,
+        output="",
+        data=DebugConfiguration().to_json(),
+    )
+
+    # The client is only asked for breakpoints once they can be validated.
+    debugger.process_message(config_msg)
+    assert sent == []
+
+    debugger.playbook_loaded(None)
+    assert [type(m) for m in sent] == [dap.InitializedEvent]
+
+    # A later playbook only registers its breakpoints.
+    debugger.playbook_loaded(None)
+    assert len(sent) == 1
+
+
+def test_initialized_after_playbook_loaded(monkeypatch: pytest.MonkeyPatch) -> None:
+    debugger = AnsibleDebugger()
+    sent: list[dap.ProtocolMessage | None] = []
+    monkeypatch.setattr(debugger, "queue_msg", sent.append)
+
+    # A client that attaches after the playbook loaded is initialized as soon
+    # as the adapter sends the debug config.
+    debugger.playbook_loaded(None)
+    assert sent == []
+
+    debugger.process_message(
+        dap.OutputEvent(
+            category=DebugConfiguration.OUTPUT_CATEGORY,
+            output="",
+            data=DebugConfiguration().to_json(),
+        )
+    )
+    assert [type(m) for m in sent] == [dap.InitializedEvent]
+
+
+def test_playbook_loaded_updates_pid_file(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+) -> None:
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    debugger = AnsibleDebugger()
+    monkeypatch.setattr(debugger, "queue_msg", lambda m: None)
+    debugger._proc_info = PlaybookProcessInfo(pid=1, address="addr", use_tls=False, playbook_file=None)
+    debugger._write_pid_file(debugger._proc_info)
+    pid_file = debugger._proc_pid_file
+    assert json.loads(pid_file.read_text())["playbook_file"] is None
+
+    debugger.playbook_loaded("/tmp/main.yml")
+
+    assert json.loads(pid_file.read_text())["playbook_file"] == "/tmp/main.yml"
+    # The temp file used for the atomic replace is gone.
+    assert [p.name for p in tmp_path.iterdir()] == [pid_file.name]
+
+
 def test_disconnect_before_strategy_releases_config_done() -> None:
-    debugger = type.__call__(AnsibleDebugger)
+    debugger = AnsibleDebugger()
 
     # Must not wait for a strategy, none can start until config done is set.
     debugger._disconnect(dap.DisconnectRequest())
 
     assert debugger._configuration_done.is_set()
-
-
-def test_configure_file_logging_once(tmp_path: pathlib.Path) -> None:
-    logger = logging.getLogger("ansibug")
-    existing = list(logger.handlers)
-    log_file = tmp_path / "ansibug.log"
-    try:
-        configure_file_logging(str(log_file), "info")
-        configure_file_logging(str(log_file), "info")
-
-        assert len(logger.handlers) == len(existing) + 1
-
-    finally:
-        for h in logger.handlers[len(existing) :]:
-            logger.removeHandler(h)
-            h.close()
 
 
 @pytest.mark.parametrize(
@@ -114,3 +164,23 @@ def test_parse_hit_condition(condition: str, hits_that_stop: list[int]) -> None:
 @pytest.mark.parametrize("condition", ["", "abc", "=2", "2.5", "%0", ">=-1"])
 def test_parse_hit_condition_invalid(condition: str) -> None:
     assert parse_hit_condition(condition) is None
+
+
+def test_exit_keeps_exception_when_shutdown_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    debugger = AnsibleDebugger()
+
+    def shutdown() -> None:
+        raise PermissionError("pid file")
+
+    monkeypatch.setattr(debugger, "shutdown", shutdown)
+
+    # The playbook's exit code wins over a failure to clean up.
+    with pytest.raises(SystemExit) as exc:
+        with debugger:
+            raise SystemExit(2)
+
+    assert exc.value.code == 2
+    assert "Failed to shutdown the debugger" in caplog.text

@@ -11,7 +11,7 @@ from unittest.mock import MagicMock
 import pytest
 
 import ansibug.dap
-from ansibug.ansible_collections.ansibug.dap.plugins.strategy.debug import (
+from ansibug._playbook._debug_state import (
     AnsibleDebugState,
     AnsibleStackFrame,
     AnsibleThread,

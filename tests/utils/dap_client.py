@@ -83,8 +83,7 @@ def start_listen(
     ]
     proc = AnsibleProcess(proc_args, cwd=playbook_dir, env=get_test_env())
 
-    # The pid file is written once the listener socket is bound, it's created
-    # before its content is written so wait for the content.
+    # The pid file is written once the listener socket is bound.
     pid_path = get_pid_info_path(proc.pid)
     deadline = time.monotonic() + PROC_TIMEOUT
     while not (pid_path.exists() and pid_path.stat().st_size):
@@ -380,6 +379,7 @@ class DAPClient:
         launch_options: dict[str, t.Any] | None = None,
         do_not_launch: bool = False,
         expected_terminated: bool = False,
+        wait_for_initialized: bool = True,
         check_request: collections.abc.Callable[[dap.RunInTerminalRequest], None] | None = None,
     ) -> AnsibleProcess:
         launch_args: dict[str, t.Any] = (launch_options or {}) | {"playbook": str(playbook)}
@@ -430,7 +430,8 @@ class DAPClient:
             else:
                 self.wait_for_message(dap.LaunchResponse, timeout=connect_timeout)
 
-        self.wait_for_message(dap.InitializedEvent)
+        if wait_for_initialized:
+            self.wait_for_message(dap.InitializedEvent)
 
         return proc
 

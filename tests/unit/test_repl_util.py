@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from ansibug.ansible_collections.ansibug.dap.plugins.plugin_utils._repl_util import (
+from ansibug._playbook._repl_util import (
     RemoveVarCommand,
     SetVarCommand,
     parse_repl_args,

@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.5.0 - TBD
+
+### Features
+
++ Support debugging plays that use any strategy, like `free`, `host_pinned`, previously only the `linear` strategy was supported
++ Added `--connect-timeout` to `python -m ansibug connect`, the time in seconds to wait to connect to the debug adapter before failing, defaults to `5.0`
+
+### Changes
+
++ ansibug is now licensed under the GNU General Public License v3.0 or later instead of the MIT License, matching ansible-core which it imports
++ The `ssh` connection password prompt uses the `ansible` script from the same ansible-core install as `ansible-playbook` instead of the first one on `PATH`
++ The TLS key password is no longer set in the environment of `ansible-playbook` or the processes it starts
++ `ansible-playbook` connects to the debug adapter before it prompts for passwords, prompts like `--ask-vault-pass` no longer count towards `connectTimeout`
++ A playbook that fails to parse, or an invalid `ansible-playbook` argument, now ends the debug session after connecting instead of failing the launch request
++ `ansible-playbook` fails before running the playbook when the debugger cannot be set up, like failing to connect to the debug adapter, a missing TLS certificate, a listen address that cannot be bound, or a log file that cannot be opened, previously a warning was shown and the playbook ran without the debugger
++ Running multiple playbooks is one debug session, the client stays attached across the playbooks instead of being terminated after each one
+
+### Bugfixes
+
++ The `python -m ansibug listen` address is shown straight away when stdout is piped, previously it was buffered while the process waited for a client to attach
+
 ## 0.4.0 - 2026-11-18
 
 ### Features

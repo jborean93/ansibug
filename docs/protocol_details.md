@@ -21,7 +21,7 @@ It can be started manually by running `python -m ansibug dap` and communicating 
 The debuggee is the final actor in the DAP exchange.
 It is the program that is being debugged which in `ansibug's` case is the `ansible-playbook` process.
 It is in charge of doing things like validating breakpoints, emitting debug events, and handling the interaction of the debug requests with Ansible itself.
-The debuggee components are implemented as a custom `callback` and `strategy` plugin in Ansible that hooks into the various events in Ansible needed to debug a playbook.
+The debuggee components are hooks `ansibug` installs into the `ansible-playbook` process it starts, they wrap the Ansible internals that queue tasks and process their results.
 By default is uses a Unix Domain Socket (UDS) to communicate with the debug adapter but it can be configured to use a TCP socket if cross host debugging is desired.
 
 A more in depth overview of DAP can be found on their [Overview page](https://microsoft.github.io/debug-adapter-protocol/overview).
@@ -52,7 +52,7 @@ The `ansible-playbook` process that was launched or attached to is configured to
 Once the event was received the client will send through all the breakpoint information through a [SetBreakpoints Request](https://microsoft.github.io/debug-adapter-protocol/specification#Requests_SetBreakpoints) for each file.
 Once all breakpoints have been sent the client will send a [ConfigurationDone Request](https://microsoft.github.io/debug-adapter-protocol/specification#Requests_ConfigurationDone) to let the `ansible-playbook` know to start running as normal.
 
-As the strategy plugin loops through the tasks needed it will check if a breakpoint has been set for a task and stop if needed with a [Stopped Event](https://microsoft.github.io/debug-adapter-protocol/specification#Events_Stopped).
+As the strategy loops through the tasks needed it will check if a breakpoint has been set for a task and stop if needed with a [Stopped Event](https://microsoft.github.io/debug-adapter-protocol/specification#Events_Stopped).
 During this step, information like threads, stack frames, scopes, variables are all exchanged when requested by the client.
 This will continue until the `ansible-playbook` process has ended and it closes the socket between the debuggee and debug adapter.
 The debug adapter will then send a [Terminated Event](https://microsoft.github.io/debug-adapter-protocol/specification#Events_Terminated) to the client to indicate it is finished.

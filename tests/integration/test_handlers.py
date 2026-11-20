@@ -12,6 +12,7 @@ import ansibug.dap as dap
 
 
 def test_handler_in_play(
+    strategy: str,
     dap_client: DAPClient,
     tmp_path: pathlib.Path,
 ) -> None:
@@ -52,6 +53,7 @@ def test_handler_in_play(
 
 
 def test_handler_in_imported_role(
+    strategy: str,
     dap_client: DAPClient,
     tmp_path: pathlib.Path,
 ) -> None:
@@ -112,6 +114,7 @@ def test_handler_in_imported_role(
 
 @pytest.mark.parametrize("set_tasks", [True, False])
 def test_handler_in_included_role(
+    strategy: str,
     set_tasks: bool,
     dap_client: DAPClient,
     tmp_path: pathlib.Path,

@@ -65,6 +65,7 @@ Once a frame is restarted, the task will stop again before it re-runs so more ch
 <video src="./images/restart_failed_task.mp4" poster="./images/restart_failed_task.png" width="960" height="600" autoplay loop muted playsinline controls preload="metadata"></video>
 
 When a task is re-run, the display will show a new `TASK [name (restarted)]` header underneath the failed task output.
+The header is not shown for plays using the `free` or `host_pinned` strategy, the result of the re-run is shown straight after the failed task output.
 The result of the first run is still shown in the `ansible-playbook` output but is not counted in the play recap.
 A loop task re-runs every item, and any change the first run made on the host is not undone.
 
@@ -97,4 +98,4 @@ For example:
 <video src="./images/loop_stepping.mp4" poster="./images/loop_stepping.png" width="960" height="600" autoplay loop muted playsinline controls preload="metadata"></video>
 
 This is a limitation due to the ways are run in Ansible.
-The strategy plugin has no control over the loop iterations so it cannot pause during the iteration.
+The strategy has no control over the loop iterations so it cannot pause during the iteration.

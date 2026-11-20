@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import atexit
 import collections.abc
 import contextlib
 import dataclasses
@@ -25,7 +24,6 @@ import typing as t
 
 from . import dap
 from ._mp_queue import ClientMPQueue, MPProtocol, MPQueue, ServerMPQueue
-from ._singleton import Singleton
 from ._socket_helper import CancelledError, SocketCancellationToken
 
 # Only used when debugging ansibug itself so it isn't a dependency.
@@ -183,7 +181,7 @@ def get_pid_info_path(pid: int) -> pathlib.Path:
 
 
 class EndStrategy(Exception):
-    """Exception used to end the strategy plugin."""
+    """Exception used to end the strategy."""
 
 
 class DAProtocol(MPProtocol):
@@ -353,7 +351,9 @@ class AnsibleFunctionBreakpoint:
         return None
 
 
-class AnsibleDebugger(metaclass=Singleton):
+class AnsibleDebugger:
+    """The debuggee side of the debug session, shutdown when used as a context manager."""
+
     def __init__(self) -> None:
         self._cancel_token = SocketCancellationToken()
         self._configuration_done = threading.Event()
@@ -367,6 +367,14 @@ class AnsibleDebugger(metaclass=Singleton):
         self._strategy: DebugState | None = None
         self._terminated = False
         self._shutting_down = False
+        # The InitializedEvent asks the client for its breakpoints, see
+        # _initialize_when_ready() for when it is sent.
+        self._init_lock = threading.Lock()
+        self._playbook_loaded = False
+        self._config_received = False
+        self._initialized_sent = False
+        # Set in listen mode, the pid file is rewritten once the playbook is known.
+        self._proc_info: PlaybookProcessInfo | None = None
 
         # Ids are allocated from both the strategy and the recv thread.
         self._thread_counter = itertools.count(2)  # 1 is always the main thread
@@ -534,13 +542,16 @@ class AnsibleDebugger(metaclass=Singleton):
         mode: t.Literal["connect", "listen"],
         *,
         ssl_context: ssl.SSLContext | None = None,
-        playbook_file: str | None = None,
+        connect_timeout: float = 0,
     ) -> str:
         """Start the background server thread.
 
         Starts the background server thread which starts the debuggee socket
-        with the debug adapter server. This will also queue up the
-        InitializedEvent to be sent to the debug adapter on connection.
+        with the debug adapter server. The InitializedEvent is sent once the
+        debug adapter has connected and playbook_loaded() has been called.
+
+        In connect mode the connection is made before this returns so a
+        failure to connect is raised to the caller.
 
         Args:
             addr: The socket address to connect/bind.
@@ -548,17 +559,14 @@ class AnsibleDebugger(metaclass=Singleton):
                 while listen will bind to the addr and wait for a connection.
             ssl_context: Optional client SSLContext to wrap the socket
                 connection with.
-            playbook_file: The file of the playbook being run, this is optional
-                info used for storing metadata with the process pid on listen.
+            connect_timeout: The timeout, in seconds, to connect in connect
+                mode, 0 waits forever.
 
         returns:
             str: The socket address that is being used, this is only valid when
             using listen mode.
         """
         log.info("Setting up ansible-playbook debug %s socket at '%s'", mode, addr)
-
-        # The token is left cancelled by the shutdown of a previous playbook.
-        self._cancel_token = SocketCancellationToken()
 
         queue_kwargs: dict[str, t.Any] = {
             "address": addr,
@@ -571,43 +579,59 @@ class AnsibleDebugger(metaclass=Singleton):
         if mode == "connect":
             mp_queue = ClientMPQueue(**queue_kwargs)
             addr = mp_queue.address
+            mp_queue.start(timeout=connect_timeout)
+            self._adapter_connected = True
 
         else:
             mp_queue = ServerMPQueue(**queue_kwargs)
             addr = mp_queue.address
 
-            proc_info = PlaybookProcessInfo(
+            self._proc_info = PlaybookProcessInfo(
                 pid=os.getpid(),
                 address=addr,
                 use_tls=ssl_context is not None,
-                playbook_file=playbook_file,
+                playbook_file=None,
             )
-            proc_json = json.dumps(proc_info.to_json())
-            self._proc_pid_file.write_text(proc_json)
+            self._write_pid_file(self._proc_info)
 
         log.debug("MPQueue set on address %s", addr)
-
-        # Reset state left over from a previous playbook in the same process.
-        self._configuration_done.clear()
-        self._send_queue = queue.Queue()
-        self._terminated = False
-        atexit.unregister(self.shutdown)
-
-        with self._strategy_connected:
-            self._shutting_down = False
 
         self._send_thread = threading.Thread(
             target=self._send_task,
             args=(mp_queue,),
             name="ansibug-debugger",
-            # Daemon so a crash that skips v2_playbook_on_stats doesn't block
-            # interpreter exit; the atexit shutdown still flushes and closes it.
+            # Daemon so a stuck send thread can't block the interpreter exit.
             daemon=True,
         )
         self._send_thread.start()
-        atexit.register(self.shutdown)
 
         return addr
+
+    def playbook_loaded(
+        self,
+        playbook_file: str | None,
+    ) -> None:
+        """Called once each playbook has been loaded and its breakpoints registered.
+
+        Args:
+            playbook_file: The playbook path, stored in the pid file on listen.
+        """
+        if playbook_file and self._proc_info:
+            self._proc_info = dataclasses.replace(self._proc_info, playbook_file=playbook_file)
+            self._write_pid_file(self._proc_info)
+
+        self._initialize_when_ready(playbook_loaded=True)
+
+    def __enter__(self) -> AnsibleDebugger:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        try:
+            self.shutdown()
+        except Exception:
+            # Don't replace the exception or exit code from Ansible with a
+            # failure to clean up.
+            log.exception("Failed to shutdown the debugger")
 
     def shutdown(
         self,
@@ -652,7 +676,7 @@ class AnsibleDebugger(metaclass=Singleton):
         self._breakpoints = {}
         self._function_breakpoints = []
 
-        # Ensure the callback plugin isn't stuck waiting for this
+        # Ensure the strategy isn't stuck waiting for this
         self._configuration_done.set()
 
         # Ensure the strategy isn't waiting for a response to anything
@@ -1098,24 +1122,7 @@ class AnsibleDebugger(metaclass=Singleton):
 
         self._debug_config = DebugConfiguration.from_json(t.cast(dict[str, t.Any], msg.data))
 
-        # Wait until the debug adapter has sent this message before sending the
-        # InitializedEvent to the client.
-        self.queue_msg(dap.InitializedEvent())
-
-    def _convert_to_ansible_path(
-        self,
-        path: str,
-    ) -> str:
-        """Converts the client path to the path known to Ansible.
-
-        This is the reverse of convert_to_client_path, the breakpoint and
-        source info are keyed by the paths Ansible uses.
-        """
-        for mapping in self._debug_config.path_mappings:
-            if (remote_path := _replace_root(path, mapping.local_root, mapping.remote_root)) is not None:
-                return remote_path
-
-        return path
+        self._initialize_when_ready(config_received=True)
 
     def _calculate_breakpoint(
         self,
@@ -1154,6 +1161,21 @@ class AnsibleDebugger(metaclass=Singleton):
             end_line=end_line,
         )
 
+    def _convert_to_ansible_path(
+        self,
+        path: str,
+    ) -> str:
+        """Converts the client path to the path known to Ansible.
+
+        This is the reverse of convert_to_client_path, the breakpoint and
+        source info are keyed by the paths Ansible uses.
+        """
+        for mapping in self._debug_config.path_mappings:
+            if (remote_path := _replace_root(path, mapping.local_root, mapping.remote_root)) is not None:
+                return remote_path
+
+        return path
+
     def _disconnect(
         self,
         msg: dap.DisconnectRequest,
@@ -1162,8 +1184,8 @@ class AnsibleDebugger(metaclass=Singleton):
         self._breakpoints = {}
         self._function_breakpoints = []
 
-        # Don't wait for a strategy, none can start while the callback is
-        # blocked waiting for configuration done.
+        # Don't wait for a strategy, none can start while the first strategy
+        # run is blocked waiting for configuration done.
         with self._strategy_connected:
             strategy = self._strategy
 
@@ -1171,6 +1193,30 @@ class AnsibleDebugger(metaclass=Singleton):
             strategy.disconnect(msg)
         else:
             self._configuration_done.set()
+
+    def _initialize_when_ready(
+        self,
+        *,
+        config_received: bool = False,
+        playbook_loaded: bool = False,
+    ) -> None:
+        """Sends the InitializedEvent once both conditions are met.
+
+        The debug config from the adapter (recv thread) and the playbook load
+        (main thread) can happen in either order, whichever is last sends it.
+        The breakpoints the client sends in reply need the config's path
+        mappings and the loaded playbook to be validated. It is only sent
+        once, later playbooks loading don't send it again.
+        """
+        with self._init_lock:
+            self._config_received |= config_received
+            self._playbook_loaded |= playbook_loaded
+            send = self._config_received and self._playbook_loaded and not self._initialized_sent
+            if send:
+                self._initialized_sent = True
+
+        if send:
+            self.queue_msg(dap.InitializedEvent())
 
     def _send_task(
         self,
@@ -1187,9 +1233,10 @@ class AnsibleDebugger(metaclass=Singleton):
         """
         log.debug("Debuggee server send thread started")
         try:
-            mp_queue.start()
-            log.debug("Debuggee socket is connected and ready for use.")
-            self._adapter_connected = True
+            if not self._adapter_connected:
+                mp_queue.start()
+                log.debug("Debuggee socket is connected and ready for use.")
+                self._adapter_connected = True
 
             while msg := self._send_queue.get():
                 log.info("Sending to debug adapter %r", msg)
@@ -1209,3 +1256,10 @@ class AnsibleDebugger(metaclass=Singleton):
             self._configuration_done.set()
 
         log.debug("Debuggee server send thread ended")
+
+    def _write_pid_file(self, proc_info: PlaybookProcessInfo) -> None:
+        # Replaced atomically as the client picker may read it at any time, the
+        # dot prefix keeps the temp file out of its ansibug-pid-* glob.
+        tmp_file = self._proc_pid_file.with_name(f".{self._proc_pid_file.name}.tmp")
+        tmp_file.write_text(json.dumps(proc_info.to_json()))
+        os.replace(tmp_file, self._proc_pid_file)

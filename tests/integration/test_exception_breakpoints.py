@@ -13,6 +13,7 @@ import ansibug.dap as dap
 
 
 def test_break_on_error(
+    strategy: str,
     dap_client: DAPClient,
     tmp_path: pathlib.Path,
 ) -> None:
@@ -195,6 +196,7 @@ def test_do_not_break_on_error_unset(
 
 
 def test_break_on_unreachable(
+    strategy: str,
     dap_client: DAPClient,
     tmp_path: pathlib.Path,
 ) -> None:
@@ -381,6 +383,7 @@ def test_do_not_break_on_unreachable_unset(
 
 
 def test_break_on_skipped(
+    strategy: str,
     dap_client: DAPClient,
     tmp_path: pathlib.Path,
 ) -> None:
@@ -523,6 +526,7 @@ def test_step_over_after_exception_stop(
 
 
 def test_break_on_error_in_rescue_section(
+    strategy: str,
     dap_client: DAPClient,
     tmp_path: pathlib.Path,
 ) -> None:
@@ -701,6 +705,7 @@ def test_exception_info(
 
 
 def test_restart_frame_on_error(
+    strategy: str,
     dap_client: DAPClient,
     tmp_path: pathlib.Path,
 ) -> None:
@@ -761,10 +766,12 @@ def test_restart_frame_on_error(
     stdout = dap_client.continue_to_end(proc, tid)[0]
     assert "ok=2" in stdout
     assert "failed=0" in stdout
-    assert stdout.count("TASK [ping test (restarted)]") == 2
+    # The default callback shows no header for a re-run with the other strategies.
+    assert stdout.count("TASK [ping test (restarted)]") == (2 if strategy == "linear" else 0)
 
 
 def test_restart_frame_on_skipped(
+    strategy: str,
     dap_client: DAPClient,
     tmp_path: pathlib.Path,
 ) -> None:
@@ -824,6 +831,7 @@ def test_restart_frame_not_on_exception(
 
 
 def test_restart_frame_on_unreachable(
+    strategy: str,
     dap_client: DAPClient,
     tmp_path: pathlib.Path,
 ) -> None:
@@ -893,4 +901,94 @@ def test_restart_frame_on_unreachable(
     stdout = dap_client.continue_to_end(proc, tid)[0]
     assert "ok=2" in stdout
     assert "unreachable=0" in stdout
-    assert "TASK [ping test (restarted)]" in stdout
+    assert ("TASK [ping test (restarted)]" in stdout) == (strategy == "linear")
+
+
+def _fix_and_restart(dap_client: DAPClient, tid: int) -> None:
+    """Sets the ping data option of the stopped failed frame to a passing value and re-runs it."""
+    st_resp = dap_client.send(dap.StackTraceRequest(thread_id=tid), dap.StackTraceResponse)
+    frame_id = st_resp.stack_frames[0].id
+    scope_resp = dap_client.send(dap.ScopesRequest(frame_id=frame_id), dap.ScopesResponse)
+    dap_client.send(
+        dap.SetVariableRequest(
+            variables_reference=scope_resp.scopes[1].variables_reference,
+            name="data",
+            value="'fixed'",
+        ),
+        dap.SetVariableResponse,
+    )
+    dap_client.send(dap.RestartFrameRequest(frame_id=frame_id), dap.RestartFrameResponse)
+    assert dap_client.wait_for_message(dap.StoppedEvent).reason == dap.StoppedReason.RESTART
+
+
+def test_restart_frame_on_handler_error(
+    dap_client: DAPClient,
+    tmp_path: pathlib.Path,
+) -> None:
+    playbook = tmp_path / "main.yml"
+    playbook.write_text(
+        r"""
+- hosts: localhost
+  gather_facts: false
+  handlers:
+  - name: my handler
+    ping:
+      data: crash
+  tasks:
+  - ping:
+    changed_when: true
+    notify: my handler
+"""
+    )
+
+    proc = dap_client.launch(playbook, playbook_dir=tmp_path)
+    dap_client.send(dap.SetExceptionBreakpointsRequest(filters=["on_error"]), dap.SetExceptionBreakpointsResponse)
+    tid = dap_client.configuration_done()
+
+    assert dap_client.wait_for_message(dap.StoppedEvent).reason == dap.StoppedReason.EXCEPTION
+    _fix_and_restart(dap_client, tid)
+
+    stdout = dap_client.continue_to_end(proc, tid)[0]
+    assert "failed=0" in stdout
+    assert "RUNNING HANDLER [my handler (restarted)]" in stdout
+
+
+def test_restart_frame_on_run_once_error(
+    dap_client: DAPClient,
+    tmp_path: pathlib.Path,
+) -> None:
+    playbook = tmp_path / "main.yml"
+    playbook.write_text(
+        r"""
+- hosts: all
+  gather_facts: false
+  tasks:
+  - name: ping test
+    ping:
+      data: crash
+    run_once: true
+
+  - name: after
+    ping:
+"""
+    )
+    write_inventory(tmp_path, 2)
+
+    proc = dap_client.launch("main.yml", playbook_dir=tmp_path, playbook_args=["-i", "inventory.ini"])
+    dap_client.send(dap.SetExceptionBreakpointsRequest(filters=["on_error"]), dap.SetExceptionBreakpointsResponse)
+    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
+
+    # The host threads start in any order around the stop.
+    while not isinstance(event := dap_client.wait_for_message(dap.Event), dap.StoppedEvent):
+        assert isinstance(event, dap.ThreadEvent)
+    assert event.reason == dap.StoppedReason.EXCEPTION
+    assert event.thread_id is not None
+    _fix_and_restart(dap_client, event.thread_id)
+    dap_client.send(dap.ContinueRequest(thread_id=event.thread_id), dap.ContinueResponse)
+
+    while not isinstance(event := dap_client.wait_for_message(dap.Event), dap.TerminatedEvent):
+        assert isinstance(event, dap.ThreadEvent)
+    stdout = proc.wait_rc(0)[0]
+    # The run_once failure marked every host failed, the re-run must undo it for all of them.
+    assert "failed=0" in stdout
+    assert stdout.count("ok: [host") >= 3

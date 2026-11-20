@@ -3,12 +3,23 @@
 
 from __future__ import annotations
 
+import collections.abc
 import pathlib
+import socket
 import sys
+import tempfile
 
+import pytest
 from dap_client import AnsibleProcess, DAPClient, get_test_env
 
 import ansibug.dap as dap
+
+
+@pytest.fixture
+def sock_dir() -> collections.abc.Iterator[pathlib.Path]:
+    # tmp_path on macOS exceeds the 104 byte AF_UNIX path limit.
+    with tempfile.TemporaryDirectory() as d:
+        yield pathlib.Path(d)
 
 
 def test_unknown_message(
@@ -48,8 +59,9 @@ def test_unknown_message_on_debuggee(
     dap_client.wait_for_end(proc)
 
 
-def test_connect_failure_does_not_hang(
+def test_connect_failure(
     tmp_path: pathlib.Path,
+    sock_dir: pathlib.Path,
     ping_playbook: pathlib.Path,
 ) -> None:
     proc = AnsibleProcess(
@@ -59,16 +71,84 @@ def test_connect_failure_does_not_hang(
             "ansibug",
             "connect",
             "--addr",
-            f"uds://{tmp_path / 'missing.sock'}",
+            f"uds://{sock_dir / 'missing.sock'}",
             str(ping_playbook),
         ],
         cwd=tmp_path,
         env=get_test_env(),
     )
     try:
-        _, stderr = proc.communicate()
+        stdout, stderr = proc.communicate()
     finally:
         proc.stop()
 
-    assert proc.returncode == 0, proc.format_output()
-    assert b"Ansibug debug adapter is not connected" in stderr
+    # The connection is made before the playbook runs.
+    assert proc.returncode == 1, proc.format_output()
+    assert b"ansibug: failed to start the debugger: FileNotFoundError:" in stderr
+    assert b"PLAY" not in stdout
+
+
+def test_connect_timeout(
+    tmp_path: pathlib.Path,
+    sock_dir: pathlib.Path,
+    ping_playbook: pathlib.Path,
+) -> None:
+    # The listener never accepts so the connect handshake never completes.
+    sock_path = sock_dir / "unresponsive.sock"
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+        listener.bind(str(sock_path))
+        listener.listen()
+
+        proc = AnsibleProcess(
+            [
+                sys.executable,
+                "-m",
+                "ansibug",
+                "connect",
+                "--addr",
+                f"uds://{sock_path}",
+                "--connect-timeout",
+                "0.5",
+                str(ping_playbook),
+            ],
+            cwd=tmp_path,
+            env=get_test_env(),
+        )
+        try:
+            stdout, stderr = proc.communicate()
+        finally:
+            proc.stop()
+
+    assert proc.returncode == 1, proc.format_output()
+    assert b"ansibug: failed to start the debugger: TimeoutError:" in stderr
+    assert b"PLAY" not in stdout
+
+
+def test_debugger_setup_failure(
+    tmp_path: pathlib.Path,
+    ping_playbook: pathlib.Path,
+) -> None:
+    # Errors setting up the debugger fail before the playbook runs.
+    proc = AnsibleProcess(
+        [
+            sys.executable,
+            "-m",
+            "ansibug",
+            "listen",
+            "--no-wait",
+            "--log-file",
+            str(tmp_path / "missing" / "debuggee.log"),
+            str(ping_playbook),
+        ],
+        cwd=tmp_path,
+        env=get_test_env(),
+    )
+    try:
+        stdout, stderr = proc.communicate()
+    finally:
+        proc.stop()
+
+    assert proc.returncode == 1, proc.format_output()
+    assert b"ansibug: failed to start the debugger: FileNotFoundError:" in stderr
+    assert b"Traceback" not in stderr
+    assert b"PLAY" not in stdout

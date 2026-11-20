@@ -3,7 +3,7 @@
 [![Test workflow](https://github.com/jborean93/ansibug/actions/workflows/ci.yml/badge.svg)](https://github.com/jborean93/ansibug/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/jborean93/ansibug/graph/badge.svg?token=JHxSi6T0JJ)](https://codecov.io/gh/jborean93/ansibug)
 [![PyPI version](https://badge.fury.io/py/ansibug.svg)](https://badge.fury.io/py/ansibug)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/jborean93/ansibug/blob/main/LICENSE)
+[![License](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](https://github.com/jborean93/ansibug/blob/main/COPYING)
 
 The core component of the Ansible Debug Adapter Protocol used for debugging Ansible playbooks.
 See more documentation for `ansibug` at https://jborean93.github.io/ansibug/.
@@ -82,3 +82,8 @@ uv run tox run -f py312
 # Run Ansible 2.16 tests on Python 3.12
 uv run tox run -f py312 ansible_2.16
 ```
+
+## License
+
+ansibug is licensed under the GNU General Public License v3.0 or later, see [COPYING](COPYING).
+Versions before 0.5.0 were released under the MIT License, contributions made under it are also covered by the notice in [LICENSE-MIT](LICENSE-MIT).

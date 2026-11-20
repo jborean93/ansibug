@@ -12,7 +12,7 @@ import pathlib
 import sys
 
 from ._debug_adapter import start_dap
-from ._exec_playbook import exec_playbook_connect, exec_playbook_listen
+from ._run_playbook import run_playbook_connect, run_playbook_listen
 
 try:
     import argcomplete
@@ -134,6 +134,13 @@ def parse_args(
         required=True,
         help="Have the ansible-playbook process connect to this socket addr that is bound to the DAP server.",
     )
+    connect.add_argument(
+        "--connect-timeout",
+        action="store",
+        type=float,
+        default=5.0,
+        help="The timeout, in seconds, to wait to connect to the DAP server before failing, defaults to 5.0.",
+    )
     _add_log_args(connect)
     _add_launch_common_args(connect)
 
@@ -216,16 +223,21 @@ def main() -> None:
         return
 
     if args.action == "connect":
-        exec_playbook_connect(
+        run_playbook_connect(
             args.playbook_args,
             addr=args.addr,
             no_wait=args.no_wait,
+            connect_timeout=args.connect_timeout,
             log_file=args.log_file,
             log_level=args.log_level,
         )
 
     else:
-        exec_playbook_listen(
+        # Ansible runs in this process, don't expose the password to the
+        # processes it starts, like a task's module.
+        os.environ.pop("ANSIBUG_TLS_KEY_PASS", None)
+
+        run_playbook_listen(
             args.playbook_args,
             addr=args.addr,
             no_wait=args.no_wait,
