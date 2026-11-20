@@ -71,25 +71,10 @@ A loop task re-runs every item, and any change the first run made on the host is
 
 ## Static Imports
 
-As `import_*` tasks are resolved statically before being seen by the debuggee they are not treated like `include_*` tasks.
-Stepping out of a task added by `import_tasks` will not step out to the task after the `import_tasks`.
-For example
-
-```yaml
-# main.yml
-- name: task 1
-  import_tasks:
-    file: tasks.yml
-
-- name: task 2
-  ping:
-
-# tasks.yml
-- name: task 3  # Currently stopped here
-  ping:
-```
-
-Stepping out of `task 3` will step out of the whole play because the `import_tasks` is not part of the known stack to the debugger.
+`import_tasks` and `import_role` tasks are not typical tasks that run when the play iterator reaches them, they are resolved when the playbook itself is loaded.
+To support using these as a breakpoint, the debugger treats them as a psuedo task just before the first task they imported runs.
+It is important to note that the import has already occurred, the breakpoint just allows you to stop at that location and choose to step in or over that task like `include_*` tasks.
+Stepping in will stop on the first task of the import, step over will stop after all the imported tasks are complete, and stepping out of an imported task will stop on the task after the `import_*`.
 
 ## Loops
 Task loops with `loop`, `with_*`, or `until` are treated as a single task, the breakpoint will fire before the task is run and will not hit during the loop iterations.

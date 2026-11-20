@@ -46,18 +46,10 @@ The following playbook/tasks entries cannot have a breakpoint set on them.
   - role2
 ```
 
-+ `import_*` tasks
++ `import_playbook` entries
 
 ```yaml
 - import_playbook: play.yml
-
-- hosts: localhost
-  tasks:
-  - import_role:
-      name: role1
-
-  - import_tasks:
-      file: tasks.yml
 ```
 
 + The `block`, `rescue`, and `always` lines in a block
