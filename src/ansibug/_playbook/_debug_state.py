@@ -77,6 +77,11 @@ display = Display()
 log = logging.getLogger(__name__)
 
 
+_IMPORT_OPTIONS_READ_ONLY = (
+    "The module options of an import_* task cannot be changed, the import was processed when the playbook was loaded"
+)
+
+
 class OmitMarker:
     """A value to set that was templated to omit, it is removed instead of set."""
 
@@ -246,19 +251,15 @@ class AnsibleThread:
 
         if state == ThreadState.STEP_OUT and self._stopped_task:
             # If a thread has been set to step out we want to make comparisons
-            # later on easier by setting the stopped task to the parent include
-            # task.
-            task = self._stopped_task
-            while task := task._parent:
-                if isinstance(task, Task) and task.action in C._ACTION_ALL_INCLUDES:
-                    break
-
-            self._stopped_task = task
+            # later on easier by setting the stopped task to the parent
+            # include or import task.
+            self._stopped_task = self._get_parent_task(self._stopped_task)
 
         elif (
             state == ThreadState.STEP_IN
             and self._stopped_task
             and self._stopped_task.action not in C._ACTION_ALL_INCLUDES
+            and not getattr(self._stopped_task, "statically_loaded", False)
         ):
             # If changing to STEP_IN but the stopped task was not an include,
             # treat it like STEP_OVER.
@@ -504,6 +505,7 @@ class AnsibleVariable:
         self,
         id: int,
         stackframe: AnsibleStackFrame,
+        read_only: str | None = None,
     ) -> None:
         self.id = id
         self.stackframe = stackframe
@@ -513,6 +515,9 @@ class AnsibleVariable:
         # The expression that evaluates to this variable, None if there is
         # none. An empty string is the task vars where a child is its name.
         self.evaluate_name: str | None = None
+        # The error to return when trying to change the variable, None if it
+        # can be changed. Children inherit it.
+        self.read_only = read_only
 
     def child_evaluate_name(
         self,
@@ -559,8 +564,9 @@ class AnsibleListVariable(AnsibleVariable):
         id: int,
         stackframe: AnsibleStackFrame,
         value: collections.abc.Sequence[t.Any],
+        read_only: str | None = None,
     ) -> None:
-        super().__init__(id, stackframe)
+        super().__init__(id, stackframe, read_only)
         self._ds = value
 
     @property
@@ -593,8 +599,9 @@ class AnsibleDictVariable(AnsibleVariable):
         id: int,
         stackframe: AnsibleStackFrame,
         value: collections.abc.Mapping[t.Any, t.Any],
+        read_only: str | None = None,
     ) -> None:
-        super().__init__(id, stackframe)
+        super().__init__(id, stackframe, read_only)
         self._ds = value
 
     @property
@@ -630,8 +637,9 @@ class AnsibleDictWithRawStoreVariable(AnsibleDictVariable):
         stackframe: AnsibleStackFrame,
         value: collections.abc.Mapping[t.Any, t.Any],
         raw: dict[t.Any, t.Any],
+        read_only: str | None = None,
     ) -> None:
-        super().__init__(id, stackframe, value)
+        super().__init__(id, stackframe, value, read_only)
         self._raw_ds = raw
 
     def remove(self, index: str) -> None:
@@ -657,8 +665,9 @@ class AnsibleHostVarsVariable(AnsibleDictVariable):
         stackframe: AnsibleStackFrame,
         host: str,
         variable_manager: VariableManager,
+        read_only: str | None = None,
     ) -> None:
-        AnsibleVariable.__init__(self, id, stackframe)
+        AnsibleVariable.__init__(self, id, stackframe, read_only)
         self._host = host
         self._variable_manager = variable_manager
         # Set when _ds is built, the names that come from the inventory.
@@ -764,11 +773,12 @@ class AnsibleDebugState(DebugState):
         thread = self._host_threads.get(host) or self._add_thread(host)
 
         # Remove the frames of any includes that have ended, the top frame
-        # should be the task's parent include.
-        parent_task = next(_get_parent_tasks(task), None)
+        # should be the closest parent include that ran.
+        parents = list(_get_parent_tasks(task))
+        parent_uuids = {p._uuid for p in parents}
         while thread.stack_frames:
             last_frame = self.stackframes[thread.stack_frames[0]]
-            if parent_task and last_frame.task._uuid == parent_task._uuid:
+            if last_frame.task._uuid in parent_uuids:
                 # If this is a task in a role included by include_role we
                 # need to scan the tasks and handlers to validate the
                 # breakpoints.
@@ -782,6 +792,22 @@ class AnsibleDebugState(DebugState):
 
             self._pop_stackframe(thread)
 
+        # import_* tasks never run so their frames are added with the first
+        # task they imported, outermost first.
+        on_stack = {self.stackframes[sfid].task._uuid for sfid in thread.stack_frames}
+        for parent in reversed(parents):
+            if getattr(parent, "statically_loaded", False) and parent._uuid not in on_stack:
+                self._push_task(thread, parent, task_vars)
+
+        return self._push_task(thread, task, task_vars).task
+
+    def _push_task(
+        self,
+        thread: AnsibleThread,
+        task: Task,
+        task_vars: dict[str, t.Any],
+    ) -> AnsibleStackFrame:
+        """Adds the task frame and waits on the client if it should stop."""
         sfid = self._debugger.next_stackframe_id()
 
         sf = self.stackframes[sfid] = AnsibleStackFrame(
@@ -796,7 +822,7 @@ class AnsibleDebugState(DebugState):
         # a path. We can't set breakpoints on these tasks so skip the check.
         task_path = task.get_path()
         if not task_path:
-            return task
+            return sf
 
         path_and_line = task_path.rsplit(":", 1)
         path = path_and_line[0]
@@ -821,7 +847,7 @@ class AnsibleDebugState(DebugState):
                 if thread.state == ThreadState.END:
                     raise EndStrategy()
 
-        return sf.task
+        return sf
 
     def end_task(
         self,
@@ -923,7 +949,8 @@ class AnsibleDebugState(DebugState):
                 task_args,
                 # Any changes to our templated var also needs to reflect back onto
                 # the raw datastore so use a custom variable class.
-                var_factory=lambda i: AnsibleDictWithRawStoreVariable(i, sf, task_args, sf.task.args),
+                var_factory=lambda i, r: AnsibleDictWithRawStoreVariable(i, sf, task_args, sf.task.args, r),
+                read_only=_IMPORT_OPTIONS_READ_ONLY if getattr(sf.task, "statically_loaded", False) else None,
             ).id
             task_vars = self._add_variable(sf, sf.task_vars)
             task_vars.evaluate_name = ""
@@ -931,8 +958,8 @@ class AnsibleDebugState(DebugState):
             sf.variables_hostvars_id = self._add_variable(
                 sf,
                 {},
-                var_factory=lambda i: AnsibleHostVarsVariable(
-                    i, sf, sf.task_vars["inventory_hostname"], self._variable_mamanger
+                var_factory=lambda i, r: AnsibleHostVarsVariable(
+                    i, sf, sf.task_vars["inventory_hostname"], self._variable_mamanger, r
                 ),
             ).id
             global_vars = self._add_variable(sf, sf.task_vars["vars"])
@@ -1215,8 +1242,11 @@ class AnsibleDebugState(DebugState):
 
             elif isinstance(repl_command, RemoveVarCommand):
                 ansible_var = self.variables[sf.variables_options_id]
-                ansible_var.remove(repl_command.name)
-                changed_variables = True
+                if ansible_var.read_only:
+                    value = ansible_var.read_only
+                else:
+                    ansible_var.remove(repl_command.name)
+                    changed_variables = True
 
             elif isinstance(repl_command, SetVarCommand):
                 new_value = self._template_new_value(repl_command.expression, sf.task_vars)
@@ -1232,6 +1262,9 @@ class AnsibleDebugState(DebugState):
 
                 if omitted and repl_command.command == "set_hostvar":
                     value = "omit can only remove a module option, it cannot remove a host variable"
+                    var_ids = []
+                elif read_only := next((r for vid in var_ids if (r := self.variables[vid].read_only)), None):
+                    value = read_only
                     var_ids = []
 
                 for vid in var_ids:
@@ -1351,10 +1384,14 @@ class AnsibleDebugState(DebugState):
             if child_var:
                 pass
             elif _is_container(value):
-                child_var = variable.children[name] = self._add_variable(variable.stackframe, value)
+                child_var = variable.children[name] = self._add_variable(
+                    variable.stackframe, value, read_only=variable.read_only
+                )
                 child_var.evaluate_name = evaluate_name
             elif dataclasses.is_dataclass(value) and not isinstance(value, type):
-                child_var = variable.children[name] = self._add_variable(variable.stackframe, dataclasses.asdict(value))
+                child_var = variable.children[name] = self._add_variable(
+                    variable.stackframe, dataclasses.asdict(value), read_only=variable.read_only
+                )
                 child_var.evaluate_name = evaluate_name
 
             value_repr: str
@@ -1388,6 +1425,12 @@ class AnsibleDebugState(DebugState):
         request: ansibug.dap.SetVariableRequest,
     ) -> ansibug.dap.SetVariableResponse | ansibug.dap.ErrorResponse:
         variable = self.variables[request.variables_reference]
+        if variable.read_only:
+            return ansibug.dap.ErrorResponse(
+                command=ansibug.dap.Command.SET_VARIABLE,
+                request_seq=request.seq,
+                message=variable.read_only,
+            )
 
         new_value = self._template_new_value(request.value, variable.stackframe.task_vars)
         if isinstance(new_value, OmitMarker):
@@ -1514,18 +1557,19 @@ class AnsibleDebugState(DebugState):
         self,
         stackframe: AnsibleStackFrame,
         value: collections.abc.Mapping[t.Any, t.Any] | collections.abc.Sequence[t.Any],
-        var_factory: t.Callable[[int], AnsibleVariable] | None = None,
+        var_factory: t.Callable[[int, str | None], AnsibleVariable] | None = None,
+        read_only: str | None = None,
     ) -> AnsibleVariable:
         var_id = self._debugger.next_variable_id()
 
         if var_factory:
-            var = var_factory(var_id)
+            var = var_factory(var_id, read_only)
 
         elif isinstance(value, collections.abc.Mapping):
-            var = AnsibleDictVariable(var_id, stackframe, value)
+            var = AnsibleDictVariable(var_id, stackframe, value, read_only)
 
         else:
-            var = AnsibleListVariable(var_id, stackframe, value)
+            var = AnsibleListVariable(var_id, stackframe, value, read_only)
 
         self.variables[var_id] = var
         stackframe.variables.append(var_id)

@@ -136,6 +136,12 @@ def register_block_breakpoints(
     """
     # Need to register these blocks as valid breakpoints and update the client bps
     for block in blocks:
+        # The import_* task is the parent of the blocks it imported.
+        parent = block._parent
+        if isinstance(parent, Task) and getattr(parent, "statically_loaded", False) and parent.get_path():
+            import_path, import_line = _split_task_path(parent.get_path())
+            debugger.register_path_breakpoint(import_path, import_line, 1)
+
         block_path_and_line = block.get_path()
         if block_path_and_line:
             # If the path is set this is an explicit block and should be

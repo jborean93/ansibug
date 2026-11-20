@@ -6,6 +6,7 @@
 
 + Support debugging plays that use any strategy, like `free`, `host_pinned`, previously only the `linear` strategy was supported
 + Added `--connect-timeout` to `python -m ansibug connect`, the time in seconds to wait to connect to the debug adapter before failing, defaults to `5.0`
++ Support breakpoints, stack frames, and stepping on `import_tasks` and `import_role` tasks
 
 ### Changes
 
