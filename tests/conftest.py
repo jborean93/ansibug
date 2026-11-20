@@ -9,6 +9,7 @@ import pathlib
 import secrets
 import string
 import sys
+import typing as t
 
 import pytest
 from cryptography import x509
@@ -29,6 +30,17 @@ def dap_client(
         client.initialize()
 
         yield client
+
+
+@pytest.fixture(params=["linear", "free", "host_pinned"])
+def strategy(
+    request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+) -> str:
+    """Runs the test with each builtin strategy, used by the tests of what a strategy can affect."""
+    # The Ansible process is started with the env of the test process.
+    monkeypatch.setenv("ANSIBLE_STRATEGY", request.param)
+    return t.cast(str, request.param)
 
 
 @pytest.fixture(scope="session")

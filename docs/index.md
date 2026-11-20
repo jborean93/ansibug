@@ -84,8 +84,7 @@ Using `ansibug` with a playbook can expose the following features:
 |[Variables and Watching](./variables.md)|Can get and set variables|
 |[Debug Evaluation](./repl.md)|A repl console that can perform actions like templating|
 
-The debug adapter works by using a custom strategy plugin to handle each task processing.
-As this inherits the `linear` plugin it is not possible to use `ansibug` with a custom strategy.
+The debugger hooks into the task processing of whatever strategy the play uses, including custom ones.
 
 # Debug Configurations
 There are 2 debug configurations supported by this adapter:

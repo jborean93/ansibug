@@ -3,21 +3,12 @@
 
 from __future__ import annotations
 
-DOCUMENTATION = """
-name: debug
-short_description: Executes tasks with a Debug Adapter Protocol debugger
-description:
-- Acts like the linear strategy plugin but adds functionality for interacting
-  with a Debug Adapter Protocol (DAP) debugger, like one used by
-  Visual Studio Code.
-author: Jordan Borean (@jborean93)
-"""
+"""The debugger state the strategy hooks drive."""
 
 import collections.abc
 import dataclasses
 import enum
 import functools
-import inspect
 import itertools
 import logging
 import os
@@ -28,17 +19,11 @@ import typing as t
 
 from ansible import constants as C
 from ansible.errors import AnsibleError, AnsibleUndefinedVariable
-from ansible.executor.play_iterator import PlayIterator
-from ansible.executor.task_queue_manager import TaskQueueManager
-from ansible.executor.task_result import TaskResult
 from ansible.inventory.host import Host
 from ansible.parsing.dataloader import DataLoader
 from ansible.playbook.block import Block
 from ansible.playbook.conditional import Conditional
-from ansible.playbook.handler import Handler
-from ansible.playbook.play_context import PlayContext
 from ansible.playbook.task import Task
-from ansible.plugins.strategy.linear import StrategyModule as LinearStrategy
 from ansible.template import Templar
 from ansible.utils.display import Display
 from ansible.vars.hostvars import HostVars
@@ -53,15 +38,6 @@ _OMIT_ERRORS: tuple[type[Exception], ...] = ()
 try:
     from ansible.errors import AnsibleBrokenConditionalError, AnsibleValueOmittedError
     from ansible.template import trust_as_template
-
-    # This import was moved in 2.20
-    try:
-        from ansible._internal._display_utils import (
-            DeferredWarningContext as _DeferredWarningContext,
-        )
-    except ImportError:
-        # Used for Ansible 2.19
-        from ansible.utils.display import _DeferredWarningContext
 
     POST_DATATAGGING = True
     _OMIT_ERRORS = (AnsibleValueOmittedError,)
@@ -80,25 +56,25 @@ from ansibug._debuggee import (
     ExceptionBreakpointType,
 )
 
-from ..plugin_utils._breakpoints import (
+from ._breakpoints import (
     get_on_failed_details,
     get_on_skipped_details,
     get_on_unreachable_details,
     get_result_error,
     register_block_breakpoints,
 )
-from ..plugin_utils._repl_util import (
+from ._repl_util import (
     REPL_COMMANDS,
     RemoveVarCommand,
     SetVarCommand,
     TemplateCommand,
     parse_repl_args,
 )
-from ..plugin_utils._task_result import AnsibugTaskResult
-from ..plugin_utils._variables import get_canonicalized_variable_type
+from ._task_result import AnsibugTaskResult
+from ._variables import get_canonicalized_variable_type
 
 display = Display()
-log = logging.getLogger("ansibug.strategy")
+log = logging.getLogger(__name__)
 
 
 class OmitMarker:
@@ -730,12 +706,12 @@ class AnsibleHostVarsVariable(AnsibleDictVariable):
 class AnsibleDebugState(DebugState):
     """Ansible Debug State.
 
-    A class used to handle the debug state with a strategy plugin. It exposes
+    A class used to handle the debug state of a strategy. It exposes
     the methods needed for interaction with the ansibug debugger.
 
     Args:
         debugger: The debugger instance connected to the debug adapter.
-        loader: The data loader used by the strategy plugin.
+        loader: The data loader used by the strategy.
         variable_manager: The variable manager for the strategy.
 
     Attributes:
@@ -906,7 +882,7 @@ class AnsibleDebugState(DebugState):
         """Exits all active threads.
 
         Exits all active threads and passes along the exit event to the debug
-        adapter. This is used by the strategy plugin when the inventory has
+        adapter. This is used by the strategy when the inventory has
         been refreshed or the strategy is complete.
         """
         for tid in list(self.threads.keys()):
@@ -1617,215 +1593,3 @@ class AnsibleDebugState(DebugState):
             templar = templar.copy_with_new_env(environment_class=AnsibleNativeEnvironment)  # pyright: ignore[reportPossiblyUnboundVariable]
 
         return templar.template(expression)
-
-
-class StrategyModule(LinearStrategy):
-    def __init__(
-        self,
-        tqm: TaskQueueManager,
-    ) -> None:
-        super().__init__(tqm)
-
-        # Used for type annotation checks, technically defined in __init__ as well
-        self._tqm = tqm
-
-        # Set in run()
-        self._debug_state: AnsibleDebugState
-        # The _queue_task task_vars and play_context by (host name, task uuid).
-        self._queued_args: dict[tuple[str, str], tuple[dict[str, t.Any], PlayContext]] = {}
-
-        # Ansible 2.19 has deprecated custom strategy plugins with no end date.
-        # While we should migrate to a supported API, once implemented, we will
-        # capture any deprecation warnings to avoid confusing the user. 2.19
-        # also introduces Data Tagging so we will use that to silence any
-        # warnings. The run() method will unset the deferred warning context.
-        self._warning_ctx = None
-        if POST_DATATAGGING:
-            self._warning_ctx = _DeferredWarningContext(variables={})  # pyright: ignore[reportPossiblyUnboundVariable]
-            self._warning_ctx.__enter__()
-
-    def _execute_meta(
-        self,
-        task: Task,
-        play_context: PlayContext,
-        iterator: PlayIterator,
-        target_host: Host,
-    ) -> list[dict[str, t.Any]]:
-        """Called when a meta task is about to run"""
-        # This is super ick but recreating the vars just for meta tasks would
-        # involve too many internal attributes so just get it from the parent
-        # locals.
-
-        task_vars = inspect.currentframe().f_back.f_locals["task_vars"]  # pyright: ignore[reportOptionalMemberAccess]  # I know this is bad
-        task = self._debug_state.start_task(target_host, task, task_vars)
-        res = super()._execute_meta(task, play_context, iterator, target_host)
-
-        meta_action = task.args.get("_raw_params", None)
-        if meta_action == "refresh_inventory":
-            # refresh_inventory will update the uuid on the host object, we
-            # need to mark the existing threads as exited so the next run will
-            # pick up the correct changes. It will automatically start those
-            # threads as they run.
-            self._debug_state.exit_threads()
-
-        else:
-            # Needed to ensure the stackframe is removed as these meta tasks
-            # have no results for _process_pending_results to handle.
-            self._debug_state.end_task(AnsibugTaskResult.from_meta_task(target_host, task))
-
-        return res
-
-    def _load_included_file(
-        self,
-        *args: t.Any,
-        **kwargs: t.Any,
-    ) -> list[Block]:
-        included_blocks = super()._load_included_file(*args, **kwargs)
-
-        # Need to register these blocks as valid breakpoints and update the client bps
-        register_block_breakpoints(self._debug_state._debugger, included_blocks)
-
-        return included_blocks
-
-    def _queue_task(
-        self,
-        host: Host,
-        task: Task,
-        task_vars: dict[str, t.Any],
-        play_context: PlayContext,
-    ) -> None:
-        """Called just as a task is about to be queue"""
-        task = self._debug_state.start_task(host, task, task_vars)
-
-        # Kept to re-run the task if the client restarts its frame.
-        self._queued_args[(host.name, task._uuid)] = (task_vars, play_context)
-
-        return super()._queue_task(host, task, task_vars, play_context)
-
-    def _process_pending_results(
-        self,
-        iterator: PlayIterator,
-        *args: t.Any,
-        **kwargs: t.Any,
-    ) -> list[TaskResult]:
-        """Called when gathering the results of a queued task."""
-        # The iterator replaces the host states rather than changing them so
-        # a shallow copy is enough to roll back a restarted task.
-        prev_host_states = iterator.host_states.copy()
-        res = super()._process_pending_results(iterator, *args, **kwargs)
-
-        processed: list[TaskResult] = []
-        for task_res in res:
-            result = AnsibugTaskResult.from_task_result(task_res)
-            queued_args = self._queued_args.pop((result.host.name, result.task._uuid), None)
-
-            redo_task = self._debug_state.end_task(result, can_restart=queued_args is not None)
-            if redo_task and queued_args:
-                self._rollback_result(iterator, result, prev_host_states)
-                self._send_restart_task_start(redo_task)
-                self._queue_task(result.host, redo_task, *queued_args)
-
-                # The new result is likely still running, it is picked up
-                # by a later call as the pending results count includes it.
-                processed.extend(self._process_pending_results(iterator, *args, **kwargs))
-
-            else:
-                processed.append(task_res)
-
-        return processed
-
-    def _send_restart_task_start(
-        self,
-        task: Task,
-    ) -> None:
-        """Sends the task start callback again for a restarted task.
-
-        The base strategy only sends v2_runner_on_start when a task is queued,
-        without this the re-run result appears under the original task header.
-        A copy is renamed so the header shows it was restarted, it keeps the
-        same uuid.
-        """
-        banner_task = task.copy()
-        banner_task.name = f"{task.name or task.action} (restarted)"
-
-        if isinstance(task, Handler):
-            self._tqm.send_callback("v2_playbook_on_handler_task_start", banner_task)
-        else:
-            self._tqm.send_callback("v2_playbook_on_task_start", banner_task, is_conditional=False)
-
-    def _rollback_result(
-        self,
-        iterator: PlayIterator,
-        result: AnsibugTaskResult,
-        prev_host_states: dict[str, t.Any],
-    ) -> None:
-        """Undoes what the base strategy did for a result that is re-run.
-
-        Only covers the results end_task stops on: failed (not ignored or
-        rescued), unreachable (not ignored), and skipped. This is based on the
-        redo handling in Ansible's debug_closure.
-        """
-        host_name = result.host.name
-        stats = self._tqm._stats
-
-        if result.failed:
-            failed_hosts = [host_name]
-            if result.task.run_once:
-                # The same hosts the base strategy marks failed for run_once.
-                failed_hosts = [
-                    h.name
-                    for h in self._inventory.get_hosts(iterator._play.hosts)
-                    if h.name not in self._tqm._unreachable_hosts
-                ]
-
-            for name in failed_hosts:
-                if name in prev_host_states:
-                    iterator.set_state_for_host(name, prev_host_states[name])
-                # Each mark_host_failed call appended the host once, an
-                # earlier failure keeps its own entry.
-                if name in iterator._play._removed_hosts:
-                    iterator._play._removed_hosts.remove(name)
-
-            self._tqm._failed_hosts.pop(host_name, None)
-            stats.decrement("failures", host_name)
-
-        elif result.unreachable:
-            self._tqm._unreachable_hosts.pop(host_name, None)
-            if host_name in iterator._play._removed_hosts:
-                iterator._play._removed_hosts.remove(host_name)
-            stats.decrement("dark", host_name)
-
-        elif result.skipped:
-            stats.decrement("skipped", host_name)
-
-    def run(
-        self,
-        iterator: PlayIterator,
-        play_context: PlayContext,
-    ) -> int:
-        """Main strategy entrypoint.
-
-        This is the main strategy entrypoint that is called per play. The first
-        step is to associate the current strategy with the debuggee adapter so
-        it can respond to breakpoint and other information.
-        """
-        if self._warning_ctx:
-            self._warning_ctx.__exit__(None, None, None)
-            self._warning_ctx = None
-
-        debugger = AnsibleDebugger()
-        self._debug_state = AnsibleDebugState(
-            debugger,
-            self._loader,
-            self._variable_manager,
-        )
-        try:
-            with debugger.with_strategy(self._debug_state):
-                try:
-                    return super().run(iterator, play_context)
-                finally:
-                    self._debug_state.exit_threads()
-
-        except EndStrategy:
-            display.display("Debugger has requested the process to terminate")
-            return TaskQueueManager.RUN_FAILED_BREAK_PLAY

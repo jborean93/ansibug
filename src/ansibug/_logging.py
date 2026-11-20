@@ -13,7 +13,7 @@ DEFAULT_FORMAT = "%(asctime)s | %(name)s | %(filename)s:%(lineno)s %(funcName)s(
 
 
 def configure_file_logging(
-    file: str,
+    file: str | os.PathLike[str],
     level: LogLevel,
     format: str | None = None,
 ) -> None:
@@ -35,11 +35,6 @@ def configure_file_logging(
 
     ansibug_logger = logging.getLogger("ansibug")
     ansibug_logger.setLevel(log_level)
-
-    # Each playbook in the same process configures the logger again.
-    file = os.path.abspath(file)
-    if any(isinstance(h, logging.FileHandler) and h.baseFilename == file for h in ansibug_logger.handlers):
-        return
 
     fh = logging.FileHandler(file, mode="a", encoding="utf-8")
     fh.setLevel(log_level)

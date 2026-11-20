@@ -1,5 +1,6 @@
 include CHANGELOG.md
-include LICENSE
+include COPYING
+include LICENSE-MIT
 exclude .coverage
 exclude .gitignore
 exclude .pre-commit-config.yaml

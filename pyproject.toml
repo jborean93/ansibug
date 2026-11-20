@@ -9,8 +9,8 @@ name = "ansibug"
 description = "Ansible Debug Adapter Protocol Implementation"
 readme = "README.md"
 requires-python = ">=3.10"
-license = "MIT"
-license-files = ["LICENSE"]
+license = "GPL-3.0-or-later"
+license-files = ["COPYING", "LICENSE-MIT"]
 authors = [{ name = "Jordan Borean", email = "jborean93@gmail.com" }]
 keywords = ["ansible", "debug", "lsp", "dap"]
 classifiers = [
@@ -113,7 +113,7 @@ reportUnusedCallResult = false
 executionEnvironments = [
     # Ansible plugins subclass and call into ansible-core, which is untyped, overriding methods whose parameters they
     # may not use, and set flags such as POST_DATATAGGING from the ansible-core release they import from.
-    { root = "src/ansibug/ansible_collections", reportConstantRedefinition = false, reportUnknownParameterType = false, reportUnknownVariableType = false, reportUnusedParameter = false, reportUntypedBaseClass = false },
+    { root = "src/ansibug/_playbook", reportConstantRedefinition = false, reportUnknownParameterType = false, reportUnknownVariableType = false, reportUnusedParameter = false, reportUntypedBaseClass = false },
     { root = "tests/data", reportUnknownParameterType = false, reportUnknownVariableType = false, reportUnusedParameter = false, reportUntypedBaseClass = false },
     # pytest fixtures are parameters a test may not use, and monkeypatch.setattr takes an untyped lambda.
     { root = "tests", extraPaths = ["src", "tests/utils"], reportUntypedFunctionDecorator = false, reportUnusedParameter = false, reportUnknownLambdaType = false },
@@ -135,10 +135,7 @@ source = ["src", ".tox/py*/**/site-packages"]
 branch = true
 # Needed as tests run with a different cwd, env is set in tox
 data_file = "${PROJECT_ROOT}/.coverage"
-# Ansible's collection loader does funny things with collection coverage. The
-# data is collected but it'll still warn so disable the warnings.
-disable_warnings = ["module-not-imported", "no-data-collected"]
-source_pkgs = ["ansibug", "ansible_collections.ansibug.dap"]
+source_pkgs = ["ansibug"]
 omit = ["*/ansibug/_version.py"]
 parallel = true
 

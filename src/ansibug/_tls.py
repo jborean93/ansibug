@@ -56,10 +56,10 @@ def create_client_tls_context(
 
 
 def create_server_tls_context(
-    certfile: str | None,
-    keyfile: str | None = None,
+    certfile: str | os.PathLike[str] | None,
+    keyfile: str | os.PathLike[str] | None = None,
     password: str | None = None,
-    ca_trust: str | None = None,
+    ca_trust: str | os.PathLike[str] | None = None,
 ) -> ssl.SSLContext:
     """Creates a server TLS context.
 
@@ -96,7 +96,7 @@ def create_server_tls_context(
 
 def _load_verify_locations(
     ssl_context: ssl.SSLContext,
-    location: str,
+    location: str | os.PathLike[str],
 ) -> None:
     ca_path = pathlib.Path(os.path.expanduser(os.path.expandvars(location)))
 

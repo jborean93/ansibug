@@ -11,6 +11,7 @@ import ansibug.dap as dap
 
 
 def test_playbook_with_multiple_hosts(
+    strategy: str,
     dap_client: DAPClient,
     tmp_path: pathlib.Path,
 ) -> None:

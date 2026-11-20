@@ -211,7 +211,7 @@ def start_dap(
     temp_dir: pathlib.Path | None = None,
 ) -> None:
     if log_file:
-        configure_file_logging(str(log_file.absolute()), log_level)
+        configure_file_logging(log_file, log_level)
 
     log.info("DAP starting")
     try:

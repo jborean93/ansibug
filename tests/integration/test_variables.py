@@ -732,6 +732,9 @@ def test_playbook_eval(
     assert eval_resp.result == "'bar'"
     assert eval_resp.type == "str"
 
+    eval_resp = dap_client.send(dap.EvaluateRequest("foo", context="repl"), dap.EvaluateResponse)
+    assert eval_resp.result == "Evaluation requires a stack frame, select a frame of a stopped thread"
+
     eval_resp = dap_client.send(
         dap.EvaluateRequest(
             "!template foo",
@@ -829,6 +832,7 @@ def test_playbook_eval(
 
 
 def test_eval_repl_set_option(
+    strategy: str,
     dap_client: DAPClient,
     tmp_path: pathlib.Path,
 ) -> None:

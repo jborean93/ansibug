@@ -87,14 +87,18 @@ gather_facts: false
 """
     )
 
+    # The debuggee connects before the playbook is parsed, it ends the session
+    # without an InitializedEvent when the parse fails.
     proc = dap_client.launch(
         playbook,
         playbook_dir=tmp_path,
-        expected_terminated=True,
+        wait_for_initialized=False,
     )
+    dap_client.wait_for_message(dap.TerminatedEvent)
 
-    proc.communicate()
+    _, stderr = proc.communicate()
     assert proc.returncode != 0
+    assert b"gather_facts: false" in stderr, stderr
 
 
 def test_launch_process_ends_before_connect(
@@ -110,11 +114,12 @@ def test_launch_process_ends_before_connect(
 """
     )
 
-    # An invalid arg makes ansible-playbook exit before it connects back.
+    # The log file is set up before the debuggee connects, a missing parent
+    # dir makes it exit before it connects back.
     proc = dap_client.launch(
         playbook,
         playbook_dir=tmp_path,
-        playbook_args=["--invalid-arg"],
+        launch_options={"logFile": str(tmp_path / "missing" / "debuggee.log")},
         expected_terminated=True,
     )
     proc.communicate()
@@ -140,9 +145,10 @@ def test_launch_failure_after_connect(
 """
     )
 
-    # Fails after the debuggee connected so v2_playbook_on_stats never runs.
+    # Fails after the debuggee connected and the playbook was loaded but
+    # before any play runs, so it doesn't wait for configurationDone.
     proc = dap_client.launch(playbook, playbook_dir=tmp_path)
-    dap_client.send(dap.ConfigurationDoneRequest(), dap.ConfigurationDoneResponse)
+    dap_client.wait_for_message(dap.TerminatedEvent)
 
     proc.communicate(timeout=30)
     assert proc.returncode != 0

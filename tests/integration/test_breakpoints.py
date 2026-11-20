@@ -45,6 +45,7 @@ def test_playbook_with_logging(
 
 @pytest.mark.parametrize("single_thread", [True, False])
 def test_playbook_with_breakpoint(
+    strategy: str,
     single_thread: bool,
     dap_client: DAPClient,
     tmp_path: pathlib.Path,
@@ -168,6 +169,7 @@ def test_playbook_with_modified_source(
 
 
 def test_breakpoint_with_disconnect_on_stop(
+    strategy: str,
     dap_client: DAPClient,
     tmp_path: pathlib.Path,
 ) -> None:
@@ -204,6 +206,7 @@ def test_breakpoint_with_disconnect_on_stop(
 
 
 def test_breakpoint_stepping(
+    strategy: str,
     dap_client: DAPClient,
     tmp_path: pathlib.Path,
 ) -> None:
@@ -569,6 +572,7 @@ def test_breakpoint_block(
 
 
 def test_breakpoint_block_in_include(
+    strategy: str,
     dap_client: DAPClient,
     tmp_path: pathlib.Path,
 ) -> None:
@@ -768,6 +772,7 @@ def test_breakpoint_block_in_include(
 
 
 def test_multiple_plays(
+    strategy: str,
     dap_client: DAPClient,
     tmp_path: pathlib.Path,
 ) -> None:
@@ -884,6 +889,7 @@ def test_breakpoint_set_during_run(
 
 
 def test_role_include(
+    strategy: str,
     dap_client: DAPClient,
     tmp_path: pathlib.Path,
 ) -> None:
@@ -1073,6 +1079,7 @@ def test_path_mappings(
 
 
 def test_stepping_out_of_nested_includes(
+    strategy: str,
     dap_client: DAPClient,
     tmp_path: pathlib.Path,
 ) -> None:
@@ -1368,6 +1375,7 @@ def test_logpoint(
 
 @pytest.mark.parametrize("pause_main_thread", [False, True], ids=["host_thread", "main_thread"])
 def test_pause(
+    strategy: str,
     pause_main_thread: bool,
     dap_client: DAPClient,
     tmp_path: pathlib.Path,

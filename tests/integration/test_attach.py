@@ -10,7 +10,7 @@ import sys
 import typing as t
 
 import pytest
-from dap_client import DAPClient, DAPErrorResponse
+from dap_client import AnsibleProcess, DAPClient, DAPErrorResponse, get_test_env
 
 import ansibug.dap as dap
 
@@ -374,24 +374,48 @@ def test_attach_multiple_playbooks(
         playbooks.append(playbook)
 
     proc = dap_client.attach(playbooks[0], playbook_dir=tmp_path, playbook_args=[str(playbooks[1])])
+
+    # One session covers both playbooks, the second playbook's breakpoints are
+    # validated once it is loaded.
+    resp = dap_client.set_breakpoints(playbooks[1], 5)
+    assert not resp[0].verified
     dap_client.configuration_done()
     dap_client.wait_for_thread("exited")
-    dap_client.wait_for_message(dap.TerminatedEvent)
 
-    # The second playbook must wait for a new client and be debuggable.
-    with DAPClient("test_attach_multiple_playbooks_two") as second_client:
-        second_client.send(
-            dap.InitializeRequest(adapter_id="ansibug", client_id="ansibug"),
-            dap.InitializeResponse,
-        )
-        second_client.send(dap.AttachRequest(arguments={"processId": proc.pid, "connectTimeout": 20.0}))
-        second_client.wait_for_message(dap.AttachResponse, timeout=30)
-        second_client.wait_for_message(dap.InitializedEvent)
+    # The play line is registered first, then the task line narrows it.
+    for line, end_line in [(2, 2), (5, 5)]:
+        bp_event = dap_client.wait_for_message(dap.BreakpointEvent)
+        assert bp_event.breakpoint.id == resp[0].id
+        assert bp_event.breakpoint.verified
+        assert bp_event.breakpoint.line == line
+        assert bp_event.breakpoint.end_line == end_line
 
-        resp = second_client.set_breakpoints(playbooks[1], 5)
-        assert resp[0].verified
-        tid = second_client.configuration_done()
-        stopped_event = second_client.wait_for_message(dap.StoppedEvent)
-        assert stopped_event.reason == dap.StoppedReason.BREAKPOINT
+    tid = dap_client.wait_for_thread("started")
+    stopped_event = dap_client.wait_for_message(dap.StoppedEvent)
+    assert stopped_event.reason == dap.StoppedReason.BREAKPOINT
+    assert stopped_event.thread_id == tid
 
-        second_client.continue_to_end(proc, tid)
+    dap_client.continue_to_end(proc, tid)
+
+
+def test_listen_syntax_check_does_not_wait(
+    tmp_path: pathlib.Path,
+) -> None:
+    playbook = tmp_path / "main.yml"
+    playbook.write_text(
+        r"""
+- hosts: localhost
+  gather_facts: false
+  tasks:
+  - ping:
+"""
+    )
+
+    # No play runs so it must not wait for a client to attach.
+    proc = AnsibleProcess(
+        [sys.executable, "-m", "ansibug", "listen", str(playbook), "--syntax-check"],
+        cwd=tmp_path,
+        env=get_test_env(),
+    )
+    stdout, _ = proc.wait_rc(0)
+    assert "playbook: " in stdout

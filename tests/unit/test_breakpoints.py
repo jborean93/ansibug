@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from ansibug.ansible_collections.ansibug.dap.plugins.plugin_utils._breakpoints import (
+from ansibug._playbook._breakpoints import (
     get_on_failed_details,
     get_on_skipped_details,
     get_on_unreachable_details,
